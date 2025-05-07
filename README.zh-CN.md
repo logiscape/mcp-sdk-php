@@ -1,39 +1,43 @@
-# PHP版本的模型上下文协议(MCP) SDK
+# PHP 版本的模型上下文协议(MCP) SDK
 
 [English](README.md) | 中文
 
-这个包提供了[模型上下文协议(Model Context Protocol)](https://modelcontextprotocol.io)的PHP实现，使应用程序能够以标准化的方式为大语言模型(LLM)提供上下文。它将提供上下文的关注点与实际的LLM交互分离开来。
+这个包提供了[模型上下文协议(Model Context Protocol)](https://modelcontextprotocol.io)的 PHP 实现，使应用程序能够以标准化的方式为大语言模型(LLM)提供上下文。它将提供上下文的关注点与实际的 LLM 交互分离开来。
 
 ## 概述
 
-这个PHP SDK实现了完整的MCP规范，可以轻松地：
-* 构建能连接到任何MCP服务器的MCP客户端
-* 创建暴露资源、提示和工具的MCP服务器
-* 使用标准传输方式如stdio和SSE
-* 处理所有MCP协议消息和生命周期事件
+这个 PHP SDK 实现了完整的 MCP 规范，可以轻松地：
 
-本SDK基于模型上下文协议的官方[Python SDK](https://github.com/modelcontextprotocol/python-sdk)开发。
+- 构建能连接到任何 MCP 服务器的 MCP 客户端
+- 创建暴露资源、提示和工具的 MCP 服务器
+- 使用标准传输方式如 stdio 和 HTTP
+- 处理所有 MCP 协议消息和生命周期事件
 
-这个SDK主要面向从事前沿AI集成解决方案的开发者。某些功能可能尚未完善，在生产环境使用前，实现应该由经验丰富的开发者进行彻底的测试和安全审查。
+本 SDK 基于模型上下文协议的官方[Python SDK](https://github.com/modelcontextprotocol/python-sdk)开发。
+
+这个 SDK 主要面向从事前沿 AI 集成解决方案的开发者。某些功能可能尚未完善，在生产环境使用前，实现应该由经验丰富的开发者进行彻底的测试和安全审查。
 
 ## 安装
 
-您可以通过composer安装此包：
+您可以通过 composer 安装此包：
 
 ```bash
 composer require logiscape/mcp-sdk-php
 ```
 
 ### 系统要求
-* PHP 8.1 或更高版本
-* ext-curl
-* ext-pcntl (可选，推荐在CLI环境中使用)
+
+- PHP 8.1 或更高版本
+- ext-curl
+- ext-json
+- ext-pcntl (可选，推荐在 CLI 环境中使用)
+- monolog/monolog (可选，用于示例客户端/服务器的日志记录)
 
 ## 基本用法
 
-### 创建MCP服务器
+### 创建 MCP 服务器
 
-以下是创建提供提示功能的MCP服务器的完整示例：
+以下是创建提供提示功能的 MCP 服务器的完整示例：
 
 ```php
 <?php
@@ -116,7 +120,7 @@ $runner->run();
 
 将此代码保存为 `example_server.php`
 
-### 创建MCP客户端
+### 创建 MCP 客户端
 
 以下是如何创建连接到示例服务器的客户端：
 
@@ -185,48 +189,70 @@ try {
 ```
 
 将此代码保存为 `example_client.php` 并运行：
+
 ```bash
 php example_client.php
 ```
 
-## 用于调试的高级日志记录
+## 进阶示例
 
-### 使用日志记录
+"examples" 目录包含了使用 STDIO 和 HTTP 传输方式的额外客户端和服务器示例。所有示例都设计为在安装 SDK 的同一目录中运行。
 
-您可以在客户端、服务器端或两者同时启用详细日志记录。完整的日志记录示例代码请参考英文版README中的相应部分。
+一些示例使用 monolog 进行日志记录，可以通过 composer 安装：
 
-## MCP Web客户端
+```bash
+composer require monolog/monolog
+```
 
-"webclient"目录包含了一个用于测试MCP服务器的基于Web的应用程序。它旨在展示一个能在典型Web托管环境中运行的MCP客户端。
+## MCP Web 客户端
 
-### 设置Web客户端
+"webclient"目录包含了一个用于测试 MCP 服务器的基于 Web 的应用程序。它旨在展示一个能在典型 Web 托管环境中运行的 MCP 客户端。
 
-要设置Web客户端，请将"webclient"目录的内容上传到Web目录（例如cPanel服务器上的public_html）。确保通过运行本README安装部分中的Composer命令在同一目录中安装MCP SDK for PHP。
+### 设置 Web 客户端
 
-### 使用Web客户端
+要设置 Web 客户端，请将"webclient"目录的内容上传到 Web 目录（例如 cPanel 服务器上的 public_html）。确保通过运行本 README 安装部分中的 Composer 命令在同一目录中安装 MCP SDK for PHP。
 
-Web客户端上传到Web目录后，导航到index.php打开界面。要连接到包含的MCP测试服务器，在Command字段中输入`php`，在Arguments字段中输入`test_server.php`，然后点击`Connect to Server`。该界面允许您测试提示、工具和资源。还有一个调试面板，允许您查看客户端和服务器之间发送的JSON-RPC消息。
+### 使用 Web 客户端
 
-### Web客户端注意事项和限制
+Web 客户端上传到 Web 目录后，导航到 index.php 打开界面。要连接到包含的 MCP 测试服务器，在 Command 字段中输入`php`，在 Arguments 字段中输入`test_server.php`，然后点击`Connect to Server`。该界面允许您测试提示、工具和资源。还有一个调试面板，允许您查看客户端和服务器之间发送的 JSON-RPC 消息。
 
-此MCP Web客户端旨在供开发者测试MCP服务器，不建议在未经额外安全性、错误处理和资源管理测试的情况下将其作为公共Web界面使用。
+### Web 客户端注意事项和限制
 
-虽然MCP通常作为有状态的会话协议实现，但典型的基于PHP的Web托管环境限制了长时间运行的进程。为了最大化兼容性，MCP Web客户端将为每个请求初始化客户端和服务器之间的新连接，并在请求完成后关闭该连接。
+此 MCP Web 客户端旨在供开发者测试 MCP 服务器，不建议在未经额外安全性、错误处理和资源管理测试的情况下将其作为公共 Web 界面使用。
+
+虽然 MCP 通常作为有状态的会话协议实现，但典型的基于 PHP 的 Web 托管环境限制了长时间运行的进程。为了最大化兼容性，MCP Web 客户端将为每个请求初始化客户端和服务器之间的新连接，并在请求完成后关闭该连接。
 
 ## 文档
 
 有关模型上下文协议的详细信息，请访问[官方文档](https://modelcontextprotocol.io)。
 
+## 2025-03-26 实现
+
+我们目前正在实现 MCP 规范的 2025-03-26 版本。
+
+### 已完成任务
+
+- 实现协议版本协商
+- 创建新规范功能的类
+- 添加对 JSON-RPC 批处理的支持
+- 实现 HTTP 传输
+
+### 待办事项
+
+- 基于 OAuth 2.1 实现授权框架
+- 探索在 PHP 环境中支持 SSE 的可行性
+
 ## 致谢
 
-这个PHP SDK由以下人员开发：
-- [Josh Abbott](https://joshabbott.com)
-- Claude 3.5 Sonnet (Anthropic AI模型)
+这个 PHP SDK 由以下人员开发：
 
-Josh Abbott使用OpenAI ChatGPT o1 pro模式进行了额外的调试和重构。
+- [Josh Abbott](https://joshabbott.com)
+- Claude 3.5 Sonnet (Anthropic AI 模型)
+
+Josh Abbott 使用 OpenAI ChatGPT o1 pro 模式进行了额外的调试和重构。
 
 基于模型上下文协议的原始[Python SDK](https://github.com/modelcontextprotocol/python-sdk)开发。
 
 ## 许可证
 
-MIT许可证 (MIT)。更多信息请查看[许可证文件](LICENSE)。 
+MIT 许可证 (MIT)。更多信息请查看[许可证文件](LICENSE)。
