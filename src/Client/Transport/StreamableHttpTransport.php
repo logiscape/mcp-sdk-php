@@ -115,8 +115,8 @@
          $writeStream = $this->createWriteStream();
          
          if ($this->autoSse) {
-             // Attempt to establish an SSE connection
-             $this->attemptSseConnection();
+             // Attempt to establish an SSE connection             
+             $this->attemptSseConnection();            
          }
          
          return [$readStream, $writeStream];
@@ -237,7 +237,7 @@
          // Set up response capture
          $responseBody = '';
          curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$responseBody) {
-             $responseBody .= $data;
+             $responseBody .= $data;            
              return strlen($data);
          });
          
@@ -305,16 +305,31 @@
 
                  // Error response?
                  } elseif (isset($item['jsonrpc'], $item['id'], $item['error'])) {
-                     $err  = $item['error'];
+                     $err = $item['error'];
+                     
+                     // Validate error structure
+                     if (!is_array($err)) {
+                         continue;
+                     }
+                     
+                     if (!isset($err['code']) || !isset($err['message'])) {
+                         continue;
+                     }
+                     
+                     // Ensure code is integer and message is string
+                     $errorCode = is_numeric($err['code']) ? (int)$err['code'] : 0;
+                     $errorMessage = is_string($err['message']) ? $err['message'] : 'Error desconocido';
+                     $errorData = isset($err['data']) ? $err['data'] : null;
+                     
                      $idObj = new RequestId($item['id']);
 
                      $inner = new JSONRPCError(
                          jsonrpc: $item['jsonrpc'],
                          id:      $idObj,
                          error:   new JsonRpcErrorObject(
-                             code:    $err['code'],
-                             message: $err['message'],
-                             data:    $err['data'] ?? null
+                             code:    $errorCode,
+                             message: $errorMessage,
+                             data:    $errorData
                          )
                      );
                      $this->pendingMessages[] = new JsonRpcMessage($inner);
@@ -338,14 +353,76 @@
       * @return array Processed response data
       */
      private function processSseResponse(string $initialBody, array $headers, int $statusCode): array {
-         // For now, we'll just return the initial response
-         // In a full implementation, we would set up proper SSE event processing
+         // We need to determine if this is an initialization response by examining the SSE data
+         $jsonData = $this->extractJsonFromSse($initialBody);
+         $decoded = json_decode($jsonData, true);     
+         $isInitialization = false;
+         
+         // Check if this is a response to an initialize request
+         if (json_last_error() === JSON_ERROR_NONE && isset($decoded['id']) && $decoded['id'] === 0) {
+             // ID 0 is typically used for the initialize request
+             $isInitialization = true;
+         }
          
          // Update session based on response headers
-         $sessionValid = $this->sessionManager->processResponseHeaders($headers, $statusCode);
+         $sessionValid = $this->sessionManager->processResponseHeaders($headers, $statusCode, $isInitialization);
          
          if (!$sessionValid) {
              $this->logger->warning('Session invalidated during SSE response');
+         }
+         
+         // Extract JSON data from SSE format
+         $jsonData = $this->extractJsonFromSse($initialBody);
+         
+         // ENQUEUE the HTTP JSON‑RPC response for the read loop (same as normal HTTP processing)
+         $decoded = json_decode($jsonData, true);
+         if (json_last_error() === JSON_ERROR_NONE) {
+             // Support both single and batch responses
+             $batch = isset($decoded[0]) && is_array($decoded) ? $decoded : [ $decoded ];
+             foreach ($batch as $item) {
+                 // Success response?
+                 if (isset($item['jsonrpc'], $item['id']) && array_key_exists('result', $item)) {
+                     $idObj = new RequestId($item['id']);
+
+                     $inner = new JSONRPCResponse(
+                         jsonrpc: $item['jsonrpc'],
+                         id:      $idObj,
+                         result:  $item['result']
+                     );
+                     $this->pendingMessages[] = new JsonRpcMessage($inner);
+
+                 // Error response?
+                 } elseif (isset($item['jsonrpc'], $item['id'], $item['error'])) {
+                     $err = $item['error'];
+                     
+                     // Validate error structure
+                     if (!is_array($err)) {
+                         continue;
+                     }
+                     
+                     if (!isset($err['code']) || !isset($err['message'])) {
+                         continue;
+                     }
+                     
+                     // Ensure code is integer and message is string
+                     $errorCode = is_numeric($err['code']) ? (int)$err['code'] : 0;
+                     $errorMessage = is_string($err['message']) ? $err['message'] : 'Error desconocido';
+                     $errorData = isset($err['data']) ? $err['data'] : null;
+                     
+                     $idObj = new RequestId($item['id']);
+
+                     $inner = new JSONRPCError(
+                         jsonrpc: $item['jsonrpc'],
+                         id:      $idObj,
+                         error:   new JsonRpcErrorObject(
+                             code:    $errorCode,
+                             message: $errorMessage,
+                             data:    $errorData
+                         )
+                     );
+                     $this->pendingMessages[] = new JsonRpcMessage($inner);
+                 }
+             }
          }
          
          return [
@@ -354,6 +431,26 @@
              'body' => $initialBody,
              'isEventStream' => true
          ];
+     }
+     
+     /**
+      * Extract JSON data from SSE format.
+      * 
+      * @param string $sseData The raw SSE data
+      * @return string The extracted JSON data
+      */
+     private function extractJsonFromSse(string $sseData): string {
+         // Parse SSE format: look for "data: " lines
+         $lines = preg_split('/\r\n|\n|\r/', $sseData);
+         $jsonData = '';
+         
+         foreach ($lines as $line) {
+             if (strpos($line, 'data: ') === 0) {
+                 $jsonData .= substr($line, 6); // Remove "data: " prefix
+             }
+         }
+         
+         return $jsonData;
      }
      
      /**
@@ -454,7 +551,7 @@
               * 
               * @return JsonRpcMessage|null The received message or null if none available
               */
-             public function receive(): mixed {
+             public function receive(): mixed {              
                  // First check if we have any pending messages from the SSE connection
                  if ($message = $this->transport->receiveFromSse()) {
                      return $message;
@@ -527,9 +624,28 @@
       * Receives a message from the HTTP JSON‑RPC response queue.
       * 
       * @return JsonRpcMessage|null The received message or null if none available
+      * @throws RuntimeException When there are persistent errors and no more messages
       */
      public function receiveFromHttp(): ?JsonRpcMessage {
-         return array_shift($this->pendingMessages) ?: null;
+          
+         $message = array_shift($this->pendingMessages);
+         
+         if ($message !== null) {
+    
+             // Check if this is an error message
+             $innerMessage = $message->message;
+             if ($innerMessage instanceof \Mcp\Types\JSONRPCError) {
+                 $error = $innerMessage->error;
+                 // If it's a critical error  throw an exception     
+                 $this->logger->error("Critical MCP error: {$error->message} (code: {$error->code})");          
+                 throw new RuntimeException("Critical MCP error: {$error->message} (code: {$error->code})");
+                 
+             }
+             
+             return $message;
+         } else {            
+             return null;
+         }
      }
      
      /**
@@ -587,4 +703,3 @@
          $this->sessionManager->invalidateSession();
      }
  }
- 
