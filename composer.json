@@ -1,5 +1,5 @@
 {
-    "name": "logiscape/mcp-sdk-php",
+    "name": "jmenendez-telecoming/mcp-sdk-php",
     "description": "Model Context Protocol SDK for PHP",
     "type": "library",
 	"license": "MIT",
