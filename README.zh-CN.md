@@ -222,6 +222,10 @@ Web 客户端上传到 Web 目录后，导航到 index.php 打开界面。要连
 
 虽然 MCP 通常作为有状态的会话协议实现，但典型的基于 PHP 的 Web 托管环境限制了长时间运行的进程。为了最大化兼容性，MCP Web 客户端将为每个请求初始化客户端和服务器之间的新连接，并在请求完成后关闭该连接。
 
+## OAuth 授权（测试中）
+
+HTTP 传输支持可选的 OAuth 2.1 授权。更多信息请见 [OAuth 认证示例](examples/server_auth/README.md)。
+
 ## 文档
 
 有关模型上下文协议的详细信息，请访问[官方文档](https://modelcontextprotocol.io)。
@@ -237,9 +241,13 @@ Web 客户端上传到 Web 目录后，导航到 index.php 打开界面。要连
 - 添加对 JSON-RPC 批处理的支持
 - 实现 HTTP 传输
 
+### 可测试功能
+
+* 实现基于 OAuth 2.1 的服务端授权框架
+
 ### 待办事项
 
-- 基于 OAuth 2.1 实现授权框架
+- 实现客户端 OAuth 授权框架
 - 探索在 PHP 环境中支持 SSE 的可行性
 
 ## 致谢
@@ -248,8 +256,9 @@ Web 客户端上传到 Web 目录后，导航到 index.php 打开界面。要连
 
 - [Josh Abbott](https://joshabbott.com)
 - Claude 3.5 Sonnet (Anthropic AI 模型)
+- Claude Opus 4
 
-Josh Abbott 使用 OpenAI ChatGPT o1 pro 模式进行了额外的调试和重构。
+Josh Abbott 使用 OpenAI ChatGPT o1 专业版与 OpenAI Codex 进行了额外的调试与重构。
 
 基于模型上下文协议的原始[Python SDK](https://github.com/modelcontextprotocol/python-sdk)开发。
 
