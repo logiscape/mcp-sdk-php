@@ -35,7 +35,7 @@ namespace Mcp\Types;
  *
  * We allow arbitrary fields (keys = string, values = object).
  */
-class ToolInputProperties implements McpModel {
+class ToolInputProperties implements McpModel, \IteratorAggregate {
     use ExtraFieldsTrait;
 
     public static function fromArray(array $data): self {
@@ -55,5 +55,9 @@ class ToolInputProperties implements McpModel {
 
     public function jsonSerialize(): mixed {
         return empty($this->extraFields) ? new \stdClass() : $this->extraFields;
+    }
+
+    public function getIterator(): \Traversable {
+        return new \ArrayIterator($this->extraFields);
     }
 }
