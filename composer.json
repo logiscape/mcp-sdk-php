@@ -1,5 +1,5 @@
 {
-    "name": "chriskapp/mcp-sdk-php",
+    "name": "logiscape/mcp-sdk-php",
     "description": "Model Context Protocol SDK for PHP",
     "type": "library",
 	"license": "MIT",
