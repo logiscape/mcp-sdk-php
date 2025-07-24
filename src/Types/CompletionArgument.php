@@ -47,9 +47,6 @@ class CompletionArgument implements McpModel {
         if (empty($this->name)) {
             throw new \InvalidArgumentException('Completion argument name cannot be empty');
         }
-        if (empty($this->value)) {
-            throw new \InvalidArgumentException('Completion argument value cannot be empty');
-        }
     }
 
     public function jsonSerialize(): mixed {
