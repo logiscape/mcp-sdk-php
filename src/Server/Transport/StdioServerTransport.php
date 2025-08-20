@@ -74,10 +74,10 @@ class StdioServerTransport implements Transport {
         $stdin = null,
         $stdout = null
     ) {
-        if ($stdin === null || !is_resource($stdin)) {
+        if ($stdin !== null && !is_resource($stdin)) {
             throw new InvalidArgumentException('stdin must be a valid resource.');
         }
-        if ($stdout === null || !is_resource($stdout)) {
+        if ($stdout !== null && !is_resource($stdout)) {
             throw new InvalidArgumentException('stdout must be a valid resource.');
         }
 
