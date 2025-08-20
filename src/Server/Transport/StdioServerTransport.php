@@ -16,7 +16,7 @@
  * For the full copyright and license information, please view the LICENSE
  * file that was distributed with this source code.
  *
- * @package    logiscape/mcp-sdk-php 
+ * @package    logiscape/mcp-sdk-php
  * @author     Josh Abbott <https://joshabbott.com>
  * @copyright  Logiscape LLC
  * @license    MIT License
@@ -74,15 +74,15 @@ class StdioServerTransport implements Transport {
         $stdin = null,
         $stdout = null
     ) {
-        if ($stdin !== null && !is_resource($stdin)) {
+        if ($stdin === null || !is_resource($stdin)) {
             throw new InvalidArgumentException('stdin must be a valid resource.');
         }
-        if ($stdout !== null && !is_resource($stdout)) {
+        if ($stdout === null || !is_resource($stdout)) {
             throw new InvalidArgumentException('stdout must be a valid resource.');
         }
 
-        $this->stdin = $stdin ?? STDIN;
-        $this->stdout = $stdout ?? STDOUT;
+        $this->stdin = $stdin ?? \STDIN;
+        $this->stdout = $stdout ?? \STDOUT;
     }
 
     /**
