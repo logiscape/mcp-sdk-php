@@ -54,11 +54,11 @@ use RuntimeException;
 abstract class BaseSession {
     protected bool $isInitialized = false;
     /** @var array<int, callable(JsonRpcMessage):void> */
-    private array $responseHandlers = [];
+    protected array $responseHandlers = [];
     /** @var callable[] */
-    private array $requestHandlers = [];
+    protected array $requestHandlers = [];
     /** @var callable[] */
-    private array $notificationHandlers = [];
+    protected array $notificationHandlers = [];
     private int $requestId = 0;
 
     /**
