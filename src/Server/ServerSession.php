@@ -173,6 +173,15 @@ class ServerSession extends BaseSession {
         $actualRequest = $request->getRequest(); // the underlying typed Request
         $method = $actualRequest->method;
         $params = $actualRequest->params ?? [];
+        if ($params instanceof \Mcp\Types\McpModel) {
+            $serialized = $params->jsonSerialize();
+            if ($serialized instanceof \stdClass) {
+                $serialized = (array) $serialized;
+            }
+            $params = (array) $serialized;
+        } elseif ($params instanceof \stdClass) {
+            $params = (array) $params;
+        }
 
         if ($method === 'initialize') {
             $respond = fn($result) => $responder->sendResponse($result);
@@ -226,6 +235,18 @@ class ServerSession extends BaseSession {
             $handler = $this->notificationMethodHandlers[$method];
             try {
                 $params = $actualNotification->params ?? null;
+                if ($params instanceof \Mcp\Types\McpModel) {
+                    $serialized = $params->jsonSerialize();
+                    if ($serialized instanceof \stdClass) {
+                        $serialized = (array) $serialized;
+                    }
+                    $params = (array) $serialized;
+                } elseif ($params instanceof \stdClass) {
+                    $params = (array) $params;
+                }
+                if ($params === null) {
+                    $params = [];
+                }
                 $handler($params);
             } catch (\Throwable $e) {
                 $this->logger->error('Notification handler error: ' . $e->getMessage());
