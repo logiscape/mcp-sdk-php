@@ -63,10 +63,6 @@ class ServerSession extends BaseSession {
     protected ?InitializeRequestParams $clientParams = null;
     protected LoggerInterface $logger;
     protected string $negotiatedProtocolVersion = Version::LATEST_PROTOCOL_VERSION;
-    /** @var array<string, callable> */
-    private array $requestMethodHandlers = [];
-    /** @var array<string, callable> */
-    private array $notificationMethodHandlers = [];
 
     public function __construct(
         protected readonly Transport $transport,
@@ -151,13 +147,13 @@ class ServerSession extends BaseSession {
 
     public function registerHandlers(array $handlers): void {
         foreach ($handlers as $method => $callable) {
-            $this->requestMethodHandlers[$method] = $callable;
+            $this->requestHandlers[$method] = $callable;
         }
     }
 
     public function registerNotificationHandlers(array $handlers): void {
         foreach ($handlers as $method => $callable) {
-            $this->notificationMethodHandlers[$method] = $callable;
+            $this->notificationHandlers[$method] = $callable;
         }
     }
 
@@ -173,15 +169,6 @@ class ServerSession extends BaseSession {
         $actualRequest = $request->getRequest(); // the underlying typed Request
         $method = $actualRequest->method;
         $params = $actualRequest->params ?? [];
-        if ($params instanceof \Mcp\Types\McpModel) {
-            $serialized = $params->jsonSerialize();
-            if ($serialized instanceof \stdClass) {
-                $serialized = (array) $serialized;
-            }
-            $params = (array) $serialized;
-        } elseif ($params instanceof \stdClass) {
-            $params = (array) $params;
-        }
 
         if ($method === 'initialize') {
             $respond = fn($result) => $responder->sendResponse($result);
@@ -194,14 +181,14 @@ class ServerSession extends BaseSession {
         }
 
         // Now we integrate the method-specific handlers:
-        if (isset($this->requestMethodHandlers[$method])) {
+        if (isset($this->requestHandlers[$method])) {
             $this->logger->info("Calling handler for method: $method");
-            $handler = $this->requestMethodHandlers[$method];
+            $handler = $this->requestHandlers[$method];
             try {
-                $result = $handler($params); // call the user-defined handler
-                $responder->sendResponse($result);
-            } catch (\Throwable $e) {
-                $this->logger->error('Handler error for method ' . $method . ': ' . $e->getMessage());
+            $result = $handler($params); // call the user-defined handler
+            $responder->sendResponse($result);
+            } catch(\Throwable $e) {
+            	$this->logger->info("Handler Error: $e");
             }
         } else {
             $this->logger->info("No registered handler for method: $method");
@@ -229,29 +216,6 @@ class ServerSession extends BaseSession {
 
         if ($this->initializationState !== InitializationState::Initialized) {
             throw new RuntimeException('Received notification before initialization was complete');
-        }
-
-        if (isset($this->notificationMethodHandlers[$method])) {
-            $handler = $this->notificationMethodHandlers[$method];
-            try {
-                $params = $actualNotification->params ?? null;
-                if ($params instanceof \Mcp\Types\McpModel) {
-                    $serialized = $params->jsonSerialize();
-                    if ($serialized instanceof \stdClass) {
-                        $serialized = (array) $serialized;
-                    }
-                    $params = (array) $serialized;
-                } elseif ($params instanceof \stdClass) {
-                    $params = (array) $params;
-                }
-                if ($params === null) {
-                    $params = [];
-                }
-                $handler($params);
-            } catch (\Throwable $e) {
-                $this->logger->error('Notification handler error: ' . $e->getMessage());
-            }
-            return;
         }
 
         // Fallback for notifications you haven't specialized:
