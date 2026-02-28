@@ -252,6 +252,11 @@ This PHP SDK was developed by:
 
 Additional debugging and refactoring done by Josh Abbott using OpenAI ChatGPT o1 pro mode and OpenAI Codex.
 
+Special acknowledgement to [Roman Pronskiy](https://github.com/pronskiy) for simplifying the server building process with his convenience wrapper project: [https://github.com/pronskiy/mcp](https://github.com/pronskiy/mcp)
+
+- `Mcp\Server\McpServer` — adapted from `Pronskiy\Mcp\Server`
+- `Mcp\Server\McpServerException` — adapted from `Pronskiy\Mcp\McpServerException`
+
 ## License
 
 The MIT License (MIT). Please see [License File](LICENSE) for more information.
