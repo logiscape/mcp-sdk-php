@@ -35,155 +35,61 @@ composer require logiscape/mcp-sdk-php
 
 ### Creating an MCP Server
 
-Here's a complete example of creating an MCP server that provides prompts:
+Here's a complete example of an MCP server that provides a simple tool:
 
 ```php
 <?php
 
-// A basic example server with a list of prompts for testing
+// An example server with a basic addition tool
 
 require 'vendor/autoload.php';
 
-use Mcp\Server\Server;
-use Mcp\Server\ServerRunner;
-use Mcp\Types\Prompt;
-use Mcp\Types\PromptArgument;
-use Mcp\Types\PromptMessage;
-use Mcp\Types\ListPromptsResult;
-use Mcp\Types\TextContent;
-use Mcp\Types\Role;
-use Mcp\Types\GetPromptResult;
-use Mcp\Types\GetPromptRequestParams;
+use Mcp\Server\McpServer;
 
-// Create a server instance
-$server = new Server('example-server');
+$server = new McpServer('example-mcp-server');
 
-// Register prompt handlers
-$server->registerHandler('prompts/list', function($params) {
-    $prompt = new Prompt(
-        name: 'example-prompt',
-        description: 'An example prompt template',
-        arguments: [
-            new PromptArgument(
-                name: 'arg1',
-                description: 'Example argument',
-                required: true
-            )
-        ]
-    );
-    return new ListPromptsResult([$prompt]);
-});
+$server
+    // Define a tool
+    ->tool('add-numbers', 'Adds two numbers together', function (float $a, float $b): string {
+        return 'Sum: ' . ($a + $b);
+    })
 
-$server->registerHandler('prompts/get', function(GetPromptRequestParams $params) {
-
-    $name = $params->name;
-    $arguments = $params->arguments;
-
-    if ($name !== 'example-prompt') {
-        throw new \InvalidArgumentException("Unknown prompt: {$name}");
-    }
-
-    // Get argument value safely
-    $argValue = $arguments ? $arguments->arg1 : 'none';
-
-    $prompt = new Prompt(
-        name: 'example-prompt',
-        description: 'An example prompt template',
-        arguments: [
-            new PromptArgument(
-                name: 'arg1',
-                description: 'Example argument',
-                required: true
-            )
-        ]
-    );
-
-    return new GetPromptResult(
-        messages: [
-            new PromptMessage(
-                role: Role::USER,
-                content: new TextContent(
-                    text: "Example prompt text with argument: $argValue"
-                )
-            )
-        ],
-        description: 'Example prompt'
-    );
-});
-
-// Create initialization options and run server
-$initOptions = $server->createInitializationOptions();
-$runner = new ServerRunner($server, $initOptions);
-$runner->run();
+    // Start the server
+    ->run();
 ```
 
 Save this as `example_server.php`
 
 ### Creating an MCP Client
 
-Here's how to create a client that connects to the example server:
+Here's how to create a client that connects to the example server and calls the addition tool:
 
 ```php
 <?php
 
-// A basic example client that connects to example_server.php and outputs the prompts
+// A basic example client that connects to example_server.php and calls a tool
 
 require 'vendor/autoload.php';
 
 use Mcp\Client\Client;
-use Mcp\Client\Transport\StdioServerParameters;
-use Mcp\Types\TextContent;
 
-// Create server parameters for stdio connection
-$serverParams = new StdioServerParameters(
-    command: 'php',  // Executable
-    args: ['example_server.php'],  // File path to the server
-    env: null  // Optional environment variables
-);
-
-// Create client instance
 $client = new Client();
 
 try {
-    echo("Starting to connect\n");
-    // Connect to the server using stdio transport
-    $session = $client->connect(
-        commandOrUrl: $serverParams->getCommand(),
-        args: $serverParams->getArgs(),
-        env: $serverParams->getEnv()
-    );
+    // Connect to the server over stdio
+    $session = $client->connect('php', ['example_server.php']);
 
-    echo("Starting to get available prompts\n");
-    // List available prompts
-    $promptsResult = $session->listPrompts();
+    // Call the add-numbers tool with two arguments
+    $result = $session->callTool('add-numbers', ['a' => 5, 'b' => 25]);
 
-    // Output the list of prompts
-    if (!empty($promptsResult->prompts)) {
-        echo "Available prompts:\n";
-        foreach ($promptsResult->prompts as $prompt) {
-            echo "  - Name: " . $prompt->name . "\n";
-            echo "    Description: " . $prompt->description . "\n";
-            echo "    Arguments:\n";
-            if (!empty($prompt->arguments)) {
-                foreach ($prompt->arguments as $argument) {
-                    echo "      - " . $argument->name . " (" . ($argument->required ? "required" : "optional") . "): " . $argument->description . "\n";
-                }
-            } else {
-                echo "      (None)\n";
-            }
-        }
-    } else {
-        echo "No prompts available.\n";
-    }
+    // Output the result
+    echo $result->content[0]->text . "\n";
 
 } catch (\Exception $e) {
     echo "Error: " . $e->getMessage() . "\n";
     exit(1);
 } finally {
-    // Close the server connection
-    if (isset($client)) {
-        $client->close();
-    }
+    $client->close();
 }
 ```
 

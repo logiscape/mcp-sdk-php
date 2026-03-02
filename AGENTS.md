@@ -8,6 +8,7 @@ This is a PHP implementation of the Model Context Protocol (MCP), allowing appli
 - Designed for native PHP with easy installation via Composer
 - Targets PHP 8.1+ with type safety (strict_types=1)
 - Supports both traditional CLI/stdio and web hosting environments
+- Includes McpServer convenience wrapper for building fully functional MCP servers with just a few lines of PHP code
 
 ## Development Commands
 
@@ -35,20 +36,23 @@ composer update
 composer require monolog/monolog
 ```
 
-### Running Examples
-```bash
-# Run stdio server example
-php examples/server_stdio.php
+## Building An MCP Server
 
-# Run stdio client example (connects to server_stdio.php)
-php examples/client_stdio.php
+The easiest and recommended way to create a new MCP server is to use the McpServer convenience wrapper. Here is a complete fully functional example that can be used as both a local MCP server or a remote MCP server.
 
-# Run HTTP server (requires web server)
-php -S localhost:8000 examples/server_http.php
-
-# Run HTTP client (connects to HTTP server)
-php examples/client_http.php
+```php
+<?php
+require 'vendor/autoload.php';
+use Mcp\Server\McpServer;
+$server = new McpServer('example-mcp-server');
+$server
+    ->tool('add', 'Add numbers', fn(float $a, float $b) => "Sum: " . ($a + $b))
+    ->prompt('greet', 'Greeting', fn(string $name) => "Hello, {$name}!")
+    ->resource(uri: 'info://php', name: 'PHP Info', callback: fn() => PHP_VERSION)
+    ->run();
 ```
+
+When using the convenience wrapper, `run()` is a router that uses the stdio transport on cli applications and the HTTP transport on web servers. `run()` can be replaced with `runStdio()` to force the stdio transport, or `runHttp()` to force the HTTP transport.
 
 ## Architecture Overview
 
@@ -72,6 +76,7 @@ php examples/client_http.php
    - `ServerSession`: Extends BaseSession, handles initialization handshake
    - `ServerRunner`: Stdio runner that manages the server lifecycle
    - `HttpServerRunner`: HTTP runner for web-based servers
+   - `McpServer`: Convenience wrapper to simplify building MCP servers
    - Handlers are registered as callables: `registerHandler(string $method, callable $handler)`
 
 4. **Types System** (`Types/`)
@@ -89,15 +94,11 @@ php examples/client_http.php
 
 **Server-side:**
 ```php
-$server->registerHandler('prompts/list', function($params): ListPromptsResult {
-    // Return typed Result object
-    return new ListPromptsResult([/* prompts */]);
-});
-
-$server->registerHandler('prompts/get', function(GetPromptRequestParams $params): GetPromptResult {
-    // Type-hint params for automatic deserialization
-    return new GetPromptResult(/* ... */);
-});
+$server
+    // Define a tool
+    ->tool('add-numbers', 'Adds two numbers together', function (float $a, float $b): string {
+        return 'Sum: ' . ($a + $b);
+    });
 ```
 
 **Client-side:**
@@ -170,12 +171,10 @@ Capabilities are automatically detected based on registered handlers and include
 
 ## Common Patterns
 
-### Creating a Server
-1. Instantiate `Server` with a name
-2. Register handlers for desired capabilities
-3. Create `InitializationOptions` via `$server->createInitializationOptions()`
-4. Pass server and options to `ServerRunner` (stdio) or `HttpServerRunner` (HTTP)
-5. Call `$runner->run()` to start
+### Creating a Server (Use convenience wrapper)
+1. Instantiate `McpServer` with a name
+2. Register tools, prompts, and/or resources for desired capabilities
+3. Call `run()` to start
 
 ### Creating a Client
 1. Instantiate `Client`
@@ -183,14 +182,3 @@ Capabilities are automatically detected based on registered handlers and include
 3. Returns initialized `ClientSession`
 4. Use session methods to interact with server
 5. Call `$client->close()` when done
-
-### Handler Params Type Hinting
-When registering handlers, type-hint the params parameter to get automatic deserialization:
-```php
-$server->registerHandler('tools/call', function(CallToolRequestParams $params): CallToolResult {
-    // $params is automatically deserialized from JSON
-    $toolName = $params->name;
-    $arguments = $params->arguments;
-    // ...
-});
-```
