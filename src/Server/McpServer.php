@@ -37,6 +37,9 @@ use Mcp\Types\PromptMessage;
 use Mcp\Types\ReadResourceResult;
 use Mcp\Types\Resource;
 use Mcp\Types\Role;
+use Mcp\Types\Task;
+use Mcp\Types\TaskGetResult;
+use Mcp\Types\TaskListResult;
 use Mcp\Types\TextContent;
 use Mcp\Types\TextResourceContents;
 use Mcp\Types\Tool;
@@ -119,6 +122,9 @@ class McpServer
 
     /** @var bool [Added] Whether to notify clients of prompt changes. */
     protected bool $promptsChanged = true;
+
+    /** @var TaskManager|null Task manager for long-running operations. */
+    protected ?TaskManager $taskManager = null;
 
     /**
      * Create a new McpServer instance.
@@ -432,6 +438,76 @@ class McpServer
         $this->toolsChanged = $toolsChanged;
         $this->promptsChanged = $promptsChanged;
         return $this;
+    }
+
+    /**
+     * Enable task support for long-running operations.
+     *
+     * Registers tasks/get, tasks/list, tasks/cancel, and tasks/result handlers.
+     *
+     * @param string|null $storagePath Directory for task file storage (null = system temp)
+     * @return self For method chaining
+     */
+    public function enableTasks(?string $storagePath = null): self
+    {
+        $this->taskManager = new TaskManager($storagePath ?? '');
+
+        $this->server->registerHandler('tasks/get', function ($params) {
+            $taskId = $params->taskId ?? '';
+            $task = $this->taskManager->getTask($taskId);
+            if ($task === null) {
+                throw McpServerException::taskNotFound($taskId);
+            }
+            return TaskGetResult::fromTask($task);
+        });
+
+        $this->server->registerHandler('tasks/list', function ($params) {
+            $tasks = $this->taskManager->listTasks();
+            return new TaskListResult(tasks: $tasks);
+        });
+
+        $this->server->registerHandler('tasks/cancel', function ($params) {
+            $taskId = $params->taskId ?? '';
+            $task = $this->taskManager->getTask($taskId);
+            if ($task === null) {
+                throw McpServerException::taskNotFound($taskId);
+            }
+            try {
+                $cancelled = $this->taskManager->cancelTask($taskId);
+            } catch (\InvalidArgumentException $e) {
+                throw McpServerException::taskNotCancellable($taskId, $task->status);
+            }
+            return TaskGetResult::fromTask($cancelled);
+        });
+
+        $this->server->registerHandler('tasks/result', function ($params) {
+            $taskId = $params->taskId ?? '';
+            $task = $this->taskManager->getTask($taskId);
+            if ($task === null) {
+                throw McpServerException::taskNotFound($taskId);
+            }
+            $taskResult = $this->taskManager->getResult($taskId);
+            if ($taskResult === null) {
+                throw McpServerException::taskResultNotAvailable($taskId);
+            }
+            // Return the underlying result directly with related-task metadata.
+            // Inject _meta with io.modelcontextprotocol/related-task per spec.
+            $taskResult['_meta'] = array_merge(
+                $taskResult['_meta'] ?? [],
+                ['io.modelcontextprotocol/related-task' => ['taskId' => $taskId]]
+            );
+            return CallToolResult::fromResponseData($taskResult);
+        });
+
+        return $this;
+    }
+
+    /**
+     * Get the TaskManager instance (if tasks are enabled).
+     */
+    public function getTaskManager(): ?TaskManager
+    {
+        return $this->taskManager;
     }
 
     // -----------------------------------------------------------------------

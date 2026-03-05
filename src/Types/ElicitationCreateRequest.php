@@ -48,11 +48,27 @@ class ElicitationCreateRequest extends Request {
         if (empty($this->message)) {
             throw new \InvalidArgumentException('Elicitation message cannot be empty');
         }
-        if ($this->mode === 'url' && empty($this->url)) {
-            throw new \InvalidArgumentException('URL mode elicitation requires a url');
+        if ($this->mode !== null && !in_array($this->mode, ['form', 'url'], true)) {
+            throw new \InvalidArgumentException("Invalid elicitation mode: '{$this->mode}'");
         }
-        if ($this->mode === 'url' && empty($this->elicitationId)) {
-            throw new \InvalidArgumentException('URL mode elicitation requires an elicitationId');
+        if ($this->mode === 'url') {
+            if (empty($this->url)) {
+                throw new \InvalidArgumentException('URL mode elicitation requires a url');
+            }
+            if (empty($this->elicitationId)) {
+                throw new \InvalidArgumentException('URL mode elicitation requires an elicitationId');
+            }
+            if ($this->requestedSchema !== null) {
+                throw new \InvalidArgumentException('URL mode must not include requestedSchema');
+            }
+        } else {
+            // form mode (explicit or null default)
+            if ($this->requestedSchema === null) {
+                throw new \InvalidArgumentException('Form mode elicitation requires requestedSchema');
+            }
+            if ($this->url !== null) {
+                throw new \InvalidArgumentException('Form mode must not include url');
+            }
         }
     }
 }

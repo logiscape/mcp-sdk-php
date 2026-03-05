@@ -16,11 +16,28 @@ class TaskManager
 {
     private string $storagePath;
 
+    private const VALID_TRANSITIONS = [
+        TaskStatus::WORKING => [TaskStatus::INPUT_REQUIRED, TaskStatus::COMPLETED, TaskStatus::FAILED, TaskStatus::CANCELLED],
+        TaskStatus::INPUT_REQUIRED => [TaskStatus::WORKING, TaskStatus::COMPLETED, TaskStatus::FAILED, TaskStatus::CANCELLED],
+        TaskStatus::COMPLETED => [],
+        TaskStatus::FAILED => [],
+        TaskStatus::CANCELLED => [],
+    ];
+
+    private const TERMINAL_STATES = [
+        TaskStatus::COMPLETED,
+        TaskStatus::FAILED,
+        TaskStatus::CANCELLED,
+    ];
+
     public function __construct(string $storagePath = '')
     {
         $this->storagePath = $storagePath ?: sys_get_temp_dir() . '/mcp_tasks';
         if (!is_dir($this->storagePath)) {
-            mkdir($this->storagePath, 0755, true);
+            @mkdir($this->storagePath, 0755, true);
+            if (!is_dir($this->storagePath)) {
+                throw new \RuntimeException("Failed to create task storage directory: {$this->storagePath}");
+            }
         }
     }
 
@@ -61,6 +78,13 @@ class TaskManager
             return null;
         }
 
+        $allowedNext = self::VALID_TRANSITIONS[$task->status] ?? [];
+        if (!in_array($status, $allowedNext, true)) {
+            throw new \InvalidArgumentException(
+                "Invalid task state transition from '{$task->status}' to '{$status}'"
+            );
+        }
+
         $task->status = $status;
         $task->statusMessage = $statusMessage;
         $task->lastUpdatedAt = gmdate('Y-m-d\TH:i:s\Z');
@@ -71,7 +95,7 @@ class TaskManager
 
     public function setResult(string $taskId, mixed $result): void {
         $file = $this->resultFile($taskId);
-        file_put_contents($file, json_encode($result));
+        file_put_contents($file, json_encode($result), LOCK_EX);
     }
 
     public function getResult(string $taskId): mixed {
@@ -111,6 +135,15 @@ class TaskManager
     }
 
     public function cancelTask(string $taskId): ?Task {
+        $task = $this->getTask($taskId);
+        if ($task === null) {
+            return null;
+        }
+        if (in_array($task->status, self::TERMINAL_STATES, true)) {
+            throw new \InvalidArgumentException(
+                "Cannot cancel task '{$taskId}' in terminal state '{$task->status}'"
+            );
+        }
         return $this->updateStatus($taskId, TaskStatus::CANCELLED);
     }
 
@@ -159,14 +192,14 @@ class TaskManager
 
     private function save(Task $task): void {
         $file = $this->taskFile($task->taskId);
-        file_put_contents($file, json_encode($task));
+        file_put_contents($file, json_encode($task), LOCK_EX);
     }
 
     private function taskFile(string $taskId): string {
-        return $this->storagePath . '/task_' . preg_replace('/[^a-f0-9]/', '', $taskId) . '.json';
+        return $this->storagePath . '/task_' . hash('sha256', $taskId) . '.json';
     }
 
     private function resultFile(string $taskId): string {
-        return $this->storagePath . '/result_' . preg_replace('/[^a-f0-9]/', '', $taskId) . '.json';
+        return $this->storagePath . '/result_' . hash('sha256', $taskId) . '.json';
     }
 }

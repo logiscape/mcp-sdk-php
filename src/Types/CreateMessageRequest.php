@@ -47,6 +47,7 @@ class CreateMessageRequest extends Request {
         public ?string $includeContext = null,
         public ?array $tools = null,
         public ?ToolChoice $toolChoice = null,
+        public ?TaskRequestParams $task = null,
     ) {
         parent::__construct('sampling/createMessage');
     }

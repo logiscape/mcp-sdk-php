@@ -21,6 +21,7 @@ use Mcp\Types\ResourceLinkContent;
 use Mcp\Types\ToolUseContent;
 use Mcp\Types\ToolResultContent;
 use Mcp\Types\ToolChoice;
+use Mcp\Types\ElicitationCreateRequest;
 use Mcp\Types\ElicitationCreateResult;
 use Mcp\Types\ElicitationCapability;
 use Mcp\Types\Task;
@@ -28,10 +29,14 @@ use Mcp\Types\TaskStatus;
 use Mcp\Types\CreateTaskResult;
 use Mcp\Types\TaskListResult;
 use Mcp\Types\TaskCapability;
+use Mcp\Types\CallToolRequest;
+use Mcp\Types\CallToolRequestParams;
 use Mcp\Types\ClientCapabilities;
+use Mcp\Types\ClientRequest;
 use Mcp\Types\ServerCapabilities;
 use Mcp\Types\SamplingMessage;
 use Mcp\Types\CreateMessageResult;
+use Mcp\Types\TaskRequestParams;
 use Mcp\Shared\Version;
 use PHPUnit\Framework\TestCase;
 
@@ -562,5 +567,170 @@ final class NewTypesTest extends TestCase
 
     public function testMcpErrorUrlElicitationCode(): void {
         $this->assertEquals(-32042, \Mcp\Shared\McpError::URL_ELICITATION_REQUIRED);
+    }
+
+    // -----------------------------------------------------------------------
+    // Elicitation Validation (Phase 5b)
+    // -----------------------------------------------------------------------
+
+    public function testElicitationFormModeWithoutRequestedSchemaThrows(): void {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Form mode elicitation requires requestedSchema');
+        $req = new ElicitationCreateRequest(message: 'Need info');
+        $req->validate();
+    }
+
+    public function testElicitationUrlModeWithoutUrlThrows(): void {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('URL mode elicitation requires a url');
+        $req = new ElicitationCreateRequest(message: 'Need info', mode: 'url', elicitationId: 'e1');
+        $req->validate();
+    }
+
+    public function testElicitationUrlModeWithoutElicitationIdThrows(): void {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('URL mode elicitation requires an elicitationId');
+        $req = new ElicitationCreateRequest(message: 'Need info', mode: 'url', url: 'https://example.com');
+        $req->validate();
+    }
+
+    public function testElicitationUrlModeWithRequestedSchemaThrows(): void {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('URL mode must not include requestedSchema');
+        $req = new ElicitationCreateRequest(
+            message: 'Need info',
+            mode: 'url',
+            url: 'https://example.com',
+            elicitationId: 'e1',
+            requestedSchema: ['type' => 'object'],
+        );
+        $req->validate();
+    }
+
+    public function testElicitationFormModeWithUrlThrows(): void {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Form mode must not include url');
+        $req = new ElicitationCreateRequest(
+            message: 'Need info',
+            requestedSchema: ['type' => 'object'],
+            url: 'https://example.com',
+        );
+        $req->validate();
+    }
+
+    public function testElicitationInvalidModeThrows(): void {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage("Invalid elicitation mode: 'invalid'");
+        $req = new ElicitationCreateRequest(
+            message: 'Need info',
+            mode: 'invalid',
+            requestedSchema: ['type' => 'object'],
+        );
+        $req->validate();
+    }
+
+    public function testElicitationValidFormMode(): void {
+        $req = new ElicitationCreateRequest(
+            message: 'Need info',
+            mode: 'form',
+            requestedSchema: ['type' => 'object', 'properties' => ['name' => ['type' => 'string']]],
+        );
+        $req->validate();
+        $this->assertEquals('form', $req->mode);
+    }
+
+    public function testElicitationValidUrlMode(): void {
+        $req = new ElicitationCreateRequest(
+            message: 'Need info',
+            mode: 'url',
+            url: 'https://example.com/form',
+            elicitationId: 'e123',
+        );
+        $req->validate();
+        $this->assertEquals('url', $req->mode);
+    }
+
+    // -----------------------------------------------------------------------
+    // Capability Serialization (Phase 5c)
+    // -----------------------------------------------------------------------
+
+    public function testEmptyCapabilitiesSerializeAsObject(): void {
+        $cap = new ElicitationCapability();
+        $json = json_encode($cap);
+        // Empty ElicitationCapability has no form/url, should serialize to empty object or merged extraFields
+        $decoded = json_decode($json, true);
+        $this->assertIsArray($decoded);
+    }
+
+    public function testTaskCapabilitySerializesNestedRequestsCorrectly(): void {
+        $cap = new TaskCapability(
+            list: true,
+            cancel: true,
+            requests: ['tools' => ['call' => []]],
+        );
+        $json = $cap->jsonSerialize();
+        $this->assertArrayHasKey('list', $json);
+        $this->assertArrayHasKey('cancel', $json);
+        $this->assertArrayHasKey('requests', $json);
+
+        // Verify empty arrays become stdClass objects in serialized output
+        $encoded = json_encode($json);
+        $this->assertStringContainsString('"call":{}', $encoded);
+    }
+
+    public function testElicitationCapabilitySerializesFormUrlAsObjects(): void {
+        $cap = new ElicitationCapability(form: true, url: true);
+        $json = $cap->jsonSerialize();
+        $this->assertInstanceOf(\stdClass::class, $json['form']);
+        $this->assertInstanceOf(\stdClass::class, $json['url']);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task-Augmented Request Roundtrip (Phase 5d)
+    // -----------------------------------------------------------------------
+
+    public function testCallToolRequestParamsWithTask(): void {
+        $taskParams = new TaskRequestParams(ttl: 60000);
+        $params = new CallToolRequestParams(
+            name: 'long-tool',
+            arguments: ['x' => 1],
+            task: $taskParams,
+        );
+
+        $json = $params->jsonSerialize();
+        $this->assertArrayHasKey('task', $json);
+        $this->assertEquals(60000, $json['task']->ttl);
+    }
+
+    public function testCallToolRequestWithTask(): void {
+        $taskParams = new TaskRequestParams(ttl: 30000);
+        $req = new CallToolRequest('my-tool', ['a' => 1], $taskParams);
+        $req->validate();
+        $this->assertInstanceOf(CallToolRequestParams::class, $req->params);
+        $this->assertNotNull($req->params->task);
+    }
+
+    public function testClientRequestParsesTaskInToolCall(): void {
+        $clientReq = ClientRequest::fromMethodAndParams('tools/call', [
+            'name' => 'slow-tool',
+            'arguments' => ['input' => 'data'],
+            'task' => ['ttl' => 120000],
+        ]);
+
+        $inner = $clientReq->getRequest();
+        $this->assertInstanceOf(\Mcp\Types\CallToolRequest::class, $inner);
+        $this->assertInstanceOf(CallToolRequestParams::class, $inner->params);
+        $this->assertNotNull($inner->params->task);
+        $this->assertEquals(120000, $inner->params->task->ttl);
+    }
+
+    public function testTaskRequestParamsFromArray(): void {
+        $params = TaskRequestParams::fromArray(['ttl' => 5000]);
+        $this->assertEquals(5000, $params->ttl);
+    }
+
+    public function testTaskRequestParamsFromArrayEmpty(): void {
+        $params = TaskRequestParams::fromArray([]);
+        $this->assertNull($params->ttl);
     }
 }

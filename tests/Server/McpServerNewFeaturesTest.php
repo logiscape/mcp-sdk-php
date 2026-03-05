@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace Mcp\Tests\Server;
 
 use Mcp\Server\McpServer;
+use Mcp\Server\McpServerException;
+use Mcp\Server\NotificationOptions;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\ListToolsResult;
+use Mcp\Types\TaskCapability;
 use Mcp\Types\TextContent;
 use PHPUnit\Framework\TestCase;
 
@@ -133,5 +136,72 @@ final class McpServerNewFeaturesTest extends TestCase
             ->resource(uri: 'info://x', name: 'x', callback: fn() => 'x', title: 'X');
 
         $this->assertSame($server, $result);
+    }
+
+    /**
+     * Test that enableTasks() registers task handlers and returns self for chaining.
+     */
+    public function testEnableTasksReturnsSelf(): void {
+        $server = new McpServer('test');
+        $result = $server->enableTasks();
+        $this->assertSame($server, $result);
+    }
+
+    /**
+     * Test that enableTasks() creates a TaskManager.
+     */
+    public function testEnableTasksCreatesTaskManager(): void {
+        $server = new McpServer('test');
+        $this->assertNull($server->getTaskManager());
+
+        $server->enableTasks();
+        $this->assertNotNull($server->getTaskManager());
+    }
+
+    /**
+     * Test that enableTasks() registers tasks/get, tasks/list, tasks/cancel, tasks/result handlers.
+     */
+    public function testEnableTasksRegistersHandlers(): void {
+        $server = new McpServer('test');
+        $server->enableTasks();
+
+        $handlers = $server->getServer()->getHandlers();
+        $this->assertArrayHasKey('tasks/get', $handlers);
+        $this->assertArrayHasKey('tasks/list', $handlers);
+        $this->assertArrayHasKey('tasks/cancel', $handlers);
+        $this->assertArrayHasKey('tasks/result', $handlers);
+    }
+
+    /**
+     * Test that enableTasks() causes tasks capability to be advertised.
+     */
+    public function testEnableTasksExposesCapability(): void {
+        $server = new McpServer('test');
+        $server->tool('t1', 'Tool', fn() => 'ok');
+        $server->enableTasks();
+
+        $underlying = $server->getServer();
+        $caps = $underlying->getCapabilities(
+            new NotificationOptions(),
+            []
+        );
+        $this->assertNotNull($caps->tasks);
+        $this->assertTrue($caps->tasks->list);
+        $this->assertTrue($caps->tasks->cancel);
+    }
+
+    /**
+     * Test that McpServer without enableTasks() does not expose tasks capability.
+     */
+    public function testNoTasksCapabilityWithoutEnableTasks(): void {
+        $server = new McpServer('test');
+        $server->tool('t1', 'Tool', fn() => 'ok');
+
+        $underlying = $server->getServer();
+        $caps = $underlying->getCapabilities(
+            new NotificationOptions(),
+            []
+        );
+        $this->assertNull($caps->tasks);
     }
 }

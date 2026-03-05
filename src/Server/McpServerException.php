@@ -109,4 +109,37 @@ class McpServerException extends McpError
             message: "Unknown resource: {$uri}"
         ));
     }
+
+    /**
+     * Create a new exception for a task that was not found.
+     */
+    public static function taskNotFound(string $taskId): self
+    {
+        return new self(new ErrorData(
+            code: -32602,
+            message: "Task not found: {$taskId}"
+        ));
+    }
+
+    /**
+     * Create a new exception for a task that cannot be cancelled.
+     */
+    public static function taskNotCancellable(string $taskId, string $status): self
+    {
+        return new self(new ErrorData(
+            code: -32602,
+            message: "Task '{$taskId}' cannot be cancelled in state '{$status}'"
+        ));
+    }
+
+    /**
+     * Create a new exception for a task result that is not yet available.
+     */
+    public static function taskResultNotAvailable(string $taskId): self
+    {
+        return new self(new ErrorData(
+            code: -32602,
+            message: "Result not available for task: {$taskId}"
+        ));
+    }
 }

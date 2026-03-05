@@ -23,23 +23,28 @@ final class VersionNegotiationTest extends TestCase
     }
 
     /**
-     * Test that feature gating works correctly for each version.
+     * Test that Version::supportsFeature() correctly gates features by version.
      */
-    public function testClientSessionFeatureGating(): void {
-        // We can't fully test ClientSession.supportsFeature without a full session,
-        // but we can verify the version comparison logic directly
-        $this->assertTrue(version_compare('2025-03-26', '2025-03-26', '>='));
-        $this->assertTrue(version_compare('2025-06-18', '2025-03-26', '>='));
-        $this->assertTrue(version_compare('2025-11-25', '2025-03-26', '>='));
-        $this->assertFalse(version_compare('2024-11-05', '2025-03-26', '>='));
+    public function testVersionSupportsFeature(): void {
+        // 2025-03-26 features
+        $this->assertTrue(Version::supportsFeature('2025-03-26', 'audio_content'));
+        $this->assertTrue(Version::supportsFeature('2025-06-18', 'audio_content'));
+        $this->assertTrue(Version::supportsFeature('2025-11-25', 'annotations'));
+        $this->assertFalse(Version::supportsFeature('2024-11-05', 'audio_content'));
 
         // 2025-06-18 features
-        $this->assertTrue(version_compare('2025-06-18', '2025-06-18', '>='));
-        $this->assertTrue(version_compare('2025-11-25', '2025-06-18', '>='));
-        $this->assertFalse(version_compare('2025-03-26', '2025-06-18', '>='));
+        $this->assertTrue(Version::supportsFeature('2025-06-18', 'elicitation'));
+        $this->assertTrue(Version::supportsFeature('2025-11-25', 'structured_content'));
+        $this->assertFalse(Version::supportsFeature('2025-03-26', 'elicitation'));
+        $this->assertFalse(Version::supportsFeature('2024-11-05', 'resource_link_content'));
 
         // 2025-11-25 features
-        $this->assertTrue(version_compare('2025-11-25', '2025-11-25', '>='));
-        $this->assertFalse(version_compare('2025-06-18', '2025-11-25', '>='));
+        $this->assertTrue(Version::supportsFeature('2025-11-25', 'tasks'));
+        $this->assertTrue(Version::supportsFeature('2025-11-25', 'sampling_with_tools'));
+        $this->assertFalse(Version::supportsFeature('2025-06-18', 'tasks'));
+        $this->assertFalse(Version::supportsFeature('2025-03-26', 'url_elicitation'));
+
+        // Unknown feature returns false
+        $this->assertFalse(Version::supportsFeature('2025-11-25', 'nonexistent_feature'));
     }
 }

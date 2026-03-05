@@ -35,6 +35,7 @@ use Mcp\Types\ServerPromptsCapability;
 use Mcp\Types\ServerResourcesCapability;
 use Mcp\Types\ServerToolsCapability;
 use Mcp\Types\ServerLoggingCapability;
+use Mcp\Types\TaskCapability;
 use Mcp\Types\ExperimentalCapabilities;
 use Mcp\Types\LoggingLevel;
 use Mcp\Types\RequestId;
@@ -132,13 +133,29 @@ class Server {
                 // Provide necessary initialization parameters
             );
         }
-    
+
+        // Build tasks capability if task handlers are registered
+        $tasksCapability = null;
+        $hasTaskGet = isset($this->requestHandlers['tasks/get']);
+        $hasTaskList = isset($this->requestHandlers['tasks/list']);
+        $hasTaskCancel = isset($this->requestHandlers['tasks/cancel']);
+        if ($hasTaskGet || $hasTaskList || $hasTaskCancel) {
+            $tasksCapability = new TaskCapability(
+                list: $hasTaskList ? true : null,
+                cancel: $hasTaskCancel ? true : null,
+                requests: isset($this->requestHandlers['tools/call'])
+                    ? ['tools' => ['call' => []]]
+                    : null,
+            );
+        }
+
         return new ServerCapabilities(
             prompts: $promptsCapability,
             resources: $resourcesCapability,
             tools: $toolsCapability,
             logging: $loggingCapability,
-            experimental: new ExperimentalCapabilities($experimentalCapabilities) // Assuming a constructor
+            experimental: new ExperimentalCapabilities($experimentalCapabilities),
+            tasks: $tasksCapability,
         );
     }
 

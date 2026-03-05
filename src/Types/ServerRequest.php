@@ -137,6 +137,12 @@ class ServerRequest implements McpModel {
             $toolChoice = ToolChoice::fromArray($params['toolChoice']);
         }
 
+        // Parse task (2025-11-25)
+        $task = null;
+        if (isset($params['task']) && is_array($params['task'])) {
+            $task = TaskRequestParams::fromArray($params['task']);
+        }
+
         return new self(new CreateMessageRequest(
             messages: $messages,
             maxTokens: $maxTokens,
@@ -148,6 +154,7 @@ class ServerRequest implements McpModel {
             includeContext: $includeContext,
             tools: $tools,
             toolChoice: $toolChoice,
+            task: $task,
         ));
     }
 
@@ -161,7 +168,11 @@ class ServerRequest implements McpModel {
         }
 
         $content = self::createSamplingContent($m['content']);
-        return new SamplingMessage(role: $m['role'], content: $content);
+        $role = Role::tryFrom($m['role']);
+        if ($role === null) {
+            throw new \InvalidArgumentException("Invalid role value: '{$m['role']}'");
+        }
+        return new SamplingMessage(role: $role, content: $content);
     }
 
     private static function createSamplingContent(array $c): TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent {

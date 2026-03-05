@@ -334,16 +334,13 @@ class ServerSession extends BaseSession {
     /**
      * Send an elicitation request to the client.
      *
+     * Note: Not yet implemented. Elicitation requires bidirectional request/response
+     * which is limited in synchronous PHP transports. Returns null (unsupported).
+     *
      * @param string $message Message describing what information is needed
      * @param array|null $requestedSchema JSON Schema for the form fields
      * @param string|null $url URL for URL-mode elicitation
      * @return \Mcp\Types\ElicitationCreateResult|null The client's response, or null if not supported
-     */
-    /**
-     * Send an elicitation request to the client.
-     *
-     * Note: Not yet implemented. Elicitation requires bidirectional request/response
-     * which is limited in synchronous PHP transports. Returns null (unsupported).
      */
     public function sendElicitationRequest(
         string $message,

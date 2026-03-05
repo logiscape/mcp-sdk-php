@@ -38,7 +38,8 @@ class CallToolRequestParams extends RequestParams {
     public function __construct(
         public readonly string $name,
         public readonly ?array $arguments = null,
-        ?Meta $_meta = null
+        ?Meta $_meta = null,
+        public ?TaskRequestParams $task = null,
     ) {
         parent::__construct($_meta);
     }
@@ -56,9 +57,13 @@ class CallToolRequestParams extends RequestParams {
         $data = [
             'name' => $this->name,
             // Return an empty object if arguments are null or empty
-            'arguments' => $this->arguments === null || empty($this->arguments) ? 
+            'arguments' => $this->arguments === null || empty($this->arguments) ?
                 new \stdClass() : $this->arguments
         ];
+
+        if ($this->task !== null) {
+            $data['task'] = $this->task;
+        }
 
         // Get parent data
         $parentData = parent::jsonSerialize();

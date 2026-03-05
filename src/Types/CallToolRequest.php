@@ -36,9 +36,10 @@ class CallToolRequest extends Request {
     /**
      * @param string $name The name of the tool to call
      * @param array<string, mixed>|null $arguments Optional arguments for the tool call
+     * @param TaskRequestParams|null $task Optional task parameters for long-running operations
      */
-    public function __construct(string $name, ?array $arguments = null) {
-        $params = new CallToolRequestParams($name, $arguments);
+    public function __construct(string $name, ?array $arguments = null, ?TaskRequestParams $task = null) {
+        $params = new CallToolRequestParams($name, $arguments, task: $task);
         parent::__construct('tools/call', $params);
     }
 

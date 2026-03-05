@@ -288,7 +288,12 @@ class ClientRequest implements McpModel {
             throw new \InvalidArgumentException('"arguments" must be an associative array if provided.');
         }
 
-        return new self(new CallToolRequest($params['name'], $arguments));
+        $task = null;
+        if (isset($params['task']) && is_array($params['task'])) {
+            $task = TaskRequestParams::fromArray($params['task']);
+        }
+
+        return new self(new CallToolRequest($params['name'], $arguments, $task));
     }
 
     private static function createListTemplatesRequest(array $params): self {

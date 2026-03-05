@@ -108,6 +108,57 @@ final class TaskManagerTest extends TestCase
         $this->assertNull($this->manager->getTask($task->taskId));
     }
 
+    public function testCannotTransitionFromTerminalState(): void {
+        $task = $this->manager->createTask();
+        $this->manager->updateStatus($task->taskId, TaskStatus::COMPLETED, 'Done');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid task state transition');
+        $this->manager->updateStatus($task->taskId, TaskStatus::WORKING);
+    }
+
+    public function testCannotCancelTerminalTask(): void {
+        $task = $this->manager->createTask();
+        $this->manager->updateStatus($task->taskId, TaskStatus::COMPLETED, 'Done');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Cannot cancel task');
+        $this->manager->cancelTask($task->taskId);
+    }
+
+    public function testCannotCancelAlreadyCancelledTask(): void {
+        $task = $this->manager->createTask();
+        $this->manager->cancelTask($task->taskId);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->manager->cancelTask($task->taskId);
+    }
+
+    public function testCannotCancelFailedTask(): void {
+        $task = $this->manager->createTask();
+        $this->manager->updateStatus($task->taskId, TaskStatus::FAILED, 'Error');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->manager->cancelTask($task->taskId);
+    }
+
+    public function testValidTransitions(): void {
+        $task = $this->manager->createTask();
+        $this->assertEquals(TaskStatus::WORKING, $task->status);
+
+        // working -> input_required
+        $task = $this->manager->updateStatus($task->taskId, TaskStatus::INPUT_REQUIRED);
+        $this->assertEquals(TaskStatus::INPUT_REQUIRED, $task->status);
+
+        // input_required -> working
+        $task = $this->manager->updateStatus($task->taskId, TaskStatus::WORKING);
+        $this->assertEquals(TaskStatus::WORKING, $task->status);
+
+        // working -> completed
+        $task = $this->manager->updateStatus($task->taskId, TaskStatus::COMPLETED);
+        $this->assertEquals(TaskStatus::COMPLETED, $task->status);
+    }
+
     public function testTaskLifecycle(): void {
         // Create
         $task = $this->manager->createTask(ttl: 300);
