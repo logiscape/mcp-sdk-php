@@ -30,12 +30,19 @@ declare(strict_types=1);
 namespace Mcp\Types;
 
 /**
- * Result of a create message request
- * content: TextContent | ImageContent | AudioContent | ToolUseContent
+ * Result of a create message request.
+ *
+ * Per the MCP spec, CreateMessageResult extends SamplingMessage, so content
+ * can be a single content block or an array of content blocks (e.g. multiple
+ * ToolUseContent blocks when stopReason is "toolUse").
  */
 class CreateMessageResult extends Result {
+    /**
+     * @param TextContent|ImageContent|AudioContent|ToolUseContent|array $content
+     *        Single content block or array of content blocks.
+     */
     public function __construct(
-        public readonly TextContent|ImageContent|AudioContent|ToolUseContent $content,
+        public readonly TextContent|ImageContent|AudioContent|ToolUseContent|array $content,
         public readonly string $model,
         public readonly Role $role,
         public ?string $stopReason = null,
@@ -66,18 +73,7 @@ class CreateMessageResult extends Result {
             throw new \InvalidArgumentException("Invalid role: $roleStr in CreateMessageResult");
         }
 
-        if (!is_array($contentData) || !isset($contentData['type'])) {
-            throw new \InvalidArgumentException('Invalid content data in CreateMessageResult');
-        }
-
-        $type = $contentData['type'];
-        $content = match($type) {
-            'text' => TextContent::fromArray($contentData),
-            'image' => ImageContent::fromArray($contentData),
-            'audio' => AudioContent::fromArray($contentData),
-            'tool_use' => ToolUseContent::fromArray($contentData),
-            default => throw new \InvalidArgumentException("Unknown content type: $type in CreateMessageResult")
-        };
+        $content = self::parseContent($contentData);
 
         $obj = new self($content, $model, $role, $stopReason, $meta);
 
@@ -89,9 +85,48 @@ class CreateMessageResult extends Result {
         return $obj;
     }
 
+    /**
+     * Parse content data which may be a single block or an array of blocks.
+     */
+    private static function parseContent(array $contentData): TextContent|ImageContent|AudioContent|ToolUseContent|array {
+        // Array of content blocks (no 'type' key at the top level)
+        if (!isset($contentData['type']) && array_is_list($contentData)) {
+            $blocks = [];
+            foreach ($contentData as $item) {
+                if (!is_array($item) || !isset($item['type'])) {
+                    throw new \InvalidArgumentException('Each content block must have a type');
+                }
+                $blocks[] = self::parseSingleContent($item);
+            }
+            return $blocks;
+        }
+
+        // Single content block
+        if (!isset($contentData['type'])) {
+            throw new \InvalidArgumentException('Invalid content data in CreateMessageResult');
+        }
+        return self::parseSingleContent($contentData);
+    }
+
+    private static function parseSingleContent(array $contentData): TextContent|ImageContent|AudioContent|ToolUseContent {
+        return match($contentData['type']) {
+            'text' => TextContent::fromArray($contentData),
+            'image' => ImageContent::fromArray($contentData),
+            'audio' => AudioContent::fromArray($contentData),
+            'tool_use' => ToolUseContent::fromArray($contentData),
+            default => throw new \InvalidArgumentException("Unknown content type: {$contentData['type']} in CreateMessageResult")
+        };
+    }
+
     public function validate(): void {
         parent::validate();
-        $this->content->validate();
+        if (is_array($this->content)) {
+            foreach ($this->content as $block) {
+                $block->validate();
+            }
+        } else {
+            $this->content->validate();
+        }
         if (empty($this->model)) {
             throw new \InvalidArgumentException('Model name cannot be empty');
         }

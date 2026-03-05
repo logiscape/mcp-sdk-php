@@ -32,19 +32,35 @@ namespace Mcp\Types;
  * SamplingMessage
  * {
  *   role: Role,
- *   content: TextContent | ImageContent | AudioContent | ToolUseContent | ToolResultContent
+ *   content: SamplingMessageContentBlock | SamplingMessageContentBlock[]
  * }
+ *
+ * Per the MCP spec, content can be a single content block or an array of
+ * content blocks. Array form is required for tool use in sampling, where
+ * assistant messages contain multiple ToolUseContent blocks and user
+ * messages contain multiple ToolResultContent blocks.
  */
 class SamplingMessage implements McpModel {
     use ExtraFieldsTrait;
 
+    /**
+     * @param Role $role
+     * @param TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent|array $content
+     *        Single content block or array of content blocks.
+     */
     public function __construct(
         public readonly Role $role,
-        public readonly TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent $content,
+        public readonly TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent|array $content,
     ) {}
 
     public function validate(): void {
-        $this->content->validate();
+        if (is_array($this->content)) {
+            foreach ($this->content as $block) {
+                $block->validate();
+            }
+        } else {
+            $this->content->validate();
+        }
     }
 
     public function jsonSerialize(): mixed {

@@ -159,7 +159,6 @@ class ServerRequest implements McpModel {
     }
 
     private static function createSamplingMessage(array $m): SamplingMessage {
-        // SamplingMessage: { role: "user"|"assistant", content: TextContent|ImageContent }
         if (!isset($m['role']) || !in_array($m['role'], ['user', 'assistant'], true)) {
             throw new \InvalidArgumentException('SamplingMessage requires a valid role');
         }
@@ -167,7 +166,7 @@ class ServerRequest implements McpModel {
             throw new \InvalidArgumentException('SamplingMessage requires a content field');
         }
 
-        $content = self::createSamplingContent($m['content']);
+        $content = self::parseSamplingContent($m['content']);
         $role = Role::tryFrom($m['role']);
         if ($role === null) {
             throw new \InvalidArgumentException("Invalid role value: '{$m['role']}'");
@@ -175,11 +174,31 @@ class ServerRequest implements McpModel {
         return new SamplingMessage(role: $role, content: $content);
     }
 
-    private static function createSamplingContent(array $c): TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent {
-        if (!isset($c['type'])) {
-            throw new \InvalidArgumentException('SamplingMessage content requires a type');
+    /**
+     * Parse content which may be a single block or an array of blocks.
+     */
+    private static function parseSamplingContent(array $c): TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent|array {
+        // Single content block (has a 'type' key)
+        if (isset($c['type'])) {
+            return self::createSamplingContentBlock($c);
         }
 
+        // Array of content blocks
+        if (array_is_list($c)) {
+            $blocks = [];
+            foreach ($c as $item) {
+                if (!is_array($item) || !isset($item['type'])) {
+                    throw new \InvalidArgumentException('Each content block must have a type');
+                }
+                $blocks[] = self::createSamplingContentBlock($item);
+            }
+            return $blocks;
+        }
+
+        throw new \InvalidArgumentException('SamplingMessage content requires a type');
+    }
+
+    private static function createSamplingContentBlock(array $c): TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent {
         return match ($c['type']) {
             'text' => self::createTextContent($c),
             'image' => self::createImageContent($c),

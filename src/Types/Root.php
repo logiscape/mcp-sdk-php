@@ -35,16 +35,14 @@ class Root implements McpModel {
     public function __construct(
         public readonly string $uri,
         public ?string $name = null,
-        public ?string $title = null,
     ) {}
 
     public static function fromArray(array $data): self {
         $uri = $data['uri'] ?? '';
         $name = $data['name'] ?? null;
-        $title = $data['title'] ?? null;
-        unset($data['uri'], $data['name'], $data['title']);
+        unset($data['uri'], $data['name']);
 
-        $obj = new self($uri, $name, $title);
+        $obj = new self($uri, $name);
 
         foreach ($data as $k => $v) {
             $obj->$k = $v;
@@ -67,9 +65,6 @@ class Root implements McpModel {
         $data = ['uri' => $this->uri];
         if ($this->name !== null) {
             $data['name'] = $this->name;
-        }
-        if ($this->title !== null) {
-            $data['title'] = $this->title;
         }
         return array_merge($data, $this->extraFields);
     }
