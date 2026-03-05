@@ -50,6 +50,7 @@ class ServerCapabilities extends Capabilities {
         public ?ServerResourcesCapability $resources = null,
         public ?ServerToolsCapability $tools = null,
         ?ExperimentalCapabilities $experimental = null,
+        public ?TaskCapability $tasks = null,
     ) {
         parent::__construct($experimental);
     }
@@ -98,14 +99,21 @@ class ServerCapabilities extends Capabilities {
             $tools = ServerToolsCapability::fromArray($toolsData);
         }
 
-        // Construct ServerCapabilities object
+        $tasksData = $data['tasks'] ?? null;
+        unset($data['tasks']);
+        $tasks = null;
+        if ($tasksData !== null && is_array($tasksData)) {
+            $tasks = TaskCapability::fromArray($tasksData);
+        }
+
         $obj = new self(
             logging: $logging,
             completions: $completions,
             prompts: $prompts,
             resources: $resources,
             tools: $tools,
-            experimental: $experimental
+            experimental: $experimental,
+            tasks: $tasks
         );
 
         // Extra fields
@@ -134,6 +142,9 @@ class ServerCapabilities extends Capabilities {
         if ($this->completions !== null) {
             $this->completions->validate();
         }
+        if ($this->tasks !== null) {
+            $this->tasks->validate();
+        }
     }
 
     public function jsonSerialize(): mixed {
@@ -152,6 +163,9 @@ class ServerCapabilities extends Capabilities {
         }
         if ($this->tools !== null) {
             $data['tools'] = $this->tools;
+        }
+        if ($this->tasks !== null) {
+            $data['tasks'] = $this->tasks;
         }
         return $data;
     }

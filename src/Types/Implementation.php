@@ -35,30 +35,37 @@ namespace Mcp\Types;
 class Implementation implements McpModel {
     use ExtraFieldsTrait;
 
+    /**
+     * @param Icon[]|null $icons
+     */
     public function __construct(
         public readonly string $name,
         public readonly string $version,
+        public ?string $title = null,
+        public ?string $description = null,
+        public ?array $icons = null,
+        public ?string $websiteUrl = null,
     ) {}
 
     public static function fromArray(array $data): self {
-        // Extract required fields
         $name = $data['name'] ?? '';
         $version = $data['version'] ?? '';
+        $title = $data['title'] ?? null;
+        $description = $data['description'] ?? null;
+        $websiteUrl = $data['websiteUrl'] ?? null;
 
-        // Remove known fields from the array
-        unset($data['name'], $data['version']);
+        $icons = Icon::parseArray($data['icons'] ?? null);
 
-        // Create the object
-        $obj = new self($name, $version);
+        unset($data['name'], $data['version'], $data['title'], $data['description'],
+              $data['icons'], $data['websiteUrl']);
 
-        // Assign leftover fields to extraFields
+        $obj = new self($name, $version, $title, $description, $icons, $websiteUrl);
+
         foreach ($data as $k => $v) {
             $obj->$k = $v;
         }
 
-        // Validate
         $obj->validate();
-
         return $obj;
     }
 
@@ -72,7 +79,22 @@ class Implementation implements McpModel {
     }
 
     public function jsonSerialize(): mixed {
-        $data = get_object_vars($this);
+        $data = [
+            'name' => $this->name,
+            'version' => $this->version,
+        ];
+        if ($this->title !== null) {
+            $data['title'] = $this->title;
+        }
+        if ($this->description !== null) {
+            $data['description'] = $this->description;
+        }
+        if ($this->icons !== null) {
+            $data['icons'] = $this->icons;
+        }
+        if ($this->websiteUrl !== null) {
+            $data['websiteUrl'] = $this->websiteUrl;
+        }
         return array_merge($data, $this->extraFields);
     }
 }

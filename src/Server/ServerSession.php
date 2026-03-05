@@ -137,6 +137,18 @@ class ServerSession extends BaseSession {
             }
         }
 
+        if ($capability->elicitation !== null) {
+            if ($clientCaps->elicitation === null) {
+                return false;
+            }
+        }
+
+        if ($capability->tasks !== null) {
+            if ($clientCaps->tasks === null) {
+                return false;
+            }
+        }
+
         if ($capability->experimental !== null) {
             if ($clientCaps->experimental === null) {
                 return false;
@@ -320,6 +332,29 @@ class ServerSession extends BaseSession {
     }
 
     /**
+     * Send an elicitation request to the client.
+     *
+     * @param string $message Message describing what information is needed
+     * @param array|null $requestedSchema JSON Schema for the form fields
+     * @param string|null $url URL for URL-mode elicitation
+     * @return \Mcp\Types\ElicitationCreateResult|null The client's response, or null if not supported
+     */
+    /**
+     * Send an elicitation request to the client.
+     *
+     * Note: Not yet implemented. Elicitation requires bidirectional request/response
+     * which is limited in synchronous PHP transports. Returns null (unsupported).
+     */
+    public function sendElicitationRequest(
+        string $message,
+        ?array $requestedSchema = null,
+        ?string $url = null
+    ): ?\Mcp\Types\ElicitationCreateResult {
+        $this->logger->info('Elicitation not yet implemented in synchronous transport');
+        return null;
+    }
+
+    /**
      * Sends a resource updated notification to the client.
      *
      * @param string $uri The URI of the updated resource.
@@ -427,17 +462,7 @@ class ServerSession extends BaseSession {
         if ($this->initializationState !== InitializationState::Initialized) {
             return false;
         }
-        
-        switch ($feature) {
-            case 'batch_messages':
-            case 'audio_content':
-            case 'annotations':
-            case 'tool_annotations':
-            case 'progress_message':
-                return version_compare($this->negotiatedProtocolVersion, '2025-03-26', '>=');
-            default:
-                return false;
-        }
+        return Version::supportsFeature($this->negotiatedProtocolVersion, $feature);
     }
 
     /**
@@ -451,7 +476,7 @@ class ServerSession extends BaseSession {
         if ($this->negotiatedProtocolVersion === Version::LATEST_PROTOCOL_VERSION) {
             return $response;
         }
-        
+
         // Apply adaptations based on the response type
         if ($response instanceof CallToolResult) {
             return $this->adaptCallToolResult($response);
@@ -460,8 +485,7 @@ class ServerSession extends BaseSession {
         } else if ($response instanceof Tool) {
             return $this->adaptTool($response);
         }
-        // Add more adaptations as needed for other response types
-        
+
         return $response;
     }
 
@@ -469,35 +493,59 @@ class ServerSession extends BaseSession {
      * Adapts a CallToolResult to be compatible with older protocol versions.
      */
     private function adaptCallToolResult(CallToolResult $result): CallToolResult {
-        if (version_compare($this->negotiatedProtocolVersion, '2025-03-26', '<')) {
-            // Filter out AudioContent which is not supported in older versions
-            $adaptedContent = [];
-            foreach ($result->content as $content) {
-                if (!($content instanceof AudioContent)) {
-                    // Also need to strip annotations if present and not supported
-                    if ($content instanceof TextContent || $content instanceof ImageContent) {
-                        if ($content->annotations !== null) {
-                            // Create a new content object without annotations
-                            if ($content instanceof TextContent) {
-                                $content = new TextContent($content->text);
-                            } else if ($content instanceof ImageContent) {
-                                $content = new ImageContent($content->data, $content->mimeType);
-                            }
-                        }
-                    }
-                    $adaptedContent[] = $content;
-                }
+        $needsAdaptation = false;
+        $adaptedContent = $result->content;
+        $structuredContent = $result->structuredContent;
+
+        // Strip structuredContent and ResourceLinkContent for clients older than 2025-06-18
+        if (version_compare($this->negotiatedProtocolVersion, '2025-06-18', '<')) {
+            if ($structuredContent !== null) {
+                $structuredContent = null;
+                $needsAdaptation = true;
             }
-            
-            // Create a new result with the adapted content
-            return new CallToolResult(
-                content: $adaptedContent,
-                isError: $result->isError,
-                _meta: $result->_meta
-            );
+
+            $filtered = [];
+            foreach ($result->content as $content) {
+                if ($content instanceof \Mcp\Types\ResourceLinkContent) {
+                    $needsAdaptation = true;
+                    continue;
+                }
+                $filtered[] = $content;
+            }
+            $adaptedContent = $filtered;
         }
-        
-        return $result;
+
+        if (version_compare($this->negotiatedProtocolVersion, '2025-03-26', '<')) {
+            // Filter out AudioContent and strip annotations for pre-2025-03-26 clients
+            $filtered = [];
+            foreach ($adaptedContent as $content) {
+                if ($content instanceof AudioContent) {
+                    $needsAdaptation = true;
+                    continue;
+                }
+                if (($content instanceof TextContent || $content instanceof ImageContent) && $content->annotations !== null) {
+                    $needsAdaptation = true;
+                    if ($content instanceof TextContent) {
+                        $content = new TextContent($content->text);
+                    } else {
+                        $content = new ImageContent($content->data, $content->mimeType);
+                    }
+                }
+                $filtered[] = $content;
+            }
+            $adaptedContent = $filtered;
+        }
+
+        if (!$needsAdaptation) {
+            return $result;
+        }
+
+        return new CallToolResult(
+            content: $adaptedContent,
+            isError: $result->isError,
+            _meta: $result->_meta,
+            structuredContent: $structuredContent,
+        );
     }
 
     /**

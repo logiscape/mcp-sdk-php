@@ -50,7 +50,8 @@ class ClientNotification implements McpModel {
             $notification instanceof CancelledNotification ||
             $notification instanceof InitializedNotification ||
             $notification instanceof ProgressNotification ||
-            $notification instanceof RootsListChangedNotification
+            $notification instanceof RootsListChangedNotification ||
+            $notification instanceof ElicitationCompleteNotification
         )) {
             throw new \InvalidArgumentException('Invalid client notification type');
         }
@@ -71,6 +72,7 @@ class ClientNotification implements McpModel {
             'notifications/initialized' => self::createInitializedNotification($params),
             'notifications/progress' => self::createProgressNotification($params),
             'notifications/roots/list_changed' => self::createRootsListChangedNotification($params),
+            'notifications/elicitation/complete' => self::createElicitationCompleteNotification($params),
             default => throw new \InvalidArgumentException("Unknown client notification method: $method"),
         };
     }
@@ -159,15 +161,18 @@ class ClientNotification implements McpModel {
     }
 
     private static function createRootsListChangedNotification(array $params): self {
-        // No params expected
         $notification = new RootsListChangedNotification();
-
-        // Store extra fields if any
         foreach ($params as $k => $v) {
             $notification->$k = $v;
         }
-
         return new self($notification);
+    }
+
+    private static function createElicitationCompleteNotification(array $params): self {
+        if (empty($params['elicitationId'])) {
+            throw new \InvalidArgumentException('ElicitationCompleteNotification requires "elicitationId"');
+        }
+        return new self(new ElicitationCompleteNotification($params['elicitationId']));
     }
 
     public function validate(): void {

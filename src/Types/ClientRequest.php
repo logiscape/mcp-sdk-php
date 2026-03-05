@@ -70,7 +70,11 @@ class ClientRequest implements McpModel {
             $request instanceof CallToolRequest ||
             $request instanceof SetLevelRequest ||
             $request instanceof CompleteRequest ||
-            $request instanceof ListTemplatesRequest
+            $request instanceof ListTemplatesRequest ||
+            $request instanceof TaskGetRequest ||
+            $request instanceof TaskResultRequest ||
+            $request instanceof TaskListRequest ||
+            $request instanceof TaskCancelRequest
         )) {
             throw new \InvalidArgumentException('Invalid client request type');
         }
@@ -101,6 +105,10 @@ class ClientRequest implements McpModel {
             'resources/templates/list' => self::createListTemplatesRequest($params),
             'tools/call' => self::createCallToolRequest($params),
             'tools/list' => self::createListToolsRequest($params),
+            'tasks/get' => self::createTaskGetRequest($params),
+            'tasks/result' => self::createTaskResultRequest($params),
+            'tasks/list' => self::createTaskListRequest($params),
+            'tasks/cancel' => self::createTaskCancelRequest($params),
             default => throw new \InvalidArgumentException("Unknown client request method: $method")
         };
     }
@@ -140,10 +148,28 @@ class ClientRequest implements McpModel {
             }
         }
 
+        // ElicitationCapability
+        $elicitation = null;
+        if (isset($capParams['elicitation'])) {
+            $elicitationData = $capParams['elicitation'];
+            $elicitation = new ElicitationCapability(
+                form: isset($elicitationData['form']) ? true : null,
+                url: isset($elicitationData['url']) ? true : null,
+            );
+        }
+
+        // TaskCapability
+        $tasks = null;
+        if (isset($capParams['tasks'])) {
+            $tasks = TaskCapability::fromArray($capParams['tasks']);
+        }
+
         $capabilities = new ClientCapabilities(
             roots: $roots,
             sampling: $sampling,
-            experimental: $experimental
+            experimental: $experimental,
+            elicitation: $elicitation,
+            tasks: $tasks,
         );
 
         // Implementation
@@ -273,6 +299,32 @@ class ClientRequest implements McpModel {
     private static function createListToolsRequest(array $params): self {
         $cursor = $params['cursor'] ?? null;
         return new self(new ListToolsRequest($cursor));
+    }
+
+    private static function createTaskGetRequest(array $params): self {
+        if (empty($params['taskId'])) {
+            throw new \InvalidArgumentException('TaskGetRequest requires "taskId"');
+        }
+        return new self(new TaskGetRequest($params['taskId']));
+    }
+
+    private static function createTaskResultRequest(array $params): self {
+        if (empty($params['taskId'])) {
+            throw new \InvalidArgumentException('TaskResultRequest requires "taskId"');
+        }
+        return new self(new TaskResultRequest($params['taskId']));
+    }
+
+    private static function createTaskListRequest(array $params): self {
+        $cursor = $params['cursor'] ?? null;
+        return new self(new TaskListRequest($cursor));
+    }
+
+    private static function createTaskCancelRequest(array $params): self {
+        if (empty($params['taskId'])) {
+            throw new \InvalidArgumentException('TaskCancelRequest requires "taskId"');
+        }
+        return new self(new TaskCancelRequest($params['taskId']));
     }
 
     public function validate(): void {

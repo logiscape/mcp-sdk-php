@@ -37,18 +37,20 @@ class Annotations implements McpModel {
 
     /**
      * @param Role[]|null $audience
+     * @param string|null $lastModified ISO 8601 timestamp
      */
     public function __construct(
         public ?array $audience = null,
         public ?float $priority = null,
+        public ?string $lastModified = null,
     ) {}
 
     public static function fromArray(array $data): self {
-        // Extract known fields
         $audienceData = $data['audience'] ?? null;
         $priority = $data['priority'] ?? null;
+        $lastModified = $data['lastModified'] ?? null;
 
-        unset($data['audience'], $data['priority']);
+        unset($data['audience'], $data['priority'], $data['lastModified']);
 
         // Convert audienceData (if any) to an array of Role enums
         $audience = null;
@@ -65,7 +67,8 @@ class Annotations implements McpModel {
 
         $obj = new self(
             audience: $audience,
-            priority: $priority !== null ? (float)$priority : null
+            priority: $priority !== null ? (float)$priority : null,
+            lastModified: $lastModified
         );
 
         // Any leftover fields go into extraFields
@@ -99,6 +102,9 @@ class Annotations implements McpModel {
         }
         if ($this->priority !== null) {
             $data['priority'] = $this->priority;
+        }
+        if ($this->lastModified !== null) {
+            $data['lastModified'] = $this->lastModified;
         }
         return array_merge($data, $this->extraFields);
     }

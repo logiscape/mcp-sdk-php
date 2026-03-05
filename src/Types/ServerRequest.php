@@ -45,7 +45,8 @@ class ServerRequest implements McpModel {
         if (!(
             $request instanceof PingRequest ||
             $request instanceof CreateMessageRequest ||
-            $request instanceof ListRootsRequest
+            $request instanceof ListRootsRequest ||
+            $request instanceof ElicitationCreateRequest
         )) {
             throw new \InvalidArgumentException('Invalid server request type');
         }
@@ -66,23 +67,25 @@ class ServerRequest implements McpModel {
             'ping' => new self(new PingRequest()),
             'sampling/createMessage' => self::createCreateMessageRequest($params),
             'roots/list' => new self(new ListRootsRequest()),
+            'elicitation/create' => self::createElicitationRequest($params),
             default => throw new \InvalidArgumentException("Unknown server request method: $method")
         };
     }
 
-    private static function createCreateMessageRequest(array $params): self {
-        // According to schema, CreateMessageRequest params:
-        // {
-        //   messages: SamplingMessage[],
-        //   maxTokens: number,
-        //   stopSequences?: string[],
-        //   systemPrompt?: string,
-        //   temperature?: number,
-        //   metadata?: object,
-        //   modelPreferences?: ModelPreferences,
-        //   includeContext?: "none" | "thisServer" | "allServers"
-        // }
+    private static function createElicitationRequest(array $params): self {
+        if (empty($params['message'])) {
+            throw new \InvalidArgumentException('ElicitationCreateRequest requires "message"');
+        }
+        return new self(new ElicitationCreateRequest(
+            message: $params['message'],
+            mode: $params['mode'] ?? null,
+            requestedSchema: $params['requestedSchema'] ?? null,
+            url: $params['url'] ?? null,
+            elicitationId: $params['elicitationId'] ?? null,
+        ));
+    }
 
+    private static function createCreateMessageRequest(array $params): self {
         if (!isset($params['messages']) || !is_array($params['messages'])) {
             throw new \InvalidArgumentException('CreateMessageRequest requires "messages" array');
         }
@@ -90,7 +93,6 @@ class ServerRequest implements McpModel {
             throw new \InvalidArgumentException('CreateMessageRequest requires "maxTokens" as a number');
         }
 
-        // Construct SamplingMessages
         $messages = [];
         foreach ($params['messages'] as $m) {
             $messages[] = self::createSamplingMessage($m);
@@ -105,10 +107,8 @@ class ServerRequest implements McpModel {
         $systemPrompt = $params['systemPrompt'] ?? null;
         $temperature = isset($params['temperature']) ? (float)$params['temperature'] : null;
 
-        // Metadata and modelPreferences are more complex. They may be arbitrary structures:
         $metadata = null;
         if (isset($params['metadata'])) {
-            // Metadata is a Meta object (assuming we have a Meta class that accepts arbitrary fields)
             $metadata = new Meta();
             foreach ($params['metadata'] as $k => $v) {
                 $metadata->$k = $v;
@@ -122,6 +122,21 @@ class ServerRequest implements McpModel {
 
         $includeContext = $params['includeContext'] ?? null;
 
+        // Parse tools (2025-11-25)
+        $tools = null;
+        if (isset($params['tools']) && is_array($params['tools'])) {
+            $tools = [];
+            foreach ($params['tools'] as $toolData) {
+                $tools[] = Tool::fromArray($toolData);
+            }
+        }
+
+        // Parse toolChoice (2025-11-25)
+        $toolChoice = null;
+        if (isset($params['toolChoice']) && is_array($params['toolChoice'])) {
+            $toolChoice = ToolChoice::fromArray($params['toolChoice']);
+        }
+
         return new self(new CreateMessageRequest(
             messages: $messages,
             maxTokens: $maxTokens,
@@ -130,7 +145,9 @@ class ServerRequest implements McpModel {
             temperature: $temperature,
             metadata: $metadata,
             modelPreferences: $modelPreferences,
-            includeContext: $includeContext
+            includeContext: $includeContext,
+            tools: $tools,
+            toolChoice: $toolChoice,
         ));
     }
 
@@ -147,7 +164,7 @@ class ServerRequest implements McpModel {
         return new SamplingMessage(role: $m['role'], content: $content);
     }
 
-    private static function createSamplingContent(array $c): TextContent|ImageContent {
+    private static function createSamplingContent(array $c): TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent {
         if (!isset($c['type'])) {
             throw new \InvalidArgumentException('SamplingMessage content requires a type');
         }
@@ -155,6 +172,9 @@ class ServerRequest implements McpModel {
         return match ($c['type']) {
             'text' => self::createTextContent($c),
             'image' => self::createImageContent($c),
+            'audio' => self::createAudioContent($c),
+            'tool_use' => self::createToolUseContent($c),
+            'tool_result' => self::createToolResultContent($c),
             default => throw new \InvalidArgumentException("Unknown content type: {$c['type']}")
         };
     }
@@ -190,6 +210,50 @@ class ServerRequest implements McpModel {
         }
 
         return $imageContent;
+    }
+
+    private static function createAudioContent(array $c): AudioContent {
+        if (!isset($c['data']) || !isset($c['mimeType'])) {
+            throw new \InvalidArgumentException('AudioContent requires data and mimeType');
+        }
+        $content = new AudioContent(data: $c['data'], mimeType: $c['mimeType']);
+        foreach ($c as $k => $v) {
+            if (!in_array($k, ['type', 'data', 'mimeType'], true)) {
+                $content->$k = $v;
+            }
+        }
+        return $content;
+    }
+
+    private static function createToolUseContent(array $c): ToolUseContent {
+        if (!isset($c['id']) || !isset($c['name']) || !isset($c['input'])) {
+            throw new \InvalidArgumentException('ToolUseContent requires id, name, and input');
+        }
+        return new ToolUseContent(id: $c['id'], name: $c['name'], input: $c['input']);
+    }
+
+    private static function createToolResultContent(array $c): ToolResultContent {
+        if (!isset($c['toolUseId'])) {
+            throw new \InvalidArgumentException('ToolResultContent requires toolUseId');
+        }
+        $content = [];
+        if (isset($c['content']) && is_array($c['content'])) {
+            foreach ($c['content'] as $item) {
+                if (is_array($item) && isset($item['type'])) {
+                    $content[] = match ($item['type']) {
+                        'text' => self::createTextContent($item),
+                        'image' => self::createImageContent($item),
+                        'audio' => self::createAudioContent($item),
+                        default => throw new \InvalidArgumentException("Unknown tool result content type: {$item['type']}")
+                    };
+                }
+            }
+        }
+        return new ToolResultContent(
+            toolUseId: $c['toolUseId'],
+            content: $content,
+            isError: $c['isError'] ?? null,
+        );
     }
 
     private static function createModelPreferences(array $mp): ModelPreferences {

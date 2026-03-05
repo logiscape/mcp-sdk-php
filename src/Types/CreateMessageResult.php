@@ -31,11 +31,11 @@ namespace Mcp\Types;
 
 /**
  * Result of a create message request
- * content: TextContent | ImageContent
+ * content: TextContent | ImageContent | AudioContent | ToolUseContent
  */
 class CreateMessageResult extends Result {
     public function __construct(
-        public readonly TextContent|ImageContent $content,
+        public readonly TextContent|ImageContent|AudioContent|ToolUseContent $content,
         public readonly string $model,
         public readonly Role $role,
         public ?string $stopReason = null,
@@ -45,7 +45,6 @@ class CreateMessageResult extends Result {
     }
 
     public static function fromResponseData(array $data): self {
-        // _meta
         $meta = null;
         if (isset($data['_meta'])) {
             $metaData = $data['_meta'];
@@ -56,7 +55,6 @@ class CreateMessageResult extends Result {
             }
         }
 
-        // Extract known fields
         $model = $data['model'] ?? '';
         $roleStr = $data['role'] ?? '';
         $stopReason = $data['stopReason'] ?? null;
@@ -76,12 +74,13 @@ class CreateMessageResult extends Result {
         $content = match($type) {
             'text' => TextContent::fromArray($contentData),
             'image' => ImageContent::fromArray($contentData),
+            'audio' => AudioContent::fromArray($contentData),
+            'tool_use' => ToolUseContent::fromArray($contentData),
             default => throw new \InvalidArgumentException("Unknown content type: $type in CreateMessageResult")
         };
 
         $obj = new self($content, $model, $role, $stopReason, $meta);
 
-        // Extra fields
         foreach ($data as $k => $v) {
             $obj->$k = $v;
         }
@@ -96,6 +95,5 @@ class CreateMessageResult extends Result {
         if (empty($this->model)) {
             throw new \InvalidArgumentException('Model name cannot be empty');
         }
-        // role is an enum, no validation needed unless empty check wanted
     }
 }

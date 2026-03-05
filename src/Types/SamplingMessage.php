@@ -32,7 +32,7 @@ namespace Mcp\Types;
  * SamplingMessage
  * {
  *   role: Role,
- *   content: TextContent | ImageContent
+ *   content: TextContent | ImageContent | AudioContent | ToolUseContent | ToolResultContent
  * }
  */
 class SamplingMessage implements McpModel {
@@ -40,7 +40,7 @@ class SamplingMessage implements McpModel {
 
     public function __construct(
         public readonly Role $role,
-        public readonly TextContent|ImageContent $content,
+        public readonly TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent $content,
     ) {}
 
     public function validate(): void {

@@ -33,12 +33,17 @@ class ResourceTemplate implements McpModel {
     use ExtraFieldsTrait;
     use AnnotatedTrait;
 
+    /**
+     * @param Icon[]|null $icons
+     */
     public function __construct(
         public readonly string $name,
         public readonly string $uriTemplate,
         public ?string $description = null,
         public ?string $mimeType = null,
-        ?Annotations $annotations = null
+        ?Annotations $annotations = null,
+        public ?string $title = null,
+        public ?array $icons = null,
     ) {
         $this->annotations = $annotations;
     }
@@ -48,8 +53,12 @@ class ResourceTemplate implements McpModel {
         $uriTemplate = $data['uriTemplate'] ?? '';
         $description = $data['description'] ?? null;
         $mimeType = $data['mimeType'] ?? null;
+        $title = $data['title'] ?? null;
 
-        unset($data['name'], $data['uriTemplate'], $data['description'], $data['mimeType']);
+        $icons = Icon::parseArray($data['icons'] ?? null);
+
+        unset($data['name'], $data['uriTemplate'], $data['description'], $data['mimeType'],
+              $data['title'], $data['icons']);
 
         $annotations = null;
         if (isset($data['annotations']) && is_array($data['annotations'])) {
@@ -57,7 +66,7 @@ class ResourceTemplate implements McpModel {
             unset($data['annotations']);
         }
 
-        $obj = new self($name, $uriTemplate, $description, $mimeType, $annotations);
+        $obj = new self($name, $uriTemplate, $description, $mimeType, $annotations, $title, $icons);
 
         foreach ($data as $k => $v) {
             $obj->$k = $v;
@@ -84,6 +93,12 @@ class ResourceTemplate implements McpModel {
         ];
         if ($this->description !== null) {
             $data['description'] = $this->description;
+        }
+        if ($this->title !== null) {
+            $data['title'] = $this->title;
+        }
+        if ($this->icons !== null) {
+            $data['icons'] = $this->icons;
         }
         if ($this->mimeType !== null) {
             $data['mimeType'] = $this->mimeType;

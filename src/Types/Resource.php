@@ -33,12 +33,18 @@ class Resource implements McpModel {
     use ExtraFieldsTrait;
     use AnnotatedTrait;
 
+    /**
+     * @param Icon[]|null $icons
+     */
     public function __construct(
         public readonly string $name,
         public readonly string $uri,
         public ?string $description = null,
         public ?string $mimeType = null,
-        ?Annotations $annotations = null
+        ?Annotations $annotations = null,
+        public ?string $title = null,
+        public ?array $icons = null,
+        public ?int $size = null,
     ) {
         $this->annotations = $annotations;
     }
@@ -48,8 +54,13 @@ class Resource implements McpModel {
         $uri = $data['uri'] ?? '';
         $description = $data['description'] ?? null;
         $mimeType = $data['mimeType'] ?? null;
+        $title = $data['title'] ?? null;
+        $size = isset($data['size']) ? (int)$data['size'] : null;
 
-        unset($data['name'], $data['uri'], $data['description'], $data['mimeType']);
+        $icons = Icon::parseArray($data['icons'] ?? null);
+
+        unset($data['name'], $data['uri'], $data['description'], $data['mimeType'],
+              $data['title'], $data['icons'], $data['size']);
 
         $annotations = null;
         if (isset($data['annotations']) && is_array($data['annotations'])) {
@@ -57,7 +68,7 @@ class Resource implements McpModel {
             unset($data['annotations']);
         }
 
-        $obj = new self($name, $uri, $description, $mimeType, $annotations);
+        $obj = new self($name, $uri, $description, $mimeType, $annotations, $title, $icons, $size);
 
         foreach ($data as $k => $v) {
             $obj->$k = $v;
@@ -85,8 +96,17 @@ class Resource implements McpModel {
         if ($this->description !== null) {
             $data['description'] = $this->description;
         }
+        if ($this->title !== null) {
+            $data['title'] = $this->title;
+        }
+        if ($this->icons !== null) {
+            $data['icons'] = $this->icons;
+        }
         if ($this->mimeType !== null) {
             $data['mimeType'] = $this->mimeType;
+        }
+        if ($this->size !== null) {
+            $data['size'] = $this->size;
         }
         return array_merge($data, $this->annotationsToJson(), $this->extraFields);
     }

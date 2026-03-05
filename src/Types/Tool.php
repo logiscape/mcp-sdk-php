@@ -32,34 +32,49 @@ namespace Mcp\Types;
 class Tool implements McpModel {
     use ExtraFieldsTrait;
 
+    /**
+     * @param Icon[]|null $icons
+     * @param array|null $outputSchema JSON Schema for structured output
+     * @param array|null $execution Execution hints (e.g. taskSupport)
+     */
     public function __construct(
         public readonly string $name,
         public readonly ToolInputSchema $inputSchema,
         public ?string $description = null,
         public ?ToolAnnotations $annotations = null,
+        public ?string $title = null,
+        public ?array $icons = null,
+        public ?array $outputSchema = null,
+        public ?array $execution = null,
     ) {}
 
     public static function fromArray(array $data): self {
         $name = $data['name'] ?? '';
         $description = $data['description'] ?? null;
+        $title = $data['title'] ?? null;
         $annotationsData = $data['annotations'] ?? null;
         $inputSchemaData = $data['inputSchema'] ?? [];
-        unset($data['name'], $data['description'], $data['inputSchema'], $data['annotations']);
+        $outputSchema = $data['outputSchema'] ?? null;
+        $execution = $data['execution'] ?? null;
+
+        $icons = Icon::parseArray($data['icons'] ?? null);
+
+        unset($data['name'], $data['description'], $data['inputSchema'], $data['annotations'],
+              $data['title'], $data['icons'], $data['outputSchema'], $data['execution']);
 
         $inputSchema = ToolInputSchema::fromArray($inputSchemaData);
 
         $annotations = null;
-		// Properly cast annotations to ToolAnnotations object.
         if ($annotationsData !== null && is_array($annotationsData)) {
             $annotations = ToolAnnotations::fromArray($annotationsData);
         } elseif ($annotationsData instanceof ToolAnnotations) {
             $annotations = $annotationsData;
         }
 
-        $obj = new self($name, $inputSchema, $description, $annotations);
+        $obj = new self($name, $inputSchema, $description, $annotations, $title, $icons, $outputSchema, $execution);
 
         foreach ($data as $k => $v) {
-            $obj->$k = $v; // Tool uses ExtraFieldsTrait
+            $obj->$k = $v;
         }
 
         $obj->validate();
@@ -70,9 +85,6 @@ class Tool implements McpModel {
         if (empty($this->name)) {
             throw new \InvalidArgumentException('Tool name cannot be empty');
         }
-        // inputSchema must have type: "object"
-        // We're enforcing type: "object" in ToolInputSchema jsonSerialize().
-        // Just validate that inputSchema is valid and actually sets type object there.
         $this->inputSchema->validate();
     }
 
@@ -83,6 +95,18 @@ class Tool implements McpModel {
         ];
         if ($this->description !== null) {
             $data['description'] = $this->description;
+        }
+        if ($this->title !== null) {
+            $data['title'] = $this->title;
+        }
+        if ($this->icons !== null) {
+            $data['icons'] = $this->icons;
+        }
+        if ($this->outputSchema !== null) {
+            $data['outputSchema'] = $this->outputSchema;
+        }
+        if ($this->execution !== null) {
+            $data['execution'] = $this->execution;
         }
         if ($this->annotations !== null) {
             $data['annotations'] = $this->annotations;

@@ -37,9 +37,45 @@ namespace Mcp\Shared;
  * SUPPORTED_PROTOCOL_VERSIONS = [1, LATEST_PROTOCOL_VERSION]
  */
 class Version {
-    public const LATEST_PROTOCOL_VERSION = '2025-03-26';
+    public const LATEST_PROTOCOL_VERSION = '2025-11-25';
     public const SUPPORTED_PROTOCOL_VERSIONS = [
         '2024-11-05',
-        '2025-03-26'
+        '2025-03-26',
+        '2025-06-18',
+        '2025-11-25',
     ];
+
+    /**
+     * Feature-to-minimum-version mapping.
+     */
+    private const FEATURE_VERSIONS = [
+        // 2025-03-26
+        'batch_messages' => '2025-03-26',
+        'audio_content' => '2025-03-26',
+        'annotations' => '2025-03-26',
+        'tool_annotations' => '2025-03-26',
+        'progress_message' => '2025-03-26',
+        // 2025-06-18
+        'elicitation' => '2025-06-18',
+        'structured_content' => '2025-06-18',
+        'tool_output_schema' => '2025-06-18',
+        'resource_link_content' => '2025-06-18',
+        'rich_metadata' => '2025-06-18',
+        // 2025-11-25
+        'tasks' => '2025-11-25',
+        'url_elicitation' => '2025-11-25',
+        'sampling_with_tools' => '2025-11-25',
+        'cimd' => '2025-11-25',
+    ];
+
+    /**
+     * Check if a negotiated protocol version supports a given feature.
+     */
+    public static function supportsFeature(string $negotiatedVersion, string $feature): bool {
+        $minVersion = self::FEATURE_VERSIONS[$feature] ?? null;
+        if ($minVersion === null) {
+            return false;
+        }
+        return version_compare($negotiatedVersion, $minVersion, '>=');
+    }
 }

@@ -35,17 +35,19 @@ class Root implements McpModel {
     public function __construct(
         public readonly string $uri,
         public ?string $name = null,
+        public ?string $title = null,
     ) {}
 
     public static function fromArray(array $data): self {
         $uri = $data['uri'] ?? '';
         $name = $data['name'] ?? null;
-        unset($data['uri'], $data['name']);
+        $title = $data['title'] ?? null;
+        unset($data['uri'], $data['name'], $data['title']);
 
-        $obj = new self($uri, $name);
+        $obj = new self($uri, $name, $title);
 
         foreach ($data as $k => $v) {
-            $obj->$k = $v; // Root uses ExtraFieldsTrait
+            $obj->$k = $v;
         }
 
         $obj->validate();
@@ -57,7 +59,7 @@ class Root implements McpModel {
             throw new \InvalidArgumentException('Root URI cannot be empty');
         }
         if (!str_starts_with($this->uri, 'file://')) {
-            throw new \InvalidArgumentException('Root URI must start with file://');
+            throw new \InvalidArgumentException('Root URI must be a file:// URI per the MCP specification');
         }
     }
 
@@ -65,6 +67,9 @@ class Root implements McpModel {
         $data = ['uri' => $this->uri];
         if ($this->name !== null) {
             $data['name'] = $this->name;
+        }
+        if ($this->title !== null) {
+            $data['title'] = $this->title;
         }
         return array_merge($data, $this->extraFields);
     }

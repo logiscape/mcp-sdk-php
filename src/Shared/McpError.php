@@ -37,6 +37,8 @@ use Exception;
  * Wraps the ErrorData object in an exception for easy error handling.
  */
 class McpError extends Exception {
+    public const URL_ELICITATION_REQUIRED = -32042;
+
     public function __construct(
         public readonly ErrorData $error,
         ?\Throwable $previous = null

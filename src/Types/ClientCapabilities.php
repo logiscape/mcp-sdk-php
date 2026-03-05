@@ -45,6 +45,8 @@ class ClientCapabilities extends Capabilities {
         public ?ClientRootsCapability $roots = null,
         public ?SamplingCapability $sampling = null,
         ?ExperimentalCapabilities $experimental = null,
+        public ?ElicitationCapability $elicitation = null,
+        public ?TaskCapability $tasks = null,
     ) {
         parent::__construct($experimental);
     }
@@ -57,6 +59,12 @@ class ClientCapabilities extends Capabilities {
         if ($this->sampling !== null) {
             $this->sampling->validate();
         }
+        if ($this->elicitation !== null) {
+            $this->elicitation->validate();
+        }
+        if ($this->tasks !== null) {
+            $this->tasks->validate();
+        }
     }
 
     public function jsonSerialize(): mixed {
@@ -66,6 +74,12 @@ class ClientCapabilities extends Capabilities {
         }
         if ($this->sampling !== null) {
             $data['sampling'] = $this->sampling;
+        }
+        if ($this->elicitation !== null) {
+            $data['elicitation'] = $this->elicitation;
+        }
+        if ($this->tasks !== null) {
+            $data['tasks'] = $this->tasks;
         }
         return empty($data) ? new \stdClass() : $data;
     }

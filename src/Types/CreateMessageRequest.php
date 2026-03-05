@@ -34,16 +34,19 @@ namespace Mcp\Types;
 class CreateMessageRequest extends Request {
     /**
      * @param SamplingMessage[] $messages
+     * @param Tool[]|null $tools
      */
     public function __construct(
         public readonly array $messages,
         public readonly int $maxTokens,
-        public ?array $stopSequences = null, // string[]
+        public ?array $stopSequences = null,
         public ?string $systemPrompt = null,
         public ?float $temperature = null,
         public ?Meta $metadata = null,
         public ?ModelPreferences $modelPreferences = null,
         public ?string $includeContext = null,
+        public ?array $tools = null,
+        public ?ToolChoice $toolChoice = null,
     ) {
         parent::__construct('sampling/createMessage');
     }

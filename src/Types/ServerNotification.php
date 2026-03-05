@@ -56,7 +56,8 @@ class ServerNotification implements McpModel {
             $notification instanceof ResourceUpdatedNotification ||
             $notification instanceof PromptListChangedNotification ||
             $notification instanceof ToolListChangedNotification ||
-            $notification instanceof LoggingMessageNotification
+            $notification instanceof LoggingMessageNotification ||
+            $notification instanceof TaskStatusNotification
         )) {
             throw new \InvalidArgumentException('Invalid server notification type');
         }
@@ -80,6 +81,7 @@ class ServerNotification implements McpModel {
             'notifications/prompts/list_changed' => self::createPromptListChangedNotification($params),
             'notifications/tools/list_changed' => self::createToolListChangedNotification($params),
             'notifications/message' => self::createLoggingMessageNotification($params),
+            'notifications/tasks/status' => self::createTaskStatusNotification($params),
             default => throw new \InvalidArgumentException("Unknown server notification method: $method")
         };
     }
@@ -203,6 +205,14 @@ class ServerNotification implements McpModel {
         }
 
         return new self(new LoggingMessageNotification($loggingParams));
+    }
+
+    private static function createTaskStatusNotification(array $params): self {
+        $notifParams = new NotificationParams();
+        foreach ($params as $k => $v) {
+            $notifParams->$k = $v;
+        }
+        return new self(new TaskStatusNotification($notifParams));
     }
 
     public function validate(): void {

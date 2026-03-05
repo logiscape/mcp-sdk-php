@@ -36,12 +36,14 @@ namespace Mcp\Types;
  */
 class CallToolResult extends Result {
     /**
-     * @param (TextContent|ImageContent|AudioContent|EmbeddedResource)[] $content
+     * @param (TextContent|ImageContent|AudioContent|EmbeddedResource|ResourceLinkContent)[] $content
+     * @param array|null $structuredContent Structured output matching the tool's outputSchema
      */
     public function __construct(
         public readonly array $content,
         public ?bool $isError = false,
         ?Meta $_meta = null,
+        public ?array $structuredContent = null,
     ) {
         parent::__construct($_meta);
     }
@@ -60,7 +62,8 @@ class CallToolResult extends Result {
 
         $contentData = $data['content'] ?? [];
         $isError = $data['isError'] ?? false;
-        unset($data['content'], $data['isError']);
+        $structuredContent = $data['structuredContent'] ?? null;
+        unset($data['content'], $data['isError'], $data['structuredContent']);
 
         $content = [];
         foreach ($contentData as $item) {
@@ -74,11 +77,12 @@ class CallToolResult extends Result {
                 'image' => ImageContent::fromArray($item),
                 'audio' => AudioContent::fromArray($item),
                 'resource' => EmbeddedResource::fromArray($item),
+                'resource_link' => ResourceLinkContent::fromArray($item),
                 default => throw new \InvalidArgumentException("Unknown content type: $type in CallToolResult")
             };
         }
 
-        $obj = new self($content, (bool)$isError, $meta);
+        $obj = new self($content, (bool)$isError, $meta, $structuredContent);
 
         // Extra fields
         foreach ($data as $k => $v) {
@@ -92,8 +96,8 @@ class CallToolResult extends Result {
     public function validate(): void {
         parent::validate();
         foreach ($this->content as $item) {
-            if (!($item instanceof TextContent || $item instanceof ImageContent || $item instanceof AudioContent || $item instanceof EmbeddedResource)) {
-                throw new \InvalidArgumentException('Tool call content must be TextContent, ImageContent, AudioContent, or EmbeddedResource instances');
+            if (!($item instanceof TextContent || $item instanceof ImageContent || $item instanceof AudioContent || $item instanceof EmbeddedResource || $item instanceof ResourceLinkContent)) {
+                throw new \InvalidArgumentException('Tool call content must be TextContent, ImageContent, AudioContent, EmbeddedResource, or ResourceLinkContent instances');
             }
             $item->validate();
         }

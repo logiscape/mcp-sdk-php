@@ -142,29 +142,39 @@ class McpServer
      *
      * The input schema is automatically generated from the callback's parameters
      * using reflection. The callback can return a string (auto-wrapped in
-     * CallToolResult) or a CallToolResult directly.
+     * CallToolResult), an array (auto-wrapped as structured content), or a
+     * CallToolResult directly.
      *
      * @param string $name The tool name
      * @param string $description A description of what the tool does
      * @param callable $callback The function that implements the tool
+     * @param string|null $title Display title for the tool
+     * @param array|null $icons Icons for the tool
+     * @param array|null $outputSchema JSON Schema for structured output
      * @return self For method chaining
      */
-    public function tool(string $name, string $description, callable $callback): self
-    {
+    public function tool(
+        string $name,
+        string $description,
+        callable $callback,
+        ?string $title = null,
+        ?array $icons = null,
+        ?array $outputSchema = null,
+    ): self {
         $schema = $this->buildSchemaFromCallback($callback);
 
         $tool = new Tool(
             name: $name,
             inputSchema: $schema,
-            description: $description
+            description: $description,
+            title: $title,
+            icons: \Mcp\Types\Icon::parseArray($icons),
+            outputSchema: $outputSchema,
         );
 
         $this->tools[] = $tool;
 
-        // [Modified from pronskiy/mcp] Use reflection-based named parameter matching
-        // instead of positional array_values() spreading, which is fragile when
-        // JSON key order doesn't match parameter order.
-        $this->toolHandlers[$name] = function ($args) use ($callback) {
+        $this->toolHandlers[$name] = function ($args) use ($callback, $outputSchema) {
             $arguments = json_decode(json_encode($args), true) ?? [];
             $ordered = $this->matchNamedParameters($callback, $arguments);
 
@@ -177,6 +187,15 @@ class McpServer
             if (is_string($result)) {
                 return new CallToolResult(
                     content: [new TextContent(text: $result)]
+                );
+            }
+
+            // When outputSchema is set and callback returns array/object, populate both content and structuredContent
+            if ($outputSchema !== null && (is_array($result) || is_object($result))) {
+                $jsonResult = is_object($result) ? (array)$result : $result;
+                return new CallToolResult(
+                    content: [new TextContent(text: json_encode($jsonResult, JSON_UNESCAPED_SLASHES))],
+                    structuredContent: $jsonResult
                 );
             }
 
@@ -196,17 +215,26 @@ class McpServer
      * @param string $name The prompt name
      * @param string $description A description of the prompt
      * @param callable $callback The function that implements the prompt
+     * @param string|null $title Display title for the prompt
+     * @param array|null $icons Icons for the prompt
      * @return self For method chaining
      * @throws McpServerException If the callback returns an invalid result
      */
-    public function prompt(string $name, string $description, callable $callback): self
-    {
+    public function prompt(
+        string $name,
+        string $description,
+        callable $callback,
+        ?string $title = null,
+        ?array $icons = null,
+    ): self {
         $arguments = $this->buildArgumentsFromCallback($callback);
 
         $prompt = new Prompt(
             name: $name,
             description: $description,
-            arguments: $arguments
+            arguments: $arguments,
+            title: $title,
+            icons: \Mcp\Types\Icon::parseArray($icons),
         );
 
         $this->prompts[] = $prompt;
@@ -262,6 +290,9 @@ class McpServer
      * @param callable $callback The callback that returns the resource content
      * @param string $description The resource description
      * @param string $mimeType The MIME type
+     * @param string|null $title Display title for the resource
+     * @param array|null $icons Icons for the resource
+     * @param int|null $size Resource size in bytes
      * @return self For method chaining
      * @throws McpServerException If the callback returns an invalid result
      */
@@ -271,13 +302,19 @@ class McpServer
         callable $callback,
         string $description = '',
         string $mimeType = 'text/plain',
+        ?string $title = null,
+        ?array $icons = null,
+        ?int $size = null,
     ): self {
 
         $resource = new Resource(
             name: $name,
             uri: $uri,
             description: $description,
-            mimeType: $mimeType
+            mimeType: $mimeType,
+            title: $title,
+            icons: \Mcp\Types\Icon::parseArray($icons),
+            size: $size,
         );
 
         $this->resources[] = $resource;

@@ -252,17 +252,7 @@ class ClientSession extends BaseSession {
         if ($this->negotiatedProtocolVersion === null) {
             return false;
         }
-        
-        switch ($feature) {
-            case 'batch_messages':
-            case 'audio_content':
-            case 'annotations':
-            case 'tool_annotations':
-            case 'progress_message':
-                return version_compare($this->negotiatedProtocolVersion, '2025-03-26', '>=');
-            default:
-                return false;
-        }
+        return Version::supportsFeature($this->negotiatedProtocolVersion, $feature);
     }
 
     /**
@@ -514,6 +504,57 @@ class ClientSession extends BaseSession {
         $listToolsRequest = new \Mcp\Types\ListToolsRequest();
         $this->logger->info('Requesting list of tools from server');
         return $this->sendRequest($listToolsRequest, ListToolsResult::class);
+    }
+
+    /**
+     * Get a task's current status (experimental).
+     *
+     * @param string $taskId The task ID to query
+     * @return \Mcp\Types\TaskGetResult The task status
+     */
+    public function getTask(string $taskId): \Mcp\Types\TaskGetResult {
+        $this->ensureInitialized();
+        $request = new \Mcp\Types\TaskGetRequest($taskId);
+        $this->logger->info("Getting task: $taskId");
+        return $this->sendRequest($request, \Mcp\Types\TaskGetResult::class);
+    }
+
+    /**
+     * Get a completed task's result (experimental).
+     *
+     * @param string $taskId The task ID to query
+     * @return CallToolResult The task result
+     */
+    public function getTaskResult(string $taskId): CallToolResult {
+        $this->ensureInitialized();
+        $request = new \Mcp\Types\TaskResultRequest($taskId);
+        $this->logger->info("Getting task result: $taskId");
+        return $this->sendRequest($request, CallToolResult::class);
+    }
+
+    /**
+     * List all tasks (experimental).
+     *
+     * @return \Mcp\Types\TaskListResult The list of tasks
+     */
+    public function listTasks(): \Mcp\Types\TaskListResult {
+        $this->ensureInitialized();
+        $request = new \Mcp\Types\TaskListRequest();
+        $this->logger->info('Listing tasks');
+        return $this->sendRequest($request, \Mcp\Types\TaskListResult::class);
+    }
+
+    /**
+     * Cancel a task (experimental).
+     *
+     * @param string $taskId The task ID to cancel
+     * @return \Mcp\Types\TaskGetResult The updated task
+     */
+    public function cancelTask(string $taskId): \Mcp\Types\TaskGetResult {
+        $this->ensureInitialized();
+        $request = new \Mcp\Types\TaskCancelRequest($taskId);
+        $this->logger->info("Cancelling task: $taskId");
+        return $this->sendRequest($request, \Mcp\Types\TaskGetResult::class);
     }
 
     /**
