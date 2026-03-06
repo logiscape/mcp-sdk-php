@@ -70,6 +70,10 @@ class ServerSession extends BaseSession {
     protected ?InitializeRequestParams $clientParams = null;
     protected LoggerInterface $logger;
     protected string $negotiatedProtocolVersion = Version::LATEST_PROTOCOL_VERSION;
+    /** @var array<string, callable> Method-keyed request handlers registered via registerHandlers() */
+    protected array $methodRequestHandlers = [];
+    /** @var array<string, callable> Method-keyed notification handlers registered via registerNotificationHandlers() */
+    protected array $methodNotificationHandlers = [];
 
     public function __construct(
         protected readonly Transport $transport,
@@ -166,13 +170,13 @@ class ServerSession extends BaseSession {
 
     public function registerHandlers(array $handlers): void {
         foreach ($handlers as $method => $callable) {
-            $this->requestHandlers[$method] = $callable;
+            $this->methodRequestHandlers[$method] = $callable;
         }
     }
 
     public function registerNotificationHandlers(array $handlers): void {
         foreach ($handlers as $method => $callable) {
-            $this->notificationHandlers[$method] = $callable;
+            $this->methodNotificationHandlers[$method] = $callable;
         }
     }
 
@@ -200,9 +204,9 @@ class ServerSession extends BaseSession {
         }
 
         // Now we integrate the method-specific handlers:
-        if (isset($this->requestHandlers[$method])) {
+        if (isset($this->methodRequestHandlers[$method])) {
             $this->logger->info("Calling handler for method: $method");
-            $handler = $this->requestHandlers[$method];
+            $handler = $this->methodRequestHandlers[$method];
             try {
             $result = $handler($params); // call the user-defined handler
             $responder->sendResponse($result);
