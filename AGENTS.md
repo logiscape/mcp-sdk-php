@@ -174,7 +174,7 @@ Capabilities are automatically detected based on registered handlers and include
 ### Creating a Server (Use convenience wrapper)
 1. Instantiate `McpServer` with a name
 2. Register tools, prompts, and/or resources for desired capabilities
-3. Call `run()` to start
+3. Call `$server->run()` to start
 
 ### Creating a Client
 1. Instantiate `Client`

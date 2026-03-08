@@ -35,6 +35,8 @@ composer require logiscape/mcp-sdk-php
 
 ### Creating an MCP Server
 
+For detailed documentation and examples of MCP servers, see the [Server Development Guide](docs/server-dev.md).
+
 Here's a complete example of an MCP server that provides a simple tool:
 
 ```php
@@ -124,8 +126,6 @@ Once the web client has been uploaded to a web directory, navigate to index.php 
 
 This MCP Web Client is intended for developers to test MCP servers, and it is not recommended to be made publicly accessible as a web interface without additional testing for security, error handling, and resource management.
 
-While MCP is usually implemented as a stateful session protocol, a typical PHP-based web hosting environment restricts long-running processes. To maximize compatibility, the MCP Web Client will initialize a new connection between the client and server for every request, and then close that connection after the request is complete.
-
 ## OAuth Authorization
 
 The HTTP server transport includes optional OAuth 2.1 support. For more details see the [OAuth Authentication Example](examples/server_auth/README.md).
@@ -136,18 +136,15 @@ For detailed information about the Model Context Protocol, visit the [official d
 
 ## Latest Updates
 
-The SDK currently support the 2025-03-26 revision of the MCP Spec.
+The SDK is currently aiming to support the 2025-11-25 revision of the MCP Spec.
 
-### Completed Tasks
-- Implement protocol version negotiation
-- Create classes for new spec features
-- Add support for JSON-RPC batching
-- Implement HTTP transport
-- Implement server side authorization framework based on OAuth 2.1
-- Implement client side authorization framework based on OAuth 2.1
+### Implemented
+- Structured tool output
+- New metadata such as icons
+- Experimental support for tasks
 
-### In Development
-- Implement 2025-11-25 revision of the MCP Spec.
+### Partial Implementation or In Development
+- Elicitation
 
 ## Credits
 
