@@ -711,7 +711,7 @@ final class TestNotificationParams extends \Mcp\Types\NotificationParams
 /**
  * Dummy incoming request for server-side request handling tests.
  *
- * This test double implements McpModel to simulate typed requests that
+ * This test double implements RequestWrapperInterface to simulate typed requests that
  * BaseSession creates when processing incoming JSON-RPC request messages.
  *
  * It supports:
@@ -723,7 +723,7 @@ final class TestNotificationParams extends \Mcp\Types\NotificationParams
  * Unlike real request types (InitializeRequest, etc.), this class accepts
  * any method/params combination, making it useful for generic request tests.
  */
-final class DummyIncomingRequest implements \Mcp\Types\McpModel
+final class DummyIncomingRequest implements \Mcp\Types\RequestWrapperInterface
 {
     public function __construct(
         public string $method = '',
@@ -731,20 +731,15 @@ final class DummyIncomingRequest implements \Mcp\Types\McpModel
         public ?RequestId $id = null,
     ) {}
 
-    public static function fromMethodAndParams(string $method, array $params): self
+    public static function fromMethodAndParams(string $method, ?array $params): static
     {
-        return new self(method: $method, params: $params, id: new RequestId($params['_id'] ?? 1));
+        $params = $params ?? [];
+        return new static(method: $method, params: $params, id: new RequestId($params['_id'] ?? 1));
     }
 
-    public function getRequest(): JSONRPCRequest
+    public function getRequest(): \Mcp\Types\Request
     {
-        $requestParams = $this->params ? new TestRequestParams($this->params) : null;
-        return new JSONRPCRequest(
-            jsonrpc: '2.0',
-            id: $this->id ?? new RequestId(1),
-            method: $this->method,
-            params: $requestParams
-        );
+        return new \Mcp\Types\PingRequest();
     }
 
     public function validate(): void {}

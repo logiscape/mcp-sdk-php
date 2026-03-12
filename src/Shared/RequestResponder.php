@@ -33,6 +33,7 @@ use Mcp\Types\RequestId;
 use Mcp\Shared\ErrorData;
 use Mcp\Types\McpModel;
 use Mcp\Types\Meta;
+use Mcp\Types\RequestWrapperInterface;
 use RuntimeException;
 
 /**
@@ -48,13 +49,13 @@ class RequestResponder {
     /**
      * @param RequestId $requestId The ID of the request being handled.
      * @param array $params The request parameters.
-     * @param McpModel $request The typed request object.
+     * @param RequestWrapperInterface $request The typed request object.
      * @param BaseSession $session The session handling communication.
      */
     public function __construct(
         private readonly RequestId $requestId,
         private readonly array $params,
-        private readonly McpModel $request,
+        private readonly RequestWrapperInterface $request,
         private readonly BaseSession $session,
     ) {
         $this->extractMeta();
@@ -78,7 +79,7 @@ class RequestResponder {
         $this->respond($response);
     }
 
-    public function getRequest(): McpModel {
+    public function getRequest(): RequestWrapperInterface {
         return $this->request;
     }
 

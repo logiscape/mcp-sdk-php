@@ -36,7 +36,7 @@ namespace Mcp\Types;
  *   | CreateMessageRequest
  *   | ListRootsRequest
  */
-class ServerRequest implements McpModel {
+class ServerRequest implements RequestWrapperInterface {
     use ExtraFieldsTrait;
 
     private Request $request;
@@ -60,7 +60,7 @@ class ServerRequest implements McpModel {
      * @param array|null $params
      * @return self
      */
-    public static function fromMethodAndParams(string $method, ?array $params): self {
+    public static function fromMethodAndParams(string $method, ?array $params): static {
         $params = $params ?? [];
 
         return match ($method) {

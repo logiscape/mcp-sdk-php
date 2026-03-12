@@ -48,7 +48,7 @@ namespace Mcp\Types;
  * This acts as a root model for that union and provides a factory method
  * to construct the correct request variant based on the method name and params.
  */
-class ClientRequest implements McpModel {
+class ClientRequest implements RequestWrapperInterface {
     use ExtraFieldsTrait;
 
     private Request $request;
@@ -88,7 +88,7 @@ class ClientRequest implements McpModel {
      * @param array|null $params The request parameters from the JSON-RPC message
      * @return self
      */
-    public static function fromMethodAndParams(string $method, ?array $params): self {
+    public static function fromMethodAndParams(string $method, ?array $params): static {
         $params = $params ?? [];
 
         return match ($method) {

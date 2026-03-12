@@ -40,6 +40,7 @@ use Mcp\Types\JSONRPCResponse;
 use Mcp\Types\JSONRPCError;
 use Mcp\Types\JsonRpcErrorObject;
 use Mcp\Types\McpModel;
+use Mcp\Types\RequestWrapperInterface;
 use Mcp\Types\JSONRPCBatchRequest;
 use Mcp\Types\JSONRPCBatchResponse;
 use Mcp\Shared\McpError;
@@ -65,7 +66,7 @@ abstract class BaseSession {
     private int $requestId = 0;
 
     /**
-     * @param string $receiveRequestType       A fully-qualified class name of a type implementing McpModel for incoming requests.
+     * @param string $receiveRequestType       A fully-qualified class name of a type implementing RequestWrapperInterface for incoming requests.
      * @param string $receiveNotificationType  A fully-qualified class name of a type implementing McpModel for incoming notifications.
      */
     public function __construct(
@@ -343,7 +344,7 @@ abstract class BaseSession {
      * Converts an incoming JSONRPCRequest into a typed request object.
      * @throws InvalidArgumentException If instantiation fails.
      */
-    private function validateIncomingRequest(JSONRPCRequest $message): McpModel {
+    private function validateIncomingRequest(JSONRPCRequest $message): RequestWrapperInterface {
         $requestClass = $this->receiveRequestType;
         
         $params = $message->params ?? [];
