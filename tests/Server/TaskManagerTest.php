@@ -35,13 +35,13 @@ final class TaskManagerTest extends TestCase
     }
 
     public function testCreateTask(): void {
-        $task = $this->manager->createTask(ttl: 3600, pollInterval: 5);
+        $task = $this->manager->createTask(ttl: 3600000, pollInterval: 5000);
 
         $this->assertNotEmpty($task->taskId);
         $this->assertEquals(TaskStatus::WORKING, $task->status);
         $this->assertNotNull($task->createdAt);
-        $this->assertEquals(3600, $task->ttl);
-        $this->assertEquals(5, $task->pollInterval);
+        $this->assertEquals(3600000, $task->ttl);
+        $this->assertEquals(5000, $task->pollInterval);
     }
 
     public function testGetTask(): void {
@@ -161,7 +161,7 @@ final class TaskManagerTest extends TestCase
 
     public function testTaskLifecycle(): void {
         // Create
-        $task = $this->manager->createTask(ttl: 300);
+        $task = $this->manager->createTask(ttl: 300000);
         $this->assertEquals(TaskStatus::WORKING, $task->status);
 
         // Update to input_required

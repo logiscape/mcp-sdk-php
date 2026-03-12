@@ -424,16 +424,16 @@ final class NewTypesTest extends TestCase
             status: TaskStatus::WORKING,
             statusMessage: 'Processing...',
             createdAt: '2025-01-01T00:00:00Z',
-            ttl: 3600,
-            pollInterval: 5,
+            ttl: 3600000,
+            pollInterval: 5000,
         );
 
         $json = $task->jsonSerialize();
         $this->assertEquals('task_abc', $json['taskId']);
         $this->assertEquals('working', $json['status']);
         $this->assertEquals('Processing...', $json['statusMessage']);
-        $this->assertEquals(3600, $json['ttl']);
-        $this->assertEquals(5, $json['pollInterval']);
+        $this->assertEquals(3600000, $json['ttl']);
+        $this->assertEquals(5000, $json['pollInterval']);
     }
 
     public function testTaskFromArray(): void {
