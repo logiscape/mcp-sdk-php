@@ -88,7 +88,7 @@ When using the convenience wrapper, `run()` is a router that uses the stdio tran
 5. **Transport Abstraction**
    - Stdio: Uses PHP process control (pcntl) for server process management
    - HTTP: Supports both standard HTTP and Server-Sent Events (SSE) for streaming
-   - `MemoryStream` and `MemoryTransport` for testing without actual I/O
+   - `MemoryStream` for testing without actual I/O
 
 ### Handler Registration Pattern
 
@@ -131,7 +131,7 @@ Tests use PHPUnit 10+ and follow these conventions:
 
 - Test classes are marked `final` and extend `PHPUnit\Framework\TestCase`
 - Test methods include detailed docblocks explaining what is being validated
-- Mock transports using `MemoryTransport` for isolation
+- Mock transports using `MemoryStream` or `InMemoryTransport` for isolation
 - Focus on protocol compliance and state transitions
 - Test files mirror source structure: `tests/Server/ServerSessionTest.php` tests `src/Server/ServerSession.php`
 
