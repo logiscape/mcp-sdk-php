@@ -32,6 +32,7 @@ namespace Mcp\Client\Transport;
  * Gets default environment variables that are safe to inherit
  */
 class EnvironmentHelper {
+    /** @var array<int, string> */
     private static array $defaultInheritedEnvVars;
 
     public static function initialize(): void {
@@ -59,6 +60,7 @@ class EnvironmentHelper {
             ];
     }
 
+    /** @return array<string, string> */
     public static function getDefaultEnvironment(): array {
         $env = [];
 

@@ -40,7 +40,7 @@ class HttpConfiguration
 {
     /**
      * @param string $endpoint The HTTP endpoint URL for the MCP server
-     * @param array $headers Additional HTTP headers to include with all requests
+     * @param array<string, string> $headers Additional HTTP headers to include with all requests
      * @param float $connectionTimeout Timeout for establishing connections (seconds)
      * @param float $readTimeout Timeout for reading responses (seconds)
      * @param float $sseIdleTimeout Maximum idle time for SSE connections (seconds)
@@ -49,7 +49,7 @@ class HttpConfiguration
      * @param float $retryDelay Base delay between retries (seconds)
      * @param bool $verifyTls Whether to verify TLS certificates
      * @param string|null $caFile Custom CA certificate file path
-     * @param array $curlOptions Additional cURL options as key-value pairs
+     * @param array<int, mixed> $curlOptions Additional cURL options as key-value pairs
      * @param OAuthConfiguration|null $oauthConfig OAuth configuration for protected resources
      */
     public function __construct(
@@ -118,6 +118,8 @@ class HttpConfiguration
 
     /**
      * Get all HTTP headers
+     *
+     * @return array<string, string>
      */
     public function getHeaders(): array
     {
@@ -190,6 +192,8 @@ class HttpConfiguration
 
     /**
      * Get additional cURL options
+     *
+     * @return array<int, mixed>
      */
     public function getCurlOptions(): array
     {
@@ -215,7 +219,7 @@ class HttpConfiguration
     /**
      * Create a new configuration with modified properties
      *
-     * @param array $properties Properties to modify
+     * @param array<string, mixed> $properties Properties to modify
      * @return self New configuration instance
      */
     public function with(array $properties): self

@@ -34,6 +34,11 @@ use InvalidArgumentException;
  * Parameters for configuring a stdio server connection
  */
 class StdioServerParameters {
+    /**
+     * @param string                      $command The command to execute
+     * @param array<int, string>          $args    Positional command arguments
+     * @param array<string, string>|null  $env     Environment variables for the process
+     */
     public function __construct(
         private readonly string $command,
         private readonly array $args = [],
@@ -48,10 +53,12 @@ class StdioServerParameters {
         return $this->command;
     }
 
+    /** @return array<int, string> */
     public function getArgs(): array {
         return $this->args;
     }
 
+    /** @return array<string, string>|null */
     public function getEnv(): ?array {
         return $this->env;
     }

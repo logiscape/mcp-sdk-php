@@ -90,7 +90,7 @@
      /**
       * Get HTTP headers that should be included in all requests.
       * 
-      * @return array Key-value pairs of headers
+      * @return array<string, string> Key-value pairs of headers
       */
      public function getRequestHeaders(): array {
          $headers = [];
@@ -116,7 +116,7 @@
      /**
       * Process response headers to extract and update session information.
       * 
-      * @param array $headers Response headers (normalized to key-value pairs)
+      * @param array<string, string> $headers Response headers (normalized to key-value pairs)
       * @param int $statusCode HTTP status code
       * @param bool $isInitialization Whether this is the initial response
       * @return bool True if session is still valid, false if it needs to be reinitialized
@@ -276,7 +276,7 @@
      /**
       * Serialize session state to an array for persistence across PHP requests.
       *
-      * @return array Session state data
+      * @return array<string, string|bool|null> Session state data
       */
      public function toArray(): array {
          return [
@@ -291,7 +291,7 @@
      /**
       * Restore session state from a previously serialized array.
       *
-      * @param array $data Session state data from toArray()
+      * @param array<string, string|bool|null> $data Session state data from toArray()
       * @param LoggerInterface|null $logger PSR-3 compatible logger
       * @return self Restored session manager
       */
