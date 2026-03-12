@@ -43,29 +43,15 @@ class HttpServerSession extends ServerSession
     {
         $this->isInitialized = true;
 
-        if ($this->transport->getConfig()->isSseEnabled() && $this->transport->clientRequestedSse()) {
-            // SSE path:
-            // Keep open, periodically flush new events, until a break condition or client closes.
-            while ($this->isInitialized) {
-                $message = $this->readNextMessage();
-                if ($message !== null) {
-                    $this->handleIncomingMessage($message);
-                }
-                // Possibly sleep or do logic to push SSE events out
-                // Then break if a certain time expires, or a "complete" message arrives, etc.
+        // Normal HTTP path: process messages until none remain, then close.
+        while ($this->isInitialized) {
+            $message = $this->transport->readMessage();
+            if ($message === null) {
+                break;
             }
-        } else {
-            // Normal HTTP path:
-            // Process just one batch, then break.
-            while ($this->isInitialized) {
-                $message = $this->transport->readMessage();
-                if ($message === null) {
-                    break; 
-                }
-                $this->handleIncomingMessage($message);
-            }
-            $this->close();
+            $this->handleIncomingMessage($message);
         }
+        $this->close();
     }
 
     public function toArray(): array
