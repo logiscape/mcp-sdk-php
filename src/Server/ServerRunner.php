@@ -104,39 +104,39 @@ class ServerRunner {
      */
     private function createDefaultLogger(): LoggerInterface {
         return new class implements LoggerInterface {
-            public function emergency($message, array $context = []): void {
+            public function emergency(string|\Stringable $message, array $context = []): void {
                 $this->log(LogLevel::EMERGENCY, $message, $context);
             }
 
-            public function alert($message, array $context = []): void {
+            public function alert(string|\Stringable $message, array $context = []): void {
                 $this->log(LogLevel::ALERT, $message, $context);
             }
 
-            public function critical($message, array $context = []): void {
+            public function critical(string|\Stringable $message, array $context = []): void {
                 $this->log(LogLevel::CRITICAL, $message, $context);
             }
 
-            public function error($message, array $context = []): void {
+            public function error(string|\Stringable $message, array $context = []): void {
                 $this->log(LogLevel::ERROR, $message, $context);
             }
 
-            public function warning($message, array $context = []): void {
+            public function warning(string|\Stringable $message, array $context = []): void {
                 $this->log(LogLevel::WARNING, $message, $context);
             }
 
-            public function notice($message, array $context = []): void {
+            public function notice(string|\Stringable $message, array $context = []): void {
                 $this->log(LogLevel::NOTICE, $message, $context);
             }
 
-            public function info($message, array $context = []): void {
+            public function info(string|\Stringable $message, array $context = []): void {
                 $this->log(LogLevel::INFO, $message, $context);
             }
 
-            public function debug($message, array $context = []): void {
+            public function debug(string|\Stringable $message, array $context = []): void {
                 $this->log(LogLevel::DEBUG, $message, $context);
             }
 
-            public function log($level, $message, array $context = []): void {
+            public function log($level, string|\Stringable $message, array $context = []): void {
                 $timestamp = date('Y-m-d H:i:s');
                 fprintf(
                     STDERR,
@@ -147,7 +147,7 @@ class ServerRunner {
                 );
             }
 
-            private function interpolate($message, array $context = []): string {
+            private function interpolate(string|\Stringable $message, array $context = []): string {
                 $replace = [];
                 foreach ($context as $key => $val) {
                     $replace['{' . $key . '}'] = $val;

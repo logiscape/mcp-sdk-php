@@ -74,6 +74,6 @@ class CallToolRequestParams extends RequestParams {
         // Merge parent, our own data, and extraFields
         $merged = array_merge($parentData, $data, $this->extraFields);
 
-        return !empty($merged) ? $merged : new \stdClass();
+        return $merged;
     }
 }

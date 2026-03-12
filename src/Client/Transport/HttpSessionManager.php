@@ -81,7 +81,7 @@
      private bool $invalidated = false;
  
      /**
-      * @param LoggerInterface|null $logger PSR-3 compatible logger
+      * @param LoggerInterface $logger PSR-3 compatible logger
       */
      public function __construct(
          private LoggerInterface $logger = new NullLogger()

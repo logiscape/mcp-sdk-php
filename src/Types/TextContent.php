@@ -63,9 +63,6 @@ class TextContent extends Content {
     }
 
     public function validate(): void {
-        if (is_null($this->text)) {
-            throw new \InvalidArgumentException('Text content cannot be null');
-        }
         if ($this->annotations !== null) {
             $this->annotations->validate();
         }

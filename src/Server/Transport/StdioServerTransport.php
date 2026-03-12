@@ -266,10 +266,10 @@ class StdioServerTransport implements Transport {
             } elseif ($hasMethod && $hasId && !$hasResult) {
                 // JSONRPCRequest
                 return new JsonRpcMessage($this->buildRequestMessage($data, $id));
-            } elseif ($hasMethod && !$hasId && !$hasResult && !$hasError) {
+            } elseif ($hasMethod && !$hasId && !$hasResult) {
                 // JSONRPCNotification
                 return new JsonRpcMessage($this->buildNotificationMessage($data));
-            } elseif ($hasId && $hasResult && !$hasMethod && !$hasError) {
+            } elseif ($hasId && $hasResult && !$hasMethod) {
                 // JSONRPCResponse
                 return new JsonRpcMessage($this->buildResponseMessage($data, $id));
             } else {

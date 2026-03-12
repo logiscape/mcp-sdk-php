@@ -34,6 +34,8 @@ namespace Mcp\Types;
  * properties?: { [key: string]: object }
  *
  * We allow arbitrary fields (keys = string, values = object).
+ *
+ * @implements \IteratorAggregate<string, mixed>
  */
 class ToolInputProperties implements McpModel, \IteratorAggregate {
     use ExtraFieldsTrait;

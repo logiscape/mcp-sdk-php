@@ -364,9 +364,7 @@ class HttpServerTransport implements Transport
             } else {
                 // Just return a temporary response for now.
                 // The real JSON RPC output will be built AFTER the session processes the queue.
-                return $containsRequests
-                    ? HttpMessage::createEmptyResponse(200)
-                    : HttpMessage::createEmptyResponse(202);
+                return HttpMessage::createEmptyResponse(200);
             }
         } catch (\JsonException $e) {
             // JSON parse error

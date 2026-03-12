@@ -74,6 +74,6 @@ class CompleteRequestParams extends RequestParams
 
         $merged = array_merge($data, $parentData);
 
-        return !empty($merged) ? $merged : new \stdClass();
+        return $merged;
     }
 }

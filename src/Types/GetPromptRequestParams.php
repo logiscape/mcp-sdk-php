@@ -74,6 +74,6 @@ class GetPromptRequestParams extends RequestParams {
         // Merge everything together
         $merged = array_merge($baseData, $data, $this->extraFields);
 
-        return !empty($merged) ? $merged : new \stdClass();
+        return $merged;
     }
 }

@@ -64,6 +64,6 @@ class ReadResourceRequestParams extends RequestParams {
             $this->extraFields
         );
 
-        return !empty($merged) ? $merged : new \stdClass();
+        return $merged;
     }
 }

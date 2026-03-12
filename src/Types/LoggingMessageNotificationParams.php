@@ -71,6 +71,6 @@ class LoggingMessageNotificationParams extends NotificationParams {
 
         $merged = array_merge($parentData, $data, $this->extraFields);
 
-        return !empty($merged) ? $merged : new \stdClass();
+        return $merged;
     }
 }
