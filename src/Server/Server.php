@@ -44,6 +44,8 @@ use Mcp\Shared\ErrorData as TypesErrorData;
 use Mcp\Types\JSONRPCResponse;
 use Mcp\Types\JSONRPCError;
 use Mcp\Types\JsonRpcErrorObject;
+use Mcp\Types\RequestParams;
+use Mcp\Types\NotificationParams;
 use Mcp\Types\Result;
 use Mcp\Shared\ErrorData;
 use Psr\Log\LoggerInterface;
@@ -58,9 +60,9 @@ use InvalidArgumentException;
  * and handles incoming messages by dispatching them to the appropriate handlers.
  */
 class Server {
-    /** @var array<string, callable(?array): Result> */
+    /** @var array<string, callable(?RequestParams): Result> */
     private array $requestHandlers = [];
-    /** @var array<string, callable(?array): void> */
+    /** @var array<string, callable(?NotificationParams): void> */
     private array $notificationHandlers = [];
     private ?ServerSession $session = null;
     private LoggerInterface $logger;
@@ -73,7 +75,7 @@ class Server {
         $this->logger->debug("Initializing server '$name'");
 
         // Register built-in ping handler: returns an EmptyResult as per schema
-        $this->registerHandler('ping', function (?array $params): Result {
+        $this->registerHandler('ping', function (?RequestParams $params): Result {
             // Ping returns an EmptyResult according to the schema
             return new Result();
         });

@@ -191,7 +191,7 @@ class ServerSession extends BaseSession {
         $request = $responder->getRequest(); // a ClientRequest
         $actualRequest = $request->getRequest(); // the underlying typed Request
         $method = $actualRequest->method;
-        $params = $actualRequest->params ?? [];
+        $params = $actualRequest->params ?? null;
 
         if ($method === 'initialize') {
             $respond = fn($result) => $responder->sendResponse($result);
