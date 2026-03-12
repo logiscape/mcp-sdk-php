@@ -39,7 +39,6 @@ use Mcp\Client\Transport\HttpSessionManager;
 use Mcp\Client\ClientSession;
 use Mcp\Shared\MemoryStream;
 use Mcp\Types\InitializeResult;
-use Mcp\Types\JsonRpcMessage;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use RuntimeException;
@@ -62,9 +61,6 @@ class Client {
 
     /** @var LoggerInterface */
     private LoggerInterface $logger;
-
-    /** @var bool */
-    private bool $isRunning = false;
 
     /**
      * Client constructor.
@@ -181,90 +177,11 @@ class Client {
     }
 
     /**
-     * Process incoming messages in a loop.
-     *
-     * Similar to the Python `receive_loop()` which iterates over `session.incoming_messages`.
-     *
-     * @return void
-     */
-    private function receiveLoop(): void {
-        if (!$this->session) {
-            throw new RuntimeException('No active session to receive messages');
-        }
-
-        $this->logger->info('Starting receive loop');
-        $this->isRunning = true;
-
-        while ($this->isRunning && $this->session->isInitialized()) {
-            try {
-                /** @var JsonRpcMessage|null $message */
-                $message = $this->session->receiveMessage();
-
-                if ($message === null) {
-                    // No message available, sleep briefly to prevent busy waiting
-                    usleep(10000); // 10 milliseconds
-                    continue;
-                }
-
-                if ($message instanceof \Exception) {
-                    $this->logger->error("Error received: {$message->getMessage()}");
-                    continue;
-                }
-
-                if ($message instanceof JsonRpcMessage) {
-                    $this->logger->debug('Received message from server: ' . json_encode($message, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
-                    // Additional processing can be performed here if necessary
-                }
-            } catch (\Exception $e) {
-                $this->logger->error("Exception in receive loop: {$e->getMessage()}");
-                // Decide whether to continue the loop or break based on the exception type
-                continue;
-            }
-        }
-
-        $this->logger->info('Receive loop terminated');
-    }
-
-    /**
-     * Start the message processing loop in a non-blocking way if possible, else inline.
-     *
-     * @return void
-     */
-    private function startReceiveLoop(): void {
-        if (!$this->session) {
-            throw new RuntimeException('No active session to start receive loop');
-        }
-
-        if (function_exists('pcntl_fork')) {
-            $pid = pcntl_fork();
-            if ($pid === -1) {
-                throw new RuntimeException('Failed to start receive loop: fork failed');
-            }
-            if ($pid === 0) {
-                // Child process: handle incoming messages
-                try {
-                    $this->receiveLoop();
-                } finally {
-                    exit(0);
-                }
-            }
-            // Parent process continues execution
-            $this->logger->info("Receive loop started in child process (PID: $pid)");
-        } else {
-            // Run in the same process if pcntl_fork is not available
-            $this->logger->warning('pcntl_fork not available. Running receive loop in the main process.');
-            set_time_limit(0); // Prevent script from timing out
-            $this->receiveLoop();
-        }
-    }
-
-    /**
      * Close the client connection gracefully.
      *
      * @return void
      */
     public function close(): void {
-        $this->isRunning = false;
         if ($this->session) {
             $this->session->close();
             $this->logger->info('Session closed successfully');
@@ -376,7 +293,6 @@ class Client {
      * @return void
      */
     public function detach(): void {
-        $this->isRunning = false;
         if ($this->session) {
             $this->session->close();
             $this->logger->info('Session detached');
