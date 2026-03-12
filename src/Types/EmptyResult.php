@@ -66,7 +66,7 @@ class EmptyResult extends Result
      */
     public function validate(): void
     {
-        // For an �empty� result, you might do nothing special or call parent:
+        // For an "empty" result, you might do nothing special or call parent:
         parent::validate();
     }
 }
