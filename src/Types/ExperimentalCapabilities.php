@@ -33,8 +33,34 @@ namespace Mcp\Types;
  * Represents the `experimental` object in capabilities.
  * This is an open object: { [key: string]: object }, so we just allow arbitrary fields.
  */
-class ExperimentalCapabilities implements McpModel {
+class ExperimentalCapabilities implements McpModel, \IteratorAggregate, \ArrayAccess {
     use ExtraFieldsTrait;
+
+    /**
+     * @return \Traversable<string, mixed>
+     */
+    public function getIterator(): \Traversable {
+        return new \ArrayIterator($this->extraFields);
+    }
+
+    public function offsetExists(mixed $offset): bool {
+        return isset($this->extraFields[$offset]);
+    }
+
+    public function offsetGet(mixed $offset): mixed {
+        return $this->extraFields[$offset] ?? null;
+    }
+
+    public function offsetSet(mixed $offset, mixed $value): void {
+        if (!is_string($offset)) {
+            throw new \InvalidArgumentException('ExperimentalCapabilities keys must be strings');
+        }
+        $this->extraFields[$offset] = $value;
+    }
+
+    public function offsetUnset(mixed $offset): void {
+        unset($this->extraFields[$offset]);
+    }
 
     public static function fromArray(array $data): self {
         $obj = new self();
