@@ -154,7 +154,7 @@ class Server {
             resources: $resourcesCapability,
             tools: $toolsCapability,
             logging: $loggingCapability,
-            experimental: new ExperimentalCapabilities($experimentalCapabilities),
+            experimental: ExperimentalCapabilities::fromArray($experimentalCapabilities),
             tasks: $tasksCapability,
         );
     }

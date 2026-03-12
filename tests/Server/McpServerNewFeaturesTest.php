@@ -204,4 +204,33 @@ final class McpServerNewFeaturesTest extends TestCase
         );
         $this->assertNull($caps->tasks);
     }
+
+    /**
+     * Test that non-empty experimental capabilities are preserved in the
+     * ServerCapabilities object returned by getCapabilities().
+     *
+     * Regression test: previously ExperimentalCapabilities was instantiated
+     * via `new ExperimentalCapabilities($array)` which silently discarded the
+     * data because the class has no constructor. The fix uses fromArray().
+     */
+    public function testExperimentalCapabilitiesPreserved(): void {
+        $server = new McpServer('test');
+        $server->tool('t1', 'Tool', fn() => 'ok');
+
+        $experimental = [
+            'customFeature' => ['enabled' => true],
+            'anotherCap' => 'value',
+        ];
+
+        $underlying = $server->getServer();
+        $caps = $underlying->getCapabilities(
+            new NotificationOptions(),
+            $experimental
+        );
+
+        $this->assertNotNull($caps->experimental);
+        $serialized = json_decode(json_encode($caps->experimental), true);
+        $this->assertEquals(['enabled' => true], $serialized['customFeature']);
+        $this->assertEquals('value', $serialized['anotherCap']);
+    }
 }
