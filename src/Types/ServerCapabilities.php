@@ -57,12 +57,7 @@ class ServerCapabilities extends Capabilities {
 
     public static function fromArray(array $data): self {
         // Handle experimental from parent class
-        $experimentalData = $data['experimental'] ?? null;
-        unset($data['experimental']);
-        $experimental = null;
-        if ($experimentalData !== null && is_array($experimentalData)) {
-            $experimental = ExperimentalCapabilities::fromArray($experimentalData);
-        }
+        $experimental = self::parseExperimental($data);
 
         $loggingData = $data['logging'] ?? null;
         unset($data['logging']);

@@ -279,16 +279,7 @@ class Server {
             throw new RuntimeException('No active session');
         }
 
-        // Create a JSONRPCResponse object and wrap in JsonRpcMessage
-        $resp = new JSONRPCResponse(
-            jsonrpc: '2.0',
-            id: $id,
-            result: $result
-        );
-        $resp->validate();
-
-        $msg = new JsonRpcMessage($resp);
-        $this->session->writeMessage($msg);
+        $this->session->sendResponse($id, $result);
     }
 
     /**
@@ -302,21 +293,7 @@ class Server {
             throw new RuntimeException('No active session');
         }
 
-        $errorObj = new JsonRpcErrorObject(
-            code: $error->code,
-            message: $error->message,
-            data: $error->data ?? null
-        );
-
-        $errResp = new JSONRPCError(
-            jsonrpc: '2.0',
-            id: $id,
-            error: $errorObj
-        );
-        $errResp->validate();
-
-        $msg = new JsonRpcMessage($errResp);
-        $this->session->writeMessage($msg);
+        $this->session->sendResponse($id, $error);
     }
 
     /**

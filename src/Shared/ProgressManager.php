@@ -29,6 +29,7 @@ declare(strict_types=1);
 
 namespace Mcp\Shared;
 
+use Mcp\Types\ProgressToken;
 use InvalidArgumentException;
 
 /**
@@ -43,13 +44,18 @@ class ProgressManager {
      */
     public static function createContext(RequestContext $ctx, ?float $total = null): ProgressContext {
         $meta = $ctx->getMeta();
-        if ($meta === null || $meta->getProgressToken() === null) {
+        if ($meta === null || $meta->progressToken === null) {
             throw new InvalidArgumentException('No progress token provided');
         }
 
+        $rawToken = $meta->progressToken;
+        $progressToken = $rawToken instanceof ProgressToken
+            ? $rawToken
+            : new ProgressToken($rawToken);
+
         return new ProgressContext(
             $ctx->getSession(),
-            $meta->getProgressToken(),
+            $progressToken,
             $total
         );
     }

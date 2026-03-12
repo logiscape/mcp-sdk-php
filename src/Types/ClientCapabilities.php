@@ -51,6 +51,66 @@ class ClientCapabilities extends Capabilities {
         parent::__construct($experimental);
     }
 
+    public static function fromArray(array $data): self {
+        $experimental = self::parseExperimental($data);
+
+        $rootsData = $data['roots'] ?? null;
+        unset($data['roots']);
+        $roots = null;
+        if ($rootsData !== null && is_array($rootsData)) {
+            $listChanged = $rootsData['listChanged'] ?? null;
+            unset($rootsData['listChanged']);
+            $roots = new ClientRootsCapability(
+                listChanged: $listChanged
+            );
+            foreach ($rootsData as $k => $v) {
+                $roots->$k = $v;
+            }
+        }
+
+        $samplingData = $data['sampling'] ?? null;
+        unset($data['sampling']);
+        $sampling = null;
+        if ($samplingData !== null) {
+            $sampling = new SamplingCapability();
+            if (is_array($samplingData)) {
+                foreach ($samplingData as $k => $v) {
+                    $sampling->$k = $v;
+                }
+            }
+        }
+
+        $elicitationData = $data['elicitation'] ?? null;
+        unset($data['elicitation']);
+        $elicitation = null;
+        if ($elicitationData !== null && is_array($elicitationData)) {
+            $elicitation = ElicitationCapability::fromArray($elicitationData);
+        }
+
+        $tasksData = $data['tasks'] ?? null;
+        unset($data['tasks']);
+        $tasks = null;
+        if ($tasksData !== null && is_array($tasksData)) {
+            $tasks = TaskCapability::fromArray($tasksData);
+        }
+
+        $obj = new self(
+            roots: $roots,
+            sampling: $sampling,
+            experimental: $experimental,
+            elicitation: $elicitation,
+            tasks: $tasks,
+        );
+
+        // Extra fields
+        foreach ($data as $k => $v) {
+            $obj->$k = $v;
+        }
+
+        $obj->validate();
+        return $obj;
+    }
+
     public function validate(): void {
         parent::validate();
         if ($this->roots !== null) {

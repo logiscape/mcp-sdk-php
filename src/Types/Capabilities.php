@@ -44,24 +44,18 @@ abstract class Capabilities implements McpModel {
         public ?ExperimentalCapabilities $experimental = null,
     ) {}
 
-    public static function fromArray(array $data): self {
+    /**
+     * Parse experimental capabilities from array data.
+     * Subclasses should override fromArray() with their own constructor logic.
+     */
+    protected static function parseExperimental(array &$data): ?ExperimentalCapabilities {
         $experimentalData = $data['experimental'] ?? null;
         unset($data['experimental']);
 
-        $experimental = null;
         if ($experimentalData !== null && is_array($experimentalData)) {
-            $experimental = ExperimentalCapabilities::fromArray($experimentalData);
+            return ExperimentalCapabilities::fromArray($experimentalData);
         }
-
-        $obj = new self($experimental);
-
-        // Extra fields
-        foreach ($data as $k => $v) {
-            $obj->$k = $v;
-        }
-
-        $obj->validate();
-        return $obj;
+        return null;
     }
 
     public function validate(): void {

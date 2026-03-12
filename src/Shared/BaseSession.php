@@ -38,7 +38,10 @@ use Mcp\Types\JSONRPCRequest;
 use Mcp\Types\JSONRPCNotification;
 use Mcp\Types\JSONRPCResponse;
 use Mcp\Types\JSONRPCError;
+use Mcp\Types\JsonRpcErrorObject;
 use Mcp\Types\McpModel;
+use Mcp\Types\JSONRPCBatchRequest;
+use Mcp\Types\JSONRPCBatchResponse;
 use Mcp\Shared\McpError;
 use InvalidArgumentException;
 use RuntimeException;
@@ -212,9 +215,11 @@ abstract class BaseSession {
         ?float $total = null
     ): void {
         $progressNotification = new ProgressNotification(
-            progressToken: $progressToken,
-            progress: $progress,
-            total: $total
+            new \Mcp\Types\ProgressNotificationParams(
+                progressToken: $progressToken,
+                progress: $progress,
+                total: $total
+            )
         );
 
         $jsonRpcNotification = new JSONRPCNotification(

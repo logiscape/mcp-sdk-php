@@ -477,7 +477,9 @@ class StreamableHttpTransport
         $endpoint = $this->config->getEndpoint();
 
         try {
-            $this->oauthClient->proactiveRefresh($endpoint);
+            if (method_exists($this->oauthClient, 'proactiveRefresh')) {
+                $this->oauthClient->proactiveRefresh($endpoint);
+            }
         } catch (\Exception $e) {
             $this->logger->debug("Proactive token refresh skipped: {$e->getMessage()}");
         }

@@ -98,6 +98,11 @@ use Mcp\Types\Meta;
      private bool $usingBackground = false;
      
      /**
+      * The cURL multi handle for non-blocking operation
+      */
+     private ?\CurlMultiHandle $multiHandle = null;
+
+     /**
       * PID of the background process if used
       */
      private ?int $backgroundPid = null;
