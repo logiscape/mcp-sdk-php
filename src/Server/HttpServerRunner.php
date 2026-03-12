@@ -51,9 +51,9 @@ class HttpServerRunner extends ServerRunner
     /**
      * Server session instance.
      *
-     * @var ServerSession|null
+     * @var HttpServerSession|null
      */
-    private ?ServerSession $serverSession = null;
+    private ?HttpServerSession $serverSession = null;
     
     /**
      * Constructor.
@@ -210,9 +210,9 @@ class HttpServerRunner extends ServerRunner
     /**
      * Get the server session.
      *
-     * @return ServerSession|null Server session
+     * @return HttpServerSession|null Server session
      */
-    public function getServerSession(): ?ServerSession
+    public function getServerSession(): ?HttpServerSession
     {
         return $this->serverSession;
     }
