@@ -24,6 +24,12 @@
         "monolog/monolog": "^3.0 - For debugging and logging capabilities"
     },
     "require-dev": {
-        "phpunit/phpunit": "^10.0"
+        "phpunit/phpunit": "^10.0",
+        "phpstan/phpstan": "^1.10"
+    },
+    "scripts": {
+        "test": "phpunit",
+        "analyse": "phpstan analyse",
+        "check": ["@test", "@analyse"]
     }
 }
