@@ -77,12 +77,12 @@ class Client {
      * If commandOrUrl is an HTTP(S) URL, it uses the StreamableHttpTransport.
      * Otherwise, it assumes it's a command and uses STDIO transport.
      *
-     * @param string      $commandOrUrl The command to execute or the HTTP(S) URL.
-     * @param array       $args         Arguments for the command (if using STDIO transport)
-     *                                  or HTTP headers (if using HTTP transport).
-     * @param array|null  $env          Environment variables for the command (if using STDIO transport)
-     *                                  or HTTP configuration options (if using HTTP transport).
-     * @param float|null  $readTimeout  Timeout for reading messages.
+     * @param string                       $commandOrUrl The command to execute or the HTTP(S) URL.
+     * @param array<int|string, string>    $args         Arguments for the command (if using STDIO transport)
+     *                                                   or HTTP headers (if using HTTP transport).
+     * @param array<string, mixed>|null    $env          Environment variables for the command (if using STDIO transport)
+     *                                                   or HTTP configuration options (if using HTTP transport).
+     * @param float|null                   $readTimeout  Timeout for reading messages.
      *
      * @throws InvalidArgumentException If the command or URL is invalid.
      * @throws RuntimeException         If the connection fails.
@@ -103,7 +103,7 @@ class Client {
                 $this->logger->info("Connecting to HTTP endpoint: {$commandOrUrl}");
                 
                 // Process HTTP-specific options
-                $headers = $args ?? []; // For HTTP, args are used as headers
+                $headers = $args; // For HTTP, args are used as headers
                 $httpOptions = $env ?? []; // For HTTP, env is used for HTTP options
                 
                 // Extract OAuth configuration if provided
@@ -200,13 +200,13 @@ class Client {
      * Reconstructs the transport with restored session state and creates a
      * ClientSession that is immediately ready for operations.
      *
-     * @param string $url The HTTP(S) URL of the MCP server
-     * @param array $sessionManagerState Session manager state from toArray()
-     * @param array $initResultData InitializeResult data (serialized)
-     * @param string $negotiatedProtocolVersion The negotiated protocol version
-     * @param int $nextRequestId The next request ID counter value
-     * @param array $headers HTTP headers
-     * @param array $httpOptions HTTP configuration options
+     * @param string                    $url                      The HTTP(S) URL of the MCP server
+     * @param array<string, mixed>      $sessionManagerState      Session manager state from toArray()
+     * @param array<string, mixed>      $initResultData           InitializeResult data (serialized)
+     * @param string                    $negotiatedProtocolVersion The negotiated protocol version
+     * @param int                       $nextRequestId            The next request ID counter value
+     * @param array<string, string>     $headers                  HTTP headers
+     * @param array<string, mixed>      $httpOptions              HTTP configuration options
      * @return ClientSession The restored client session ready for operations
      */
     public function resumeHttpSession(
