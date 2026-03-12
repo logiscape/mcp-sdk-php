@@ -105,9 +105,11 @@ abstract class BaseSession {
 
     /**
      * Sends a request and waits for a typed result. If an error response is received, throws an exception.
+     *
+     * @template T of McpModel
      * @param McpModel $request A typed request object (e.g., InitializeRequest, PingRequest).
-     * @param string $resultType The fully-qualified class name of the expected result type (must implement McpModel).
-     * @return McpModel The validated result object.
+     * @param class-string<T> $resultType The fully-qualified class name of the expected result type (must implement McpModel).
+     * @return T The validated result object.
      * @throws McpError If an error response is received.
      */
     public function sendRequest(McpModel $request, string $resultType): McpModel {
@@ -126,6 +128,7 @@ abstract class BaseSession {
         ));
 
         // Store a handler that will be called when a response with this requestId is received
+        /** @var T|null $futureResult */
         $futureResult = null;
         $this->responseHandlers[$requestIdValue] = function (JsonRpcMessage $message) use (&$futureResult, $resultType): void {
             $innerMessage = $message->message;
@@ -142,7 +145,7 @@ abstract class BaseSession {
             } elseif ($innerMessage instanceof JSONRPCResponse) {
                 // It's a success response
                 // Validate the result using $resultType
-                /** @var McpModel $resultInstance */
+                /** @var T $resultInstance */
                 $resultInstance = $resultType::fromResponseData($innerMessage->result);
                 $futureResult = $resultInstance;
             } else {
@@ -377,10 +380,11 @@ abstract class BaseSession {
      * In a synchronous environment, this might mean reading messages from the underlying transport
      * until we find a response with the correct ID.
      *
+     * @template T of McpModel
      * @param int $requestIdValue The numeric request ID value.
-     * @param string $resultType The expected result type.
-     * @param McpModel|null $futureResult A reference that will be set by the response handler closure.
-     * @return McpModel The result object.
+     * @param class-string<T> $resultType The expected result type.
+     * @param T|null $futureResult A reference that will be set by the response handler closure.
+     * @return T The result object.
      * @throws McpError If an error response is received.
      * @throws InvalidArgumentException If no result is received.
      */

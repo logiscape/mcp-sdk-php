@@ -396,7 +396,7 @@ class ClientSession extends BaseSession {
      * Call a tool on the server with optional arguments.
      *
      * @param string     $name      The name of the tool to call.
-     * @param array|null $arguments Optional arguments for the tool.
+     * @param array<string, mixed>|null $arguments Optional arguments for the tool.
      *
      * @throws RuntimeException If the session is not initialized or if sending the request fails.
      *
@@ -427,7 +427,7 @@ class ClientSession extends BaseSession {
      * Get a specific prompt from the server.
      *
      * @param string     $name      The name of the prompt to retrieve.
-     * @param array|null $arguments Optional arguments for the prompt.
+     * @param array<string, string>|null $arguments Optional arguments for the prompt.
      *
      * @throws RuntimeException If the session is not initialized or if sending the request fails.
      * @throws InvalidArgumentException If any argument values are not strings.
@@ -464,8 +464,9 @@ class ClientSession extends BaseSession {
      * Complete an action based on a resource or prompt reference.
      *
      * @param ResourceReference|PromptReference $ref       The reference to complete.
-     * @param array                             $argument  The arguments for completion.
+     * @param array<string, mixed> $argument  The arguments for completion (must contain 'name' and 'value').
      *
+     * @throws InvalidArgumentException If 'name' is empty or 'value' is missing.
      * @throws RuntimeException If the session is not initialized or if sending the request fails.
      *
      * @return CompleteResult The result of the completion.
@@ -480,6 +481,7 @@ class ClientSession extends BaseSession {
         if (empty($argument['name']) || !isset($argument['value'])) {
             throw new \InvalidArgumentException('CompleteRequest argument must have "name" and "value"');
         }
+        /** @var array{name: non-empty-string, value: string} $argument */
         $completionArg = new \Mcp\Types\CompletionArgument($argument['name'], $argument['value']);
 
         // Construct the params object
