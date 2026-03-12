@@ -30,9 +30,10 @@ namespace Mcp\Types;
 
 class SubscribeRequest extends Request {
     public function __construct(
-        string $uri
+        string $uri,
+        ?Meta $_meta = null
     ) {
-        parent::__construct('resources/subscribe', new SubscribeRequestParams($uri));
+        parent::__construct('resources/subscribe', new SubscribeRequestParams($uri, $_meta));
     }
 
     public function validate(): void {

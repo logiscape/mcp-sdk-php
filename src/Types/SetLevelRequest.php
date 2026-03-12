@@ -30,9 +30,10 @@ namespace Mcp\Types;
 
 class SetLevelRequest extends Request {
     public function __construct(
-        LoggingLevel $level
+        LoggingLevel $level,
+        ?Meta $_meta = null
     ) {
-        parent::__construct('logging/setLevel', new SetLevelRequestParams($level));
+        parent::__construct('logging/setLevel', new SetLevelRequestParams($level, $_meta));
     }
 
     public function validate(): void {

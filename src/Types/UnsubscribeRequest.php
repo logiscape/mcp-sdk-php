@@ -30,9 +30,10 @@ namespace Mcp\Types;
 
 class UnsubscribeRequest extends Request {
     public function __construct(
-        string $uri
+        string $uri,
+        ?Meta $_meta = null
     ) {
-        parent::__construct('resources/unsubscribe', new UnsubscribeRequestParams($uri));
+        parent::__construct('resources/unsubscribe', new UnsubscribeRequestParams($uri, $_meta));
     }
 
     public function validate(): void {

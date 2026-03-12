@@ -32,20 +32,28 @@ namespace Mcp\Types;
  * Params for UnsubscribeRequest:
  * { uri: string }
  */
-class UnsubscribeRequestParams implements McpModel {
+class UnsubscribeRequestParams extends RequestParams {
     use ExtraFieldsTrait;
 
     public function __construct(
-        public readonly string $uri
-    ) {}
+        public readonly string $uri,
+        ?Meta $_meta = null
+    ) {
+        parent::__construct($_meta);
+    }
 
     public function validate(): void {
+        parent::validate();
         if (empty($this->uri)) {
             throw new \InvalidArgumentException('Resource URI cannot be empty');
         }
     }
 
     public function jsonSerialize(): mixed {
-        return array_merge(['uri' => $this->uri], $this->extraFields);
+        $parentData = parent::jsonSerialize();
+        if ($parentData instanceof \stdClass) {
+            $parentData = (array)$parentData;
+        }
+        return array_merge($parentData, ['uri' => $this->uri], $this->extraFields);
     }
 }

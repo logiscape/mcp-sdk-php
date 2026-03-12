@@ -226,7 +226,8 @@ class ClientRequest implements RequestWrapperInterface {
             throw new \InvalidArgumentException('SetLevelRequest "params" must include "level"');
         }
         $level = LoggingLevel::from($params['level']);
-        return new self(new SetLevelRequest($level));
+        $meta = self::extractMeta($params);
+        return new self(new SetLevelRequest($level, $meta));
     }
 
     private static function createGetPromptRequest(array $params): self {
@@ -268,14 +269,16 @@ class ClientRequest implements RequestWrapperInterface {
         if (empty($params['uri'])) {
             throw new \InvalidArgumentException('SubscribeRequest requires "uri"');
         }
-        return new self(new SubscribeRequest(uri: $params['uri']));
+        $meta = self::extractMeta($params);
+        return new self(new SubscribeRequest(uri: $params['uri'], _meta: $meta));
     }
 
     private static function createUnsubscribeRequest(array $params): self {
         if (empty($params['uri'])) {
             throw new \InvalidArgumentException('UnsubscribeRequest requires "uri"');
         }
-        return new self(new UnsubscribeRequest(uri: $params['uri']));
+        $meta = self::extractMeta($params);
+        return new self(new UnsubscribeRequest(uri: $params['uri'], _meta: $meta));
     }
 
     private static function createCallToolRequest(array $params): self {
@@ -330,6 +333,17 @@ class ClientRequest implements RequestWrapperInterface {
             throw new \InvalidArgumentException('TaskCancelRequest requires "taskId"');
         }
         return new self(new TaskCancelRequest($params['taskId']));
+    }
+
+    private static function extractMeta(array $params): ?Meta {
+        if (!isset($params['_meta']) || !is_array($params['_meta'])) {
+            return null;
+        }
+        $meta = new Meta();
+        foreach ($params['_meta'] as $k => $v) {
+            $meta->$k = $v;
+        }
+        return $meta;
     }
 
     public function validate(): void {

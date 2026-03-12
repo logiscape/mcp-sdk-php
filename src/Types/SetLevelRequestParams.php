@@ -32,18 +32,26 @@ namespace Mcp\Types;
  * Params for SetLevelRequest:
  * { level: LoggingLevel }
  */
-class SetLevelRequestParams implements McpModel {
+class SetLevelRequestParams extends RequestParams {
     use ExtraFieldsTrait;
 
     public function __construct(
-        public readonly LoggingLevel $level
-    ) {}
+        public readonly LoggingLevel $level,
+        ?Meta $_meta = null
+    ) {
+        parent::__construct($_meta);
+    }
 
     public function validate(): void {
+        parent::validate();
         // level is an enum, always valid
     }
 
     public function jsonSerialize(): mixed {
-        return array_merge(['level' => $this->level->value], $this->extraFields);
+        $parentData = parent::jsonSerialize();
+        if ($parentData instanceof \stdClass) {
+            $parentData = (array)$parentData;
+        }
+        return array_merge($parentData, ['level' => $this->level->value], $this->extraFields);
     }
 }
