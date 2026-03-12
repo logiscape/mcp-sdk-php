@@ -283,9 +283,7 @@ abstract class BaseSession {
                 if ($serialized instanceof \stdClass) {
                     $serialized = (array) $serialized;
                 }
-                $paramsArray = (array) $serialized; 
-            } elseif (is_array($innerMessage->params)) {
-                $paramsArray = $innerMessage->params;
+                $paramsArray = (array) $serialized;
             }
 
             // Now pass the entire param array into RequestResponder
