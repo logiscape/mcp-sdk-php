@@ -105,7 +105,7 @@ class McpServer
     /** @var array<string, callable> Registered resource handlers keyed by URI. */
     protected array $resourceHandlers = [];
 
-    /** @var array [Added] HTTP transport options. */
+    /** @var array<string, mixed> [Added] HTTP transport options. */
     protected array $httpOptions = [];
 
     /** @var SessionStoreInterface|null [Added] Session store for HTTP transport. */
@@ -155,8 +155,8 @@ class McpServer
      * @param string $description A description of what the tool does
      * @param callable $callback The function that implements the tool
      * @param string|null $title Display title for the tool
-     * @param array|null $icons Icons for the tool
-     * @param array|null $outputSchema JSON Schema for structured output
+     * @param array<int, array<string, mixed>>|null $icons Icons for the tool
+     * @param array<string, mixed>|null $outputSchema JSON Schema for structured output
      * @return self For method chaining
      */
     public function tool(
@@ -222,7 +222,7 @@ class McpServer
      * @param string $description A description of the prompt
      * @param callable $callback The function that implements the prompt
      * @param string|null $title Display title for the prompt
-     * @param array|null $icons Icons for the prompt
+     * @param array<int, array<string, mixed>>|null $icons Icons for the prompt
      * @return self For method chaining
      * @throws McpServerException If the callback returns an invalid result
      */
@@ -297,7 +297,7 @@ class McpServer
      * @param string $description The resource description
      * @param string $mimeType The MIME type
      * @param string|null $title Display title for the resource
-     * @param array|null $icons Icons for the resource
+     * @param array<int, array<string, mixed>>|null $icons Icons for the resource
      * @param int|null $size Resource size in bytes
      * @return self For method chaining
      * @throws McpServerException If the callback returns an invalid result
@@ -376,7 +376,7 @@ class McpServer
     /**
      * [Added] Set HTTP transport options.
      *
-     * @param array $options Options passed to HttpServerTransport (see Config.php)
+     * @param array<string, mixed> $options Options passed to HttpServerTransport (see Config.php)
      * @return self For method chaining
      */
     public function httpOptions(array $options): self
@@ -401,7 +401,7 @@ class McpServer
      * [Added] Configure OAuth authentication for the HTTP transport.
      *
      * @param TokenValidatorInterface $tokenValidator Token validator implementation
-     * @param string|array $authorizationServers One or more authorization server URLs
+     * @param string|array<int, string> $authorizationServers One or more authorization server URLs
      * @param string $resourceId The protected resource identifier
      * @return self For method chaining
      */
@@ -724,6 +724,8 @@ class McpServer
 
     /**
      * Build PromptArgument list from a callback's parameter list using reflection.
+     *
+     * @return array<int, PromptArgument>
      */
     protected function buildArgumentsFromCallback(callable $callback): array
     {
@@ -750,8 +752,8 @@ class McpServer
      * correct ordering regardless of JSON key order.
      *
      * @param callable $callback The target callback
-     * @param array $arguments Associative array of arguments
-     * @return array Ordered arguments matching the callback's parameter list
+     * @param array<string, mixed> $arguments Associative array of arguments
+     * @return array<int, mixed> Ordered arguments matching the callback's parameter list
      */
     protected function matchNamedParameters(callable $callback, array $arguments): array
     {

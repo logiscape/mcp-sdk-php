@@ -54,6 +54,9 @@ class HttpServerSession extends ServerSession
         $this->close();
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     public function toArray(): array
     {
         return [
@@ -70,6 +73,9 @@ class HttpServerSession extends ServerSession
         ];
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(
         array $data,
         \Mcp\Server\Transport\Transport $transport,

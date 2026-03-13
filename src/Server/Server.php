@@ -83,6 +83,8 @@ class Server {
 
     /**
      * Creates initialization options for the server.
+     *
+     * @param array<string, mixed>|null $experimentalCapabilities
      */
     public function createInitializationOptions(
         ?NotificationOptions $notificationOptions = null,
@@ -100,6 +102,8 @@ class Server {
 
     /**
      * Gets server capabilities based on registered handlers.
+     *
+     * @param array<string, mixed> $experimentalCapabilities
      */
     public function getCapabilities(
         NotificationOptions $notificationOptions,
@@ -171,6 +175,9 @@ class Server {
         $this->logger->debug("Registered handler for request method: $method");
     }
 
+    /**
+     * @return array<string, callable(?RequestParams): Result>
+     */
     public function getHandlers(): array {
         return $this->requestHandlers;
     }
@@ -185,6 +192,9 @@ class Server {
         $this->logger->debug("Registered notification handler for method: $method");
     }
 
+    /**
+     * @return array<string, callable(?NotificationParams): void>
+     */
     public function getNotificationHandlers(): array {
         return $this->notificationHandlers;
     }

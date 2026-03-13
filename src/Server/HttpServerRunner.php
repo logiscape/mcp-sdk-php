@@ -60,7 +60,7 @@ class HttpServerRunner extends ServerRunner
      *
      * @param Server $server MCP server instance
      * @param InitializationOptions $initOptions Server initialization options
-     * @param array $httpOptions HTTP transport options
+     * @param array<string, mixed> $httpOptions HTTP transport options
      * @param LoggerInterface|null $logger Logger
      * @param SessionStoreInterface|null $sessionStore Session store
      */

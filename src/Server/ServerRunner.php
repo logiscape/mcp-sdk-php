@@ -147,6 +147,9 @@ class ServerRunner {
                 );
             }
 
+            /**
+             * @param array<string, mixed> $context
+             */
             private function interpolate(string|\Stringable $message, array $context = []): string {
                 $replace = [];
                 foreach ($context as $key => $val) {
