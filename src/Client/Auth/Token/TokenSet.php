@@ -38,7 +38,7 @@ class TokenSet
      * @param string|null $refreshToken The refresh token (if available)
      * @param int|null $expiresAt Unix timestamp when the token expires
      * @param string $tokenType The token type (typically 'Bearer')
-     * @param array $scope The granted scopes
+     * @param array<int, string> $scope The granted scopes
      * @param string|null $resourceUrl The protected resource URL this token is for
      * @param string|null $issuer The authorization server issuer URL
      */
@@ -106,7 +106,7 @@ class TokenSet
     /**
      * Check if the token has all required scopes.
      *
-     * @param array $requiredScopes The scopes to check for
+     * @param array<int, string> $requiredScopes The scopes to check for
      * @return bool True if all scopes are present
      */
     public function hasAllScopes(array $requiredScopes): bool
@@ -132,10 +132,10 @@ class TokenSet
     /**
      * Create a TokenSet from a token endpoint response.
      *
-     * @param array $response The token endpoint response
+     * @param array<string, mixed> $response The token endpoint response
      * @param string|null $resourceUrl The protected resource URL
      * @param string|null $issuer The authorization server issuer
-     * @param array $originalScope Original scopes to preserve on refresh per RFC 6749 Section 6.
+     * @param array<int, string> $originalScope Original scopes to preserve on refresh per RFC 6749 Section 6.
      *        If the response doesn't include a scope, the original scopes are preserved.
      * @return self
      */
@@ -173,7 +173,7 @@ class TokenSet
     /**
      * Convert the token set to an array for storage.
      *
-     * @return array
+     * @return array<string, mixed>
      */
     public function toArray(): array
     {
@@ -191,7 +191,7 @@ class TokenSet
     /**
      * Create a TokenSet from a stored array.
      *
-     * @param array $data The stored data
+     * @param array<string, mixed> $data The stored data
      * @return self
      */
     public static function fromArray(array $data): self

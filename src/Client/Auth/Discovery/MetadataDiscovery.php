@@ -167,7 +167,7 @@ class MetadataDiscovery
      *
      * @param string $resourceUrl The protected resource URL
      * @param string|null $metadataUrl Optional metadata URL from header
-     * @return array List of URLs to try
+     * @return array<int, string> List of URLs to try
      */
     private function getResourceMetadataUrls(string $resourceUrl, ?string $metadataUrl): array
     {
@@ -204,7 +204,7 @@ class MetadataDiscovery
      * Get the list of URLs to try for Authorization Server Metadata.
      *
      * @param string $issuerUrl The authorization server issuer URL
-     * @return array List of URLs to try
+     * @return array<int, string> List of URLs to try
      */
     private function getAuthServerMetadataUrls(string $issuerUrl): array
     {
@@ -251,7 +251,7 @@ class MetadataDiscovery
      * - Blocks HTTPS-to-HTTP downgrades
      *
      * @param string $url The URL to fetch
-     * @return array The decoded JSON
+     * @return array<string, mixed> The decoded JSON
      * @throws \RuntimeException If fetch fails
      */
     private function fetchJson(string $url): array
@@ -483,7 +483,7 @@ class MetadataDiscovery
     /**
      * Validate that data looks like valid Protected Resource Metadata.
      *
-     * @param array $data The metadata to validate
+     * @param array<string, mixed> $data The metadata to validate
      * @return bool True if valid
      */
     private function isValidResourceMetadata(array $data): bool
@@ -504,7 +504,7 @@ class MetadataDiscovery
     /**
      * Validate that data looks like valid Authorization Server Metadata.
      *
-     * @param array $data The metadata to validate
+     * @param array<string, mixed> $data The metadata to validate
      * @return bool True if valid
      */
     private function isValidAuthServerMetadata(array $data): bool
@@ -519,7 +519,7 @@ class MetadataDiscovery
      * Parse the WWW-Authenticate header to extract resource_metadata URL.
      *
      * @param string $header The WWW-Authenticate header value
-     * @return array Parsed header with 'resource_metadata' if present
+     * @return array<string, string|null> Parsed header with 'resource_metadata' if present
      */
     public static function parseWwwAuthenticate(string $header): array
     {

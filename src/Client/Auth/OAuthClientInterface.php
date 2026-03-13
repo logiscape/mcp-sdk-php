@@ -43,7 +43,7 @@ interface OAuthClientInterface
      * the OAuth authorization flow and return tokens.
      *
      * @param string $resourceUrl The URL of the protected resource
-     * @param array $wwwAuthHeader Parsed WWW-Authenticate header
+     * @param array<string, string|null> $wwwAuthHeader Parsed WWW-Authenticate header
      * @return TokenSet The obtained tokens
      * @throws OAuthException If authorization fails
      */
@@ -57,7 +57,7 @@ interface OAuthClientInterface
      * should perform step-up authorization to obtain additional scopes.
      *
      * @param string $resourceUrl The URL of the protected resource
-     * @param array $wwwAuthHeader Parsed WWW-Authenticate header containing required scope
+     * @param array<string, string|null> $wwwAuthHeader Parsed WWW-Authenticate header containing required scope
      * @param TokenSet $current The current token set
      * @return TokenSet New tokens with expanded scopes
      * @throws OAuthException If authorization fails

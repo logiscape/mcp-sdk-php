@@ -107,7 +107,7 @@ class OAuthException extends RuntimeException
     /**
      * Create an exception from an OAuth error response.
      *
-     * @param array $errorData The error data from the authorization server
+     * @param array<string, mixed> $errorData The error data from the authorization server
      * @return self
      */
     public static function fromOAuthError(array $errorData): self

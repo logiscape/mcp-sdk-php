@@ -329,7 +329,7 @@ class OAuthClient implements OAuthClientInterface
      * all data needed to complete the flow after the browser redirect.
      *
      * @param string $resourceUrl The protected resource URL
-     * @param array $wwwAuthHeader Parsed WWW-Authenticate header (may include resource_metadata, scope)
+     * @param array<string, string|null> $wwwAuthHeader Parsed WWW-Authenticate header (may include resource_metadata, scope)
      * @return AuthorizationRequest All data needed to complete the OAuth flow
      * @throws OAuthException If metadata discovery or client registration fails
      */
@@ -526,9 +526,9 @@ class OAuthClient implements OAuthClientInterface
      * 2. scopes_supported from Protected Resource Metadata
      * 3. Omit scope parameter if neither available
      *
-     * @param array $wwwAuthHeader Parsed WWW-Authenticate header
+     * @param array<string, string|null> $wwwAuthHeader Parsed WWW-Authenticate header
      * @param ProtectedResourceMetadata $resourceMetadata Resource metadata
-     * @return array Scopes to request
+     * @return array<int, string> Scopes to request
      */
     private function determineScopes(
         array $wwwAuthHeader,
@@ -642,7 +642,7 @@ class OAuthClient implements OAuthClientInterface
      * @param string $resourceUrl The protected resource URL
      * @param ProtectedResourceMetadata $resourceMetadata Resource metadata
      * @param AuthorizationServerMetadata $asMetadata AS metadata
-     * @param array $scopes Scopes to request
+     * @param array<int, string> $scopes Scopes to request
      * @return TokenSet
      */
     private function performAuthorizationFlow(
@@ -757,9 +757,9 @@ class OAuthClient implements OAuthClientInterface
      * Execute a token endpoint request.
      *
      * @param string $tokenEndpoint The token endpoint URL
-     * @param array $params Request parameters
+     * @param array<string, string> $params Request parameters
      * @param ClientCredentials $credentials Client credentials
-     * @return array Token response
+     * @return array<string, mixed> Token response
      */
     private function executeTokenRequest(
         string $tokenEndpoint,
