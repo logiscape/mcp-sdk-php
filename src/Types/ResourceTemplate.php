@@ -48,6 +48,9 @@ class ResourceTemplate implements McpModel {
         $this->annotations = $annotations;
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $name = $data['name'] ?? '';
         $uriTemplate = $data['uriTemplate'] ?? '';

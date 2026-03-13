@@ -48,6 +48,9 @@ abstract class Capabilities implements McpModel {
      * Parse experimental capabilities from array data.
      * Subclasses should override fromArray() with their own constructor logic.
      */
+    /**
+     * @param array<string, mixed> $data
+     */
     protected static function parseExperimental(array &$data): ?ExperimentalCapabilities {
         $experimentalData = $data['experimental'] ?? null;
         unset($data['experimental']);

@@ -26,7 +26,7 @@ class Icon implements McpModel {
     /**
      * Parse an array of icon data into Icon objects.
      *
-     * @param array|null $icons Raw icon data (arrays or Icon instances)
+     * @param array<int, array<string, mixed>|Icon>|null $icons Raw icon data (arrays or Icon instances)
      * @return Icon[]|null
      */
     public static function parseArray(?array $icons): ?array {
@@ -40,6 +40,9 @@ class Icon implements McpModel {
         return $result;
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $src = $data['src'] ?? '';
         $mimeType = $data['mimeType'] ?? null;

@@ -36,6 +36,9 @@ namespace Mcp\Types;
 class PromptArguments implements McpModel {
     use ExtraFieldsTrait;
 
+    /**
+     * @param array<string, string> $args
+     */
     public function __construct(array $args) {
         foreach ($args as $k => $v) {
             // Ensure $v is a string, per schema

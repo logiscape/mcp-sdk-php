@@ -36,6 +36,9 @@ class ModelHint implements McpModel {
         public ?string $name = null,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $name = $data['name'] ?? null;
         unset($data['name']);

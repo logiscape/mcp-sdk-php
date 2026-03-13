@@ -40,6 +40,9 @@ class TaskGetResult extends Result {
         );
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromResponseData(array $data): self {
         $meta = null;
         if (isset($data['_meta'])) {

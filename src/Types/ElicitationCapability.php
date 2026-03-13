@@ -15,6 +15,9 @@ class ElicitationCapability implements McpModel {
         public ?bool $url = null,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $form = isset($data['form']) ? true : null;
         $url = isset($data['url']) ? true : null;

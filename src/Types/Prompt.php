@@ -44,6 +44,9 @@ class Prompt implements McpModel {
         public ?array $icons = null,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $name = $data['name'] ?? '';
         $description = $data['description'] ?? null;

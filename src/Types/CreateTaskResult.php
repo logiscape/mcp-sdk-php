@@ -15,6 +15,9 @@ class CreateTaskResult extends Result {
         parent::__construct($_meta);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromResponseData(array $data): self {
         $meta = null;
         if (isset($data['_meta'])) {

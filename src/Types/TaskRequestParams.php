@@ -16,6 +16,9 @@ class TaskRequestParams implements McpModel {
         public ?int $ttl = null,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $ttl = isset($data['ttl']) ? (int)$data['ttl'] : null;
         unset($data['ttl']);

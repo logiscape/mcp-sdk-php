@@ -38,7 +38,7 @@ namespace Mcp\Types;
  */
 class CreateMessageResult extends Result {
     /**
-     * @param TextContent|ImageContent|AudioContent|ToolUseContent|array $content
+     * @param TextContent|ImageContent|AudioContent|ToolUseContent|array<int, TextContent|ImageContent|AudioContent|ToolUseContent> $content
      *        Single content block or array of content blocks.
      */
     public function __construct(
@@ -51,6 +51,9 @@ class CreateMessageResult extends Result {
         parent::__construct($_meta);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromResponseData(array $data): self {
         $meta = null;
         if (isset($data['_meta'])) {
@@ -87,6 +90,9 @@ class CreateMessageResult extends Result {
 
     /**
      * Parse content data which may be a single block or an array of blocks.
+     *
+     * @param array<array-key, mixed> $contentData
+     * @return TextContent|ImageContent|AudioContent|ToolUseContent|array<int, TextContent|ImageContent|AudioContent|ToolUseContent>
      */
     private static function parseContent(array $contentData): TextContent|ImageContent|AudioContent|ToolUseContent|array {
         // Array of content blocks (no 'type' key at the top level)
@@ -108,6 +114,9 @@ class CreateMessageResult extends Result {
         return self::parseSingleContent($contentData);
     }
 
+    /**
+     * @param array<string, mixed> $contentData
+     */
     private static function parseSingleContent(array $contentData): TextContent|ImageContent|AudioContent|ToolUseContent {
         return match($contentData['type']) {
             'text' => TextContent::fromArray($contentData),

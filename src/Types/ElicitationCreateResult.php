@@ -8,6 +8,9 @@ namespace Mcp\Types;
  * Client response to an elicitation/create request.
  */
 class ElicitationCreateResult extends Result {
+    /**
+     * @param array<string, mixed>|null $content
+     */
     public function __construct(
         public readonly string $action,
         public ?array $content = null,
@@ -16,6 +19,9 @@ class ElicitationCreateResult extends Result {
         parent::__construct($_meta);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromResponseData(array $data): self {
         $meta = null;
         if (isset($data['_meta'])) {

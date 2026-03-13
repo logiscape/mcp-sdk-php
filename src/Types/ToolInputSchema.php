@@ -48,6 +48,9 @@ class ToolInputSchema implements McpModel {
         public ?array $required = null,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $type = $data['type'] ?? '';
         if ($type !== 'object') {

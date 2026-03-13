@@ -47,6 +47,9 @@ class Implementation implements McpModel {
         public ?string $websiteUrl = null,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $name = $data['name'] ?? '';
         $version = $data['version'] ?? '';

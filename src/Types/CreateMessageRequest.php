@@ -34,6 +34,7 @@ namespace Mcp\Types;
 class CreateMessageRequest extends Request {
     /**
      * @param SamplingMessage[] $messages
+     * @param string[]|null $stopSequences
      * @param Tool[]|null $tools
      */
     public function __construct(

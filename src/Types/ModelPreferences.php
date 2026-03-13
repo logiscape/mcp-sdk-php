@@ -46,6 +46,9 @@ class ModelPreferences implements McpModel {
         $this->hints[] = $hint;
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $costPriority = $data['costPriority'] ?? null;
         $speedPriority = $data['speedPriority'] ?? null;

@@ -34,8 +34,8 @@ class Tool implements McpModel {
 
     /**
      * @param Icon[]|null $icons
-     * @param array|null $outputSchema JSON Schema for structured output
-     * @param array|null $execution Execution hints (e.g. taskSupport)
+     * @param array<string, mixed>|null $outputSchema JSON Schema for structured output
+     * @param array<string, mixed>|null $execution Execution hints (e.g. taskSupport)
      */
     public function __construct(
         public readonly string $name,
@@ -48,6 +48,9 @@ class Tool implements McpModel {
         public ?array $execution = null,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $name = $data['name'] ?? '';
         $description = $data['description'] ?? null;

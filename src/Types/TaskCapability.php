@@ -13,12 +13,18 @@ namespace Mcp\Types;
 class TaskCapability implements McpModel {
     use ExtraFieldsTrait;
 
+    /**
+     * @param array<string, mixed>|null $requests
+     */
     public function __construct(
         public ?bool $list = null,
         public ?bool $cancel = null,
         public ?array $requests = null,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $list = isset($data['list']) ? true : null;
         $cancel = isset($data['cancel']) ? true : null;
@@ -50,6 +56,9 @@ class TaskCapability implements McpModel {
 
     /**
      * Recursively serialize the requests structure, converting empty arrays to stdClass.
+     *
+     * @param array<string, mixed> $requests
+     * @return array<string, mixed>
      */
     private static function serializeRequests(array $requests): array {
         $result = [];

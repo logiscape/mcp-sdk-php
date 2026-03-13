@@ -41,6 +41,9 @@ class ImageContent extends Content {
         parent::__construct('image', $annotations);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $imgData = $data['data'] ?? '';
         $mimeType = $data['mimeType'] ?? '';

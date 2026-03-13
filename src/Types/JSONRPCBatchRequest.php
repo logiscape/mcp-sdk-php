@@ -34,6 +34,9 @@ class JSONRPCBatchRequest implements McpModel, \JsonSerializable {
     /** @var array<JSONRPCRequest|JSONRPCNotification> */
     public array $messages;
     
+    /**
+     * @param array<int, JSONRPCRequest|JSONRPCNotification> $messages
+     */
     public function __construct(array $messages) {
         $this->messages = $messages;
     }
@@ -45,6 +48,9 @@ class JSONRPCBatchRequest implements McpModel, \JsonSerializable {
         }
     }
 
+    /**
+     * @return array<int, mixed>
+     */
     public function jsonSerialize(): array {
         return array_map(fn($msg) => $msg->jsonSerialize(), $this->messages);
     }

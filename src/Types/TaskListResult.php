@@ -19,6 +19,9 @@ class TaskListResult extends PaginatedResult {
         parent::__construct($nextCursor, $_meta);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromResponseData(array $data): self {
         [$meta, $nextCursor, $data] = self::extractPaginatedBase($data);
 

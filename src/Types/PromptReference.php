@@ -40,6 +40,9 @@ class PromptReference implements McpModel {
         public readonly string $type = 'ref/prompt',
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $name = $data['name'] ?? '';
         $type = $data['type'] ?? 'ref/prompt';

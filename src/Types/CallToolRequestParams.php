@@ -35,6 +35,9 @@ namespace Mcp\Types;
 class CallToolRequestParams extends RequestParams {
     use ExtraFieldsTrait;
 
+    /**
+     * @param array<string, mixed>|null $arguments
+     */
     public function __construct(
         public readonly string $name,
         public readonly ?array $arguments = null,

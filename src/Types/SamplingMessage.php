@@ -45,7 +45,7 @@ class SamplingMessage implements McpModel {
 
     /**
      * @param Role $role
-     * @param TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent|array $content
+     * @param TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent|array<int, TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent> $content
      *        Single content block or array of content blocks.
      */
     public function __construct(

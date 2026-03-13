@@ -46,6 +46,9 @@ class ServerResourcesCapability implements McpModel {
         public readonly ?bool $subscribe = null,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $listChanged = $data['listChanged'] ?? null;
         $subscribe = $data['subscribe'] ?? null;

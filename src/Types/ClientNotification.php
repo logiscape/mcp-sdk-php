@@ -62,7 +62,7 @@ class ClientNotification implements McpModel {
      * Factory method to create a ClientNotification from method and params.
      *
      * @param string $method The notification method string (e.g., 'notifications/cancelled')
-     * @param array|null $params The notification parameters from the JSON-RPC message
+     * @param array<string, mixed>|null $params The notification parameters from the JSON-RPC message
      */
     public static function fromMethodAndParams(string $method, ?array $params): self {
         $params = $params ?? [];
@@ -77,6 +77,9 @@ class ClientNotification implements McpModel {
         };
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     private static function createCancelledNotification(array $params): self {
         if (!isset($params['requestId'])) {
             throw new \InvalidArgumentException('CancelledNotification requires "requestId"');
@@ -103,6 +106,9 @@ class ClientNotification implements McpModel {
         return new self($notification);
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     private static function createInitializedNotification(array $params): self {
         // No params expected
         $notification = new InitializedNotification();
@@ -115,6 +121,9 @@ class ClientNotification implements McpModel {
         return new self($notification);
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     private static function createProgressNotification(array $params): self {
         // progressToken: string|number (required)
         if (!isset($params['progressToken'])) {
@@ -160,6 +169,9 @@ class ClientNotification implements McpModel {
         return new self(new ProgressNotification($progressParams));
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     private static function createRootsListChangedNotification(array $params): self {
         $notification = new RootsListChangedNotification();
         foreach ($params as $k => $v) {
@@ -168,6 +180,9 @@ class ClientNotification implements McpModel {
         return new self($notification);
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     private static function createElicitationCompleteNotification(array $params): self {
         if (empty($params['elicitationId'])) {
             throw new \InvalidArgumentException('ElicitationCompleteNotification requires "elicitationId"');

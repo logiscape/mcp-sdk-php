@@ -41,6 +41,9 @@ class AudioContent extends Content {
         parent::__construct('audio', $annotations);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $audioData = $data['data'] ?? '';
         $mimeType = $data['mimeType'] ?? '';

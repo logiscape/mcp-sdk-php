@@ -14,6 +14,9 @@ class ToolChoice implements McpModel {
         public readonly string $mode,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $mode = $data['mode'] ?? 'auto';
         unset($data['mode']);

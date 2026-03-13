@@ -40,6 +40,9 @@ namespace Mcp\Types;
 class ToolInputProperties implements McpModel, \IteratorAggregate {
     use ExtraFieldsTrait;
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $obj = new self();
         // All fields are arbitrary, so store them in extraFields

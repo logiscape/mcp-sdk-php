@@ -65,8 +65,8 @@ class PaginatedResult extends Result {
      * and returns them along with the leftover $data. Subclasses can call this method
      * to build their `fromResponseData()` methods without duplicating code.
      *
-     * @param array $data The raw result data from the response.
-     * @return array{0: Meta|null, 1: string|null, 2: array} [$_meta, $nextCursor, $dataWithoutMetaAndCursor]
+     * @param array<string, mixed> $data The raw result data from the response.
+     * @return array{0: Meta|null, 1: string|null, 2: array<string, mixed>} [$_meta, $nextCursor, $dataWithoutMetaAndCursor]
      */
     protected static function extractPaginatedBase(array $data): array {
         $meta = null;

@@ -36,6 +36,9 @@ namespace Mcp\Types;
 class ServerLoggingCapability implements McpModel {
     use ExtraFieldsTrait;
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $obj = new self();
         foreach ($data as $k => $v) {

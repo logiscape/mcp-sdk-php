@@ -37,6 +37,9 @@ class Root implements McpModel {
         public ?string $name = null,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $uri = $data['uri'] ?? '';
         $name = $data['name'] ?? null;

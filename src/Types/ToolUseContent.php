@@ -8,6 +8,9 @@ namespace Mcp\Types;
  * Tool use content in sampling messages.
  */
 class ToolUseContent extends Content {
+    /**
+     * @param array<string, mixed> $input
+     */
     public function __construct(
         public readonly string $id,
         public readonly string $name,
@@ -17,6 +20,9 @@ class ToolUseContent extends Content {
         parent::__construct('tool_use', $annotations);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $id = $data['id'] ?? '';
         $name = $data['name'] ?? '';

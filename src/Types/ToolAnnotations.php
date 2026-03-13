@@ -43,6 +43,9 @@ class ToolAnnotations implements McpModel {
         public ?bool $openWorldHint = null,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $title = $data['title'] ?? null;
         $readOnlyHint = isset($data['readOnlyHint']) ? (bool)$data['readOnlyHint'] : null;

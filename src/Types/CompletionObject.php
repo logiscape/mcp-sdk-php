@@ -50,6 +50,9 @@ class CompletionObject implements McpModel {
         public ?bool $hasMore = null,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $values = $data['values'] ?? [];
         $total = $data['total'] ?? null;

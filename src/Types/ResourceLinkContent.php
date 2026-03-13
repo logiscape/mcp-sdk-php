@@ -18,6 +18,9 @@ class ResourceLinkContent extends Content {
         parent::__construct('resource_link', $annotations);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $uri = $data['uri'] ?? '';
         $name = $data['name'] ?? null;

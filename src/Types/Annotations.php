@@ -45,6 +45,9 @@ class Annotations implements McpModel {
         public ?string $lastModified = null,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $audienceData = $data['audience'] ?? null;
         $priority = $data['priority'] ?? null;

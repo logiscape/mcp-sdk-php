@@ -40,6 +40,9 @@ class ResourceReference implements McpModel {
         public readonly string $type = 'ref/resource',
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $uri = $data['uri'] ?? '';
         $type = $data['type'] ?? 'ref/resource';

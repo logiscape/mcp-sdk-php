@@ -55,6 +55,9 @@ class ServerCapabilities extends Capabilities {
         parent::__construct($experimental);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         // Handle experimental from parent class
         $experimental = self::parseExperimental($data);

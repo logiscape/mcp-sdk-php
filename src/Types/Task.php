@@ -20,6 +20,9 @@ class Task implements McpModel {
         public ?int $pollInterval = null,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $taskId = $data['taskId'] ?? '';
         $status = $data['status'] ?? '';

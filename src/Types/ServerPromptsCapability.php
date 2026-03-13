@@ -44,6 +44,9 @@ class ServerPromptsCapability implements McpModel {
         public readonly ?bool $listChanged = null,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $listChanged = $data['listChanged'] ?? null;
         unset($data['listChanged']);

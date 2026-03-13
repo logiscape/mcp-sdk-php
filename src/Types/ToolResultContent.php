@@ -20,6 +20,9 @@ class ToolResultContent extends Content {
         parent::__construct('tool_result', $annotations);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $toolUseId = $data['toolUseId'] ?? '';
         $isError = isset($data['isError']) ? (bool)$data['isError'] : null;

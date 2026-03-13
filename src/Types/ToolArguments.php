@@ -36,6 +36,9 @@ namespace Mcp\Types;
 class ToolArguments implements McpModel {
     use ExtraFieldsTrait;
 
+    /**
+     * @param array<string, mixed> $args
+     */
     public function __construct(array $args = []) {
         foreach ($args as $k => $v) {
             $this->$k = $v;

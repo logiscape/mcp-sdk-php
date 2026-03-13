@@ -41,6 +41,9 @@ class BlobResourceContents extends ResourceContents {
         parent::__construct($uri, $mimeType);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $uri = $data['uri'] ?? '';
         $mimeType = $data['mimeType'] ?? null;

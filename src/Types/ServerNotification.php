@@ -68,7 +68,7 @@ class ServerNotification implements McpModel {
      * Factory method to create a ServerNotification from method and params.
      *
      * @param string $method The notification method (e.g., 'notifications/cancelled')
-     * @param array|null $params The notification parameters
+     * @param array<string, mixed>|null $params The notification parameters
      */
     public static function fromMethodAndParams(string $method, ?array $params): self {
         $params = $params ?? [];
@@ -86,6 +86,9 @@ class ServerNotification implements McpModel {
         };
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     private static function createCancelledNotification(array $params): self {
         if (!isset($params['requestId'])) {
             throw new \InvalidArgumentException('CancelledNotification requires "requestId"');
@@ -105,6 +108,9 @@ class ServerNotification implements McpModel {
         return new self($notification);
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     private static function createProgressNotification(array $params): self {
         if (!isset($params['progressToken'])) {
             throw new \InvalidArgumentException('ProgressNotification requires "progressToken"');
@@ -133,6 +139,9 @@ class ServerNotification implements McpModel {
         return new self(new ProgressNotification($progressParams));
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     private static function createResourceListChangedNotification(array $params): self {
         // No required params
         $notification = new ResourceListChangedNotification();
@@ -142,6 +151,9 @@ class ServerNotification implements McpModel {
         return new self($notification);
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     private static function createResourceUpdatedNotification(array $params): self {
         if (!isset($params['uri'])) {
             throw new \InvalidArgumentException('ResourceUpdatedNotification requires "uri"');
@@ -163,6 +175,9 @@ class ServerNotification implements McpModel {
         return new self($notification);
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     private static function createPromptListChangedNotification(array $params): self {
         $notification = new PromptListChangedNotification();
         foreach ($params as $k => $v) {
@@ -171,6 +186,9 @@ class ServerNotification implements McpModel {
         return new self($notification);
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     private static function createToolListChangedNotification(array $params): self {
         $notification = new ToolListChangedNotification();
         foreach ($params as $k => $v) {
@@ -179,6 +197,9 @@ class ServerNotification implements McpModel {
         return new self($notification);
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     private static function createLoggingMessageNotification(array $params): self {
         if (!isset($params['level'])) {
             throw new \InvalidArgumentException('LoggingMessageNotification requires "level"');
@@ -207,6 +228,9 @@ class ServerNotification implements McpModel {
         return new self(new LoggingMessageNotification($loggingParams));
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     private static function createTaskStatusNotification(array $params): self {
         $notifParams = new NotificationParams();
         foreach ($params as $k => $v) {

@@ -44,6 +44,9 @@ class PromptMessage implements McpModel {
         public readonly TextContent|ImageContent|AudioContent|EmbeddedResource $content,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $roleStr = $data['role'] ?? '';
         $role = Role::tryFrom($roleStr);

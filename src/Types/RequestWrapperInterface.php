@@ -38,5 +38,8 @@ namespace Mcp\Types;
 interface RequestWrapperInterface extends McpModel {
     public function getRequest(): Request;
 
+    /**
+     * @param array<string, mixed>|null $params
+     */
     public static function fromMethodAndParams(string $method, ?array $params): static;
 }

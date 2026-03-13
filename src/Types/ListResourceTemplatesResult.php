@@ -57,6 +57,9 @@ class ListResourceTemplatesResult extends PaginatedResult {
         return $data;
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromResponseData(array $data): self {
         [$meta, $nextCursor, $data] = self::extractPaginatedBase($data);
 

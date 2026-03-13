@@ -40,6 +40,9 @@ class TextContent extends Content {
         parent::__construct('text', $annotations);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $text = $data['text'] ?? '';
         unset($data['text']);

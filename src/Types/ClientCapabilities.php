@@ -51,6 +51,9 @@ class ClientCapabilities extends Capabilities {
         parent::__construct($experimental);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $experimental = self::parseExperimental($data);
 

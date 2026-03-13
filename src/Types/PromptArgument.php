@@ -38,6 +38,9 @@ class PromptArgument implements McpModel {
         public bool $required = false,
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $name = $data['name'] ?? '';
         $description = $data['description'] ?? null;

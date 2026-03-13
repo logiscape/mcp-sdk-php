@@ -40,6 +40,9 @@ class InitializeResult extends Result {
         parent::__construct($_meta);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromResponseData(array $data): self {
         // Extract _meta
         $meta = null;

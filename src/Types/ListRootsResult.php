@@ -56,6 +56,9 @@ class ListRootsResult extends Result {
         return $data;
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromResponseData(array $data): self {
         $meta = null;
         if (isset($data['_meta'])) {
