@@ -83,6 +83,8 @@ class StreamableHttpTransport
 
     /**
      * Queue of pending SSE messages
+     *
+     * @var array<int, JsonRpcMessage>
      */
     private array $pendingMessages = [];
 
@@ -234,7 +236,7 @@ class StreamableHttpTransport
      * Sends a JSON-RPC message to the server via HTTP POST.
      *
      * @param JsonRpcMessage $message The message to send
-     * @return array The response data [statusCode, headers, body]
+     * @return array{statusCode: int, headers: array<string, string>, body: string} The response data
      *
      * @throws RuntimeException If the request fails
      */
@@ -251,7 +253,7 @@ class StreamableHttpTransport
      *
      * @param JsonRpcMessage $message The message to send
      * @param int $attempt Current attempt number
-     * @return array The response data
+     * @return array{statusCode: int, headers: array<string, string>, body: string} The response data
      */
     private function sendMessageWithOAuthRetry(JsonRpcMessage $message, int $attempt): array
     {
@@ -489,7 +491,7 @@ class StreamableHttpTransport
      * Parse WWW-Authenticate header.
      *
      * @param string $header The WWW-Authenticate header value
-     * @return array Parsed header values
+     * @return array<string, string|null> Parsed header values
      */
     private function parseWwwAuthenticate(string $header): array
     {
@@ -500,9 +502,9 @@ class StreamableHttpTransport
      * Process an SSE response to a JSON-RPC message.
      *
      * @param string $initialBody Initial chunk of the SSE stream
-     * @param array $headers HTTP response headers
+     * @param array<string, string> $headers HTTP response headers
      * @param int $statusCode HTTP status code
-     * @return array Processed response data
+     * @return array{statusCode: int, headers: array<string, string>, body: string, isEventStream: bool} Processed response data
      */
     private function processSseResponse(string $initialBody, array $headers, int $statusCode): array
     {
@@ -630,8 +632,8 @@ class StreamableHttpTransport
      * Prepares HTTP headers for a request, merging defaults with the
      * configuration headers and session headers.
      *
-     * @param array $additionalHeaders Additional headers to include
-     * @return array Complete set of headers for the request
+     * @param array<string, string> $additionalHeaders Additional headers to include
+     * @return array<int, string> Complete set of cURL-format headers ("Name: Value")
      */
     private function prepareRequestHeaders(array $additionalHeaders = []): array
     {
@@ -668,7 +670,7 @@ class StreamableHttpTransport
      * Configures a cURL handle with common options.
      *
      * @param CurlHandle $ch The cURL handle to configure
-     * @param array $headers HTTP headers to set
+     * @param array<int, string> $headers HTTP headers in cURL format ("Name: Value")
      */
     private function configureCurlHandle($ch, array $headers): void
     {
