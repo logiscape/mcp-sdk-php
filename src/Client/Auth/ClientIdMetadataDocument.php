@@ -42,6 +42,9 @@ class ClientIdMetadataDocument
         public ?string $tokenEndpointAuthMethod = 'none',
     ) {}
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         return new self(
             clientId: $data['client_id'] ?? '',
@@ -59,6 +62,9 @@ class ClientIdMetadataDocument
         );
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     public function toArray(): array {
         $data = [
             'client_id' => $this->clientId,

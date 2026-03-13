@@ -63,7 +63,7 @@ class DynamicClientRegistration
      * Register a new client with the authorization server.
      *
      * @param AuthorizationServerMetadata $as The authorization server metadata
-     * @param array $metadata Client metadata to register
+     * @param array<string, mixed> $metadata Client metadata to register
      * @return ClientCredentials The registered client credentials
      * @throws OAuthException If registration fails
      */
@@ -158,9 +158,9 @@ class DynamicClientRegistration
      * Build client metadata for registration.
      *
      * @param string $clientName The client name
-     * @param array $redirectUris The redirect URIs
-     * @param array $additionalMetadata Additional metadata fields
-     * @return array The complete metadata for registration
+     * @param array<int, string> $redirectUris The redirect URIs
+     * @param array<string, mixed> $additionalMetadata Additional metadata fields
+     * @return array<string, mixed> The complete metadata for registration
      */
     public static function buildMetadata(
         string $clientName,

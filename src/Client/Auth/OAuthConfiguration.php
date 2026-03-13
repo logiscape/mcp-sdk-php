@@ -51,7 +51,7 @@ class OAuthConfiguration
      * @param bool $enableCimd Enable Client ID Metadata Document support
      * @param bool $enableDynamicRegistration Enable Dynamic Client Registration
      * @param string|null $cimdUrl URL for Client ID Metadata Document
-     * @param array $additionalScopes Extra scopes to request
+     * @param array<int, string> $additionalScopes Extra scopes to request
      * @param float $timeout HTTP timeout for OAuth requests (seconds)
      * @param bool $autoRefresh Automatically refresh expiring tokens
      * @param int $refreshBuffer Seconds before expiry to trigger refresh
@@ -137,6 +137,8 @@ class OAuthConfiguration
 
     /**
      * Get additional scopes to request.
+     *
+     * @return array<int, string>
      */
     public function getAdditionalScopes(): array
     {

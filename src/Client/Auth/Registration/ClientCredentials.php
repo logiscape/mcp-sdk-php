@@ -66,7 +66,7 @@ class ClientCredentials
     /**
      * Get the parameters to add to a token request for authentication.
      *
-     * @return array The authentication parameters
+     * @return array<string, string> The authentication parameters
      */
     public function getTokenRequestParams(): array
     {

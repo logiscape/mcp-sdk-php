@@ -46,12 +46,12 @@ class AuthorizationServerMetadata
      * @param string $authorizationEndpoint The authorization endpoint URL
      * @param string $tokenEndpoint The token endpoint URL
      * @param string|null $registrationEndpoint Dynamic client registration endpoint
-     * @param array $codeChallengeMethodsSupported Supported PKCE code challenge methods
+     * @param array<int, string> $codeChallengeMethodsSupported Supported PKCE code challenge methods
      * @param bool $clientIdMetadataDocumentSupported Whether CIMD is supported
-     * @param array $responseTypesSupported Supported OAuth response types
-     * @param array $grantTypesSupported Supported OAuth grant types
-     * @param array $tokenEndpointAuthMethodsSupported Supported token endpoint auth methods
-     * @param array|null $scopesSupported Supported scopes
+     * @param array<int, string> $responseTypesSupported Supported OAuth response types
+     * @param array<int, string> $grantTypesSupported Supported OAuth grant types
+     * @param array<int, string> $tokenEndpointAuthMethodsSupported Supported token endpoint auth methods
+     * @param array<int, string>|null $scopesSupported Supported scopes
      * @param string|null $revocationEndpoint Token revocation endpoint
      * @param string|null $introspectionEndpoint Token introspection endpoint
      */
@@ -138,7 +138,7 @@ class AuthorizationServerMetadata
     /**
      * Create from an array (typically from JSON response).
      *
-     * @param array $data The metadata array
+     * @param array<string, mixed> $data The metadata array
      * @return self
      */
     public static function fromArray(array $data): self
@@ -162,7 +162,7 @@ class AuthorizationServerMetadata
     /**
      * Convert to array.
      *
-     * @return array
+     * @return array<string, mixed>
      */
     public function toArray(): array
     {

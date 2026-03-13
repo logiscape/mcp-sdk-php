@@ -41,14 +41,14 @@ class ClientIdMetadataDocument
     /**
      * @param string $clientIdUrl HTTPS URL serving as the client_id
      * @param string $clientName Human-readable client name
-     * @param array $redirectUris Allowed redirect URIs
+     * @param array<int, string> $redirectUris Allowed redirect URIs
      * @param string|null $clientUri URL of the client home page
      * @param string|null $logoUri URL of the client logo
-     * @param array $contacts Contact emails for the client
+     * @param array<int, string> $contacts Contact emails for the client
      * @param string|null $tosUri URL of the terms of service
      * @param string|null $policyUri URL of the privacy policy
-     * @param array $grantTypes Allowed grant types
-     * @param array $responseTypes Allowed response types
+     * @param array<int, string> $grantTypes Allowed grant types
+     * @param array<int, string> $responseTypes Allowed response types
      * @param string $tokenEndpointAuthMethod Token endpoint auth method
      * @param string|null $softwareId Software identifier
      * @param string|null $softwareVersion Software version
@@ -102,7 +102,7 @@ class ClientIdMetadataDocument
      *
      * This is what should be served at the clientIdUrl.
      *
-     * @return array
+     * @return array<string, mixed>
      */
     public function toArray(): array
     {
@@ -159,7 +159,7 @@ class ClientIdMetadataDocument
     /**
      * Create from an array (e.g., from fetched metadata).
      *
-     * @param array $data The metadata array
+     * @param array<string, mixed> $data The metadata array
      * @return self
      */
     public static function fromArray(array $data): self

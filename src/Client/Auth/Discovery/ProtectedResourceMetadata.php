@@ -37,9 +37,9 @@ class ProtectedResourceMetadata
 {
     /**
      * @param string $resource The protected resource identifier
-     * @param array $authorizationServers List of authorization server URLs
-     * @param array|null $scopesSupported Supported scopes (null means unknown)
-     * @param array|null $bearerMethodsSupported Supported bearer token methods
+     * @param array<int, string> $authorizationServers List of authorization server URLs
+     * @param array<int, string>|null $scopesSupported Supported scopes (null means unknown)
+     * @param array<int, string>|null $bearerMethodsSupported Supported bearer token methods
      * @param string|null $resourceDocumentation URL of documentation
      * @param string|null $resourceSigningAlgValuesSupported Signing algorithms supported
      */
@@ -68,7 +68,7 @@ class ProtectedResourceMetadata
      *
      * If scopes_supported is not defined, returns true (unknown means allow).
      *
-     * @param array $scopes The scopes to check
+     * @param array<int, string> $scopes The scopes to check
      * @return bool True if all scopes are supported or unknown
      */
     public function supportsScopes(array $scopes): bool
@@ -89,7 +89,7 @@ class ProtectedResourceMetadata
     /**
      * Create from an array (typically from JSON response).
      *
-     * @param array $data The metadata array
+     * @param array<string, mixed> $data The metadata array
      * @return self
      */
     public static function fromArray(array $data): self
@@ -107,7 +107,7 @@ class ProtectedResourceMetadata
     /**
      * Convert to array.
      *
-     * @return array
+     * @return array<string, mixed>
      */
     public function toArray(): array
     {
