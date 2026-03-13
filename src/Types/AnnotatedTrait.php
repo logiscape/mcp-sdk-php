@@ -38,6 +38,9 @@ trait AnnotatedTrait {
         $this->annotations = $annotations;
     }
 
+    /**
+     * @return array<string, Annotations>
+     */
     protected function annotationsToJson(): array {
         return $this->annotations !== null ? ['annotations' => $this->annotations] : [];
     }

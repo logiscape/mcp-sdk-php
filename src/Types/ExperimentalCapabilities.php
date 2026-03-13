@@ -32,6 +32,9 @@ namespace Mcp\Types;
 /**
  * Represents the `experimental` object in capabilities.
  * This is an open object: { [key: string]: object }, so we just allow arbitrary fields.
+ *
+ * @implements \IteratorAggregate<string, mixed>
+ * @implements \ArrayAccess<string, mixed>
  */
 class ExperimentalCapabilities implements McpModel, \IteratorAggregate, \ArrayAccess {
     use ExtraFieldsTrait;
@@ -62,6 +65,9 @@ class ExperimentalCapabilities implements McpModel, \IteratorAggregate, \ArrayAc
         unset($this->extraFields[$offset]);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self {
         $obj = new self();
         // All fields go to extraFields
