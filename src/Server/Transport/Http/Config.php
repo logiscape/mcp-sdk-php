@@ -39,7 +39,7 @@ class Config
     /**
      * Default configuration options.
      *
-     * @var array
+     * @var array<string, mixed>
      */
     private array $options = [
         'session_timeout' => 3600,     // 1 hour default
@@ -61,7 +61,7 @@ class Config
     /**
      * Constructor.
      *
-     * @param array $customOptions Custom configuration options
+     * @param array<string, mixed> $customOptions Custom configuration options
      */
     public function __construct(array $customOptions = [])
     {
@@ -83,7 +83,7 @@ class Config
     /**
      * Validate OAuth configuration
      * 
-     * @param array $options Configuration options
+     * @param array<string, mixed> $options Configuration options
      * @return void
      * @throws \InvalidArgumentException If configuration is invalid
      */
@@ -140,7 +140,7 @@ class Config
     /**
      * Get all configuration options.
      *
-     * @return array All configuration options
+     * @return array<string, mixed> All configuration options
      */
     public function all(): array
     {

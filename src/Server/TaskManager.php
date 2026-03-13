@@ -171,6 +171,9 @@ class TaskManager
         }
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     private function isExpired(array $data): bool {
         if (!isset($data['ttl'], $data['createdAt'])) {
             return false;
@@ -181,6 +184,9 @@ class TaskManager
         return $createdAt !== false && (time() - $createdAt) > $ttlSeconds;
     }
 
+    /**
+     * @return array<string, mixed>|null
+     */
     private function readTaskData(string $taskId): ?array {
         $content = @file_get_contents($this->taskFile($taskId));
         if ($content === false) {

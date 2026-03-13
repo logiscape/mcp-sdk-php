@@ -231,7 +231,7 @@ class HttpSession
     /**
      * Get session information as an array.
      *
-     * @return array Session information
+     * @return array<string, mixed> Session information
      */
     public function toArray(): array
     {
@@ -247,7 +247,7 @@ class HttpSession
     /**
      * Create a new session from an array.
      *
-     * @param array $data Session data
+     * @param array<string, mixed> $data Session data
      * @return self New session instance
      */
     public static function fromArray(array $data): self

@@ -245,7 +245,7 @@ class HttpMessage
     /**
      * Convert to an array representation.
      *
-     * @return array Message representation
+     * @return array<string, mixed> Message representation
      */
     public function toArray(): array
     {

@@ -81,7 +81,7 @@ class StandardPhpAdapter
      * Create a StandardPhpAdapter from globals.
      *
      * @param Server $server MCP server instance
-     * @param array $options HTTP transport options
+     * @param array<string, mixed> $options HTTP transport options
      * @return self New adapter instance
      */
     public static function createFromGlobals(Server $server, array $options = []): self

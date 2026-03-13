@@ -124,7 +124,7 @@ class HttpServerTransport implements Transport
     /**
      * Constructor.
      *
-     * @param array $options Configuration options
+     * @param array<string, mixed> $options Configuration options
      */
     public function __construct(array $options = [], ?SessionStoreInterface $sessionStore = null, ?TokenValidatorInterface $validator = null)
     {
@@ -466,7 +466,7 @@ class HttpServerTransport implements Transport
     /**
      * Process a batch request.
      *
-     * @param array $data Batch request data
+     * @param array<int, mixed> $data Batch request data
      * @param HttpSession $session Session
      * @return bool True if the batch contains requests
      * @throws \InvalidArgumentException If the data is invalid.
@@ -502,7 +502,7 @@ class HttpServerTransport implements Transport
     /**
      * Process a single JSON-RPC message.
      *
-     * @param array $data Message data
+     * @param array<string, mixed> $data Message data
      * @param HttpSession $session Session
      * @return bool True if the message is a request
      * @throws \InvalidArgumentException If the data is invalid.
@@ -557,7 +557,7 @@ class HttpServerTransport implements Transport
     /**
      * Create a JSON-RPC request message.
      *
-     * @param array $data Request data
+     * @param array<string, mixed> $data Request data
      * @return JsonRpcMessage Request message
      */
     private function createRequestMessage(array $data): JsonRpcMessage
@@ -581,7 +581,7 @@ class HttpServerTransport implements Transport
     /**
      * Create a JSON-RPC notification message.
      *
-     * @param array $data Notification data
+     * @param array<string, mixed> $data Notification data
      * @return JsonRpcMessage Notification message
      */
     private function createNotificationMessage(array $data): JsonRpcMessage
@@ -603,7 +603,7 @@ class HttpServerTransport implements Transport
     /**
      * Create a JSON-RPC response message.
      *
-     * @param array $data Response data
+     * @param array<string, mixed> $data Response data
      * @return JsonRpcMessage Response message
      */
     private function createResponseMessage(array $data): JsonRpcMessage
@@ -640,7 +640,7 @@ class HttpServerTransport implements Transport
     /**
      * Create a JSON-RPC error message.
      *
-     * @param array $data Error data
+     * @param array<string, mixed> $data Error data
      * @return JsonRpcMessage Error message
      */
     private function createErrorMessage(array $data): JsonRpcMessage
@@ -666,7 +666,7 @@ class HttpServerTransport implements Transport
     /**
      * Create request parameters from an array.
      *
-     * @param array $params Parameters array
+     * @param array<string, mixed> $params Parameters array
      * @return \Mcp\Types\RequestParams Request parameters
      */
     private function createRequestParams(array $params): \Mcp\Types\RequestParams
@@ -695,7 +695,7 @@ class HttpServerTransport implements Transport
     /**
      * Create notification parameters from an array.
      *
-     * @param array $params Parameters array
+     * @param array<string, mixed> $params Parameters array
      * @return \Mcp\Types\NotificationParams Notification parameters
      */
     private function createNotificationParams(array $params): \Mcp\Types\NotificationParams
@@ -754,6 +754,8 @@ class HttpServerTransport implements Transport
 
     /**
      * Generate OAuth protected resource metadata for this server.
+     *
+     * @return array<string, mixed>
      */
     private function getProtectedResourceMetadata(): array
     {
@@ -978,7 +980,7 @@ class HttpServerTransport implements Transport
     /**
      * Determine if an array is an indexed array (not associative).
      *
-     * @param array $array Array to check
+     * @param array<mixed> $array Array to check
      * @return bool True if the array is indexed
      */
     private function isIndexedArray(array $array): bool
@@ -1034,7 +1036,7 @@ class HttpServerTransport implements Transport
     /**
      * Check if a message is an initialize message.
      *
-     * @param array $message Message data
+     * @param array<string, mixed> $message Message data
      * @return bool True if the message is an initialize message
      */
     private function isInitializeMessage(array $message): bool

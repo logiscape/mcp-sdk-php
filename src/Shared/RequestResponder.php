@@ -48,7 +48,7 @@ class RequestResponder {
 
     /**
      * @param RequestId $requestId The ID of the request being handled.
-     * @param array $params The request parameters.
+     * @param array<string, mixed> $params The request parameters.
      * @param RequestWrapperInterface $request The typed request object.
      * @param BaseSession $session The session handling communication.
      */

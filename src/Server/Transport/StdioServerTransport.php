@@ -180,6 +180,8 @@ class StdioServerTransport implements Transport {
 
     /**
      * Determine if an array's keys are 0..n-1 (i.e. a list).
+     *
+     * @param array<mixed> $data
      */
     private function isListArray(array $data): bool {
         // If you're on PHP 8.1+, you can simply do: return array_is_list($data);
@@ -190,7 +192,7 @@ class StdioServerTransport implements Transport {
      * Convert a JSON array of objects (batch) into a single JsonRpcMessage
      * containing a JSONRPCBatchRequest or JSONRPCBatchResponse.
      *
-     * @param array $batchData - An indexed array of JSON-RPC sub-messages.
+     * @param array<int, mixed> $batchData - An indexed array of JSON-RPC sub-messages.
      *
      * @throws McpError on invalid sub-message
      */
@@ -234,7 +236,7 @@ class StdioServerTransport implements Transport {
     /**
      * Parse one single JSON‐RPC message object into the appropriate subtype.
      *
-     * @param array $data Decoded JSON object.
+     * @param array<string, mixed> $data Decoded JSON object.
      */
     private function instantiateSingleMessage(array $data): JsonRpcMessage {
         // Must have "jsonrpc": "2.0"
@@ -297,6 +299,8 @@ class StdioServerTransport implements Transport {
 
     /**
      * Build a JSONRPCError object from decoded data.
+     *
+     * @param array<string, mixed> $data
      */
     private function buildErrorMessage(array $data, ?RequestId $id): JSONRPCError {
         $errorData = $data['error'];
@@ -324,6 +328,8 @@ class StdioServerTransport implements Transport {
 
     /**
      * Build a JSONRPCRequest object from decoded data.
+     *
+     * @param array<string, mixed> $data
      */
     private function buildRequestMessage(array $data, ?RequestId $id): JSONRPCRequest {
         $method = $data['method'];
@@ -343,6 +349,8 @@ class StdioServerTransport implements Transport {
 
     /**
      * Build a JSONRPCNotification object from decoded data.
+     *
+     * @param array<string, mixed> $data
      */
     private function buildNotificationMessage(array $data): JSONRPCNotification {
         $method = $data['method'];
@@ -361,6 +369,8 @@ class StdioServerTransport implements Transport {
 
     /**
      * Build a JSONRPCResponse object from decoded data.
+     *
+     * @param array<string, mixed> $data
      */
     private function buildResponseMessage(array $data, ?RequestId $id): JSONRPCResponse {
         // E.g. you do a "generic" mapping to a simple Result object
@@ -455,7 +465,7 @@ class StdioServerTransport implements Transport {
     /**
      * Parses request parameters from an associative array.
      *
-     * @param array $params The parameters array from the JSON-RPC request.
+     * @param array<string, mixed> $params The parameters array from the JSON-RPC request.
      *
      * @return RequestParams The parsed RequestParams object.
      */
@@ -478,7 +488,7 @@ class StdioServerTransport implements Transport {
     /**
      * Parses notification parameters from an associative array.
      *
-     * @param array $params The parameters array from the JSON-RPC notification.
+     * @param array<string, mixed> $params The parameters array from the JSON-RPC notification.
      *
      * @return NotificationParams The parsed NotificationParams object.
      */
@@ -501,7 +511,7 @@ class StdioServerTransport implements Transport {
     /**
      * Helper method to create a Meta object from an associative array.
      *
-     * @param array $metaArr The meta information array.
+     * @param array<string, mixed> $metaArr The meta information array.
      *
      * @return \Mcp\Types\Meta The constructed Meta object.
      */

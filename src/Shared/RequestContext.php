@@ -43,7 +43,7 @@ class RequestContext {
 
     /**
      * @param RequestId $requestId The unique ID of the request.
-     * @param array $params The request parameters (including optional '_meta').
+     * @param array<string, mixed> $params The request parameters (including optional '_meta').
      * @param BaseSession $session The active session.
      */
     public function __construct(
@@ -58,6 +58,9 @@ class RequestContext {
         return $this->requestId;
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     public function getParams(): array {
         return $this->params;
     }
