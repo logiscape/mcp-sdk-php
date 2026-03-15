@@ -62,7 +62,7 @@ class Environment
         }
         
         // Check for suPHP or other restrictive environments
-        if (strpos(php_sapi_name() ?? '', 'cgi') !== false) {
+        if (strpos(php_sapi_name() ?: '', 'cgi') !== false) {
             return true;
         }
         
@@ -130,7 +130,7 @@ class Environment
         }
         
         // Check for important functions that might be disabled
-        $disabledFunctions = explode(',', ini_get('disable_functions'));
+        $disabledFunctions = explode(',', ini_get('disable_functions') ?: '');
         $requiredFunctions = ['set_time_limit', 'ignore_user_abort', 'flush'];
         
         foreach ($requiredFunctions as $function) {
@@ -145,7 +145,7 @@ class Environment
     /**
      * Get recommended configuration based on the detected environment.
      *
-     * @return array Recommended configuration options
+     * @return array{session_timeout: int, enable_sse: bool, max_queue_size: int} Recommended configuration options
      */
     public static function getRecommendedConfig(): array
     {

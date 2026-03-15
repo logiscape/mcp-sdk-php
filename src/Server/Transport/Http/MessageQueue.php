@@ -148,11 +148,9 @@ class MessageQueue
         if ($innerMessage instanceof JSONRPCBatchResponse) {
             // For batch responses, track each message ID
             foreach ($innerMessage->messages as $subMessage) {
-                if ($subMessage instanceof JSONRPCResponse || $subMessage instanceof JSONRPCError) {
-                    $requestId = $subMessage->id;
-                    $requestIdValue = $requestId->getValue();
-                    $this->messageIdToSession[$requestIdValue] = $sessionId;
-                }
+                $requestId = $subMessage->id;
+                $requestIdValue = $requestId->getValue();
+                $this->messageIdToSession[$requestIdValue] = $sessionId;
             }
         } elseif ($innerMessage instanceof JSONRPCRequest) {
             // For individual requests, track the message ID

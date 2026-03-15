@@ -36,8 +36,8 @@ namespace Mcp\Types;
  */
 class CallToolResult extends Result {
     /**
-     * @param (TextContent|ImageContent|AudioContent|EmbeddedResource|ResourceLinkContent)[] $content
-     * @param array|null $structuredContent Structured output matching the tool's outputSchema
+     * @param mixed[] $content Validated by validate() to contain TextContent|ImageContent|AudioContent|EmbeddedResource|ResourceLinkContent
+     * @param array<mixed>|null $structuredContent Structured output matching the tool's outputSchema
      */
     public function __construct(
         public readonly array $content,
@@ -48,10 +48,14 @@ class CallToolResult extends Result {
         parent::__construct($_meta);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromResponseData(array $data): self {
         // _meta
         $meta = null;
         if (isset($data['_meta'])) {
+            /** @var array<string, mixed> $metaData */
             $metaData = $data['_meta'];
             unset($data['_meta']);
             $meta = new Meta();
@@ -60,8 +64,10 @@ class CallToolResult extends Result {
             }
         }
 
+        /** @var list<mixed> $contentData */
         $contentData = $data['content'] ?? [];
         $isError = $data['isError'] ?? false;
+        /** @var array<mixed>|null $structuredContent */
         $structuredContent = $data['structuredContent'] ?? null;
         unset($data['content'], $data['isError'], $data['structuredContent']);
 
@@ -82,6 +88,7 @@ class CallToolResult extends Result {
             };
         }
 
+        /** @var (TextContent|ImageContent|AudioContent|EmbeddedResource|ResourceLinkContent)[] $content */
         $obj = new self($content, (bool)$isError, $meta, $structuredContent);
 
         // Extra fields

@@ -31,7 +31,7 @@ namespace Mcp\Types;
 
 class ReadResourceResult extends Result {
     /**
-     * @param (TextResourceContents|BlobResourceContents)[] $contents
+     * @param mixed[] $contents Validated by validate() to contain TextResourceContents|BlobResourceContents
      */
     public function __construct(
         public readonly array $contents,
@@ -40,10 +40,14 @@ class ReadResourceResult extends Result {
         parent::__construct($_meta);
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromResponseData(array $data): self {
         // Extract _meta
         $meta = null;
         if (isset($data['_meta'])) {
+            /** @var array<string, mixed> $metaData */
             $metaData = $data['_meta'];
             unset($data['_meta']);
             $meta = new Meta();
@@ -52,6 +56,7 @@ class ReadResourceResult extends Result {
             }
         }
 
+        /** @var list<mixed> $contentsData */
         $contentsData = $data['contents'] ?? [];
         unset($data['contents']);
 
@@ -68,6 +73,7 @@ class ReadResourceResult extends Result {
             }
         }
 
+        /** @var (TextResourceContents|BlobResourceContents)[] $contents */
         $obj = new self($contents, $meta);
 
         // Extra fields
@@ -90,6 +96,7 @@ class ReadResourceResult extends Result {
     }
 
     public function jsonSerialize(): mixed {
+        /** @var array<string, mixed> $data */
         $data = parent::jsonSerialize();
         $data['contents'] = $this->contents;
         return $data;
