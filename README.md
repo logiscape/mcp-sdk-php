@@ -1,5 +1,7 @@
 # Model Context Protocol SDK for PHP
 
+[![AgentRank](https://agentrank-ai.com/api/badge/tool/logiscape--mcp-sdk-php)](https://agentrank-ai.com/tool/logiscape--mcp-sdk-php/)
+
 English | [中文](README.zh-CN.md)
 
 This package provides a PHP implementation of the [Model Context Protocol](https://modelcontextprotocol.io). The primary goal of this project is to provide both a MCP server and a MCP client using pure PHP, making it easy to use in PHP/Apache/cPanel hosting environments with typical server configurations.
