@@ -110,12 +110,7 @@ class OAuthClient implements OAuthClientInterface
         $resourceMetadata = $this->discoverResourceMetadata($resourceUrl, $resourceMetadataUrl);
 
         // Step 2: Select authorization server
-        $authServerUrl = $resourceMetadata->getPrimaryAuthorizationServer();
-        if ($authServerUrl === null) {
-            throw new OAuthException(
-                'No authorization server found in Protected Resource Metadata'
-            );
-        }
+        $authServerUrl = $this->resolveAuthorizationServer($resourceMetadata);
 
         // Step 3: Discover Authorization Server Metadata
         $authServerMetadata = $this->discoverAuthorizationServerMetadata($authServerUrl);
@@ -164,10 +159,7 @@ class OAuthClient implements OAuthClientInterface
         $resourceMetadataUrl = $wwwAuthHeader['resource_metadata'] ?? null;
         $resourceMetadata = $this->discoverResourceMetadata($resourceUrl, $resourceMetadataUrl);
 
-        $authServerUrl = $resourceMetadata->getPrimaryAuthorizationServer();
-        if ($authServerUrl === null) {
-            throw new OAuthException('No authorization server found');
-        }
+        $authServerUrl = $this->resolveAuthorizationServer($resourceMetadata);
 
         $authServerMetadata = $this->discoverAuthorizationServerMetadata($authServerUrl);
 
@@ -345,12 +337,7 @@ class OAuthClient implements OAuthClientInterface
         $resourceMetadata = $this->discoverResourceMetadata($resourceUrl, $resourceMetadataUrl);
 
         // Step 2: Select authorization server
-        $authServerUrl = $resourceMetadata->getPrimaryAuthorizationServer();
-        if ($authServerUrl === null) {
-            throw new OAuthException(
-                'No authorization server found in Protected Resource Metadata'
-            );
-        }
+        $authServerUrl = $this->resolveAuthorizationServer($resourceMetadata);
 
         // Step 3: Discover Authorization Server Metadata
         $authServerMetadata = $this->discoverAuthorizationServerMetadata($authServerUrl);
@@ -493,10 +480,56 @@ class OAuthClient implements OAuthClientInterface
             return $this->resourceMetadataCache[$cacheKey];
         }
 
-        $metadata = $this->discovery->discoverResourceMetadata($resourceUrl, $metadataUrl);
-        $this->resourceMetadataCache[$cacheKey] = $metadata;
+        try {
+            $metadata = $this->discovery->discoverResourceMetadata($resourceUrl, $metadataUrl);
+            $this->resourceMetadataCache[$cacheKey] = $metadata;
+            return $metadata;
+        } catch (OAuthException $e) {
+            if ($this->config->hasAuthorizationServer()) {
+                $this->logger->info('Resource metadata discovery failed, using configured authorization server', [
+                    'resource' => $resourceUrl,
+                    'authorizationServer' => $this->config->getAuthorizationServerUrl(),
+                ]);
+                // Return synthetic metadata without caching so that discovery
+                // is retried on subsequent requests (the failure may be transient).
+                return new ProtectedResourceMetadata(
+                    resource: $resourceUrl,
+                    authorizationServers: [$this->config->getAuthorizationServerUrl()],
+                );
+            }
+            throw $e;
+        }
+    }
 
-        return $metadata;
+    /**
+     * Resolve the authorization server URL from resource metadata,
+     * falling back to the configured authorizationServerUrl if the
+     * metadata has no authorization_servers entries.
+     *
+     * @param ProtectedResourceMetadata $resourceMetadata Discovered or synthetic resource metadata
+     * @return string The authorization server URL
+     * @throws OAuthException If no authorization server is available from any source
+     */
+    private function resolveAuthorizationServer(
+        ProtectedResourceMetadata $resourceMetadata
+    ): string {
+        $authServerUrl = $resourceMetadata->getPrimaryAuthorizationServer();
+
+        if ($authServerUrl !== null) {
+            return $authServerUrl;
+        }
+
+        if ($this->config->hasAuthorizationServer()) {
+            $this->logger->info('Resource metadata has no authorization servers, using configured fallback', [
+                'resource' => $resourceMetadata->resource,
+                'authorizationServer' => $this->config->getAuthorizationServerUrl(),
+            ]);
+            return $this->config->getAuthorizationServerUrl();
+        }
+
+        throw new OAuthException(
+            'No authorization server found in Protected Resource Metadata'
+        );
     }
 
     /**

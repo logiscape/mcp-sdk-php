@@ -182,4 +182,28 @@ final class OAuthConfigurationTest extends TestCase
 
         $this->assertFalse($config->hasClientCredentials());
     }
+
+    /**
+     * Test that authorizationServerUrl defaults to null.
+     */
+    public function testDefaultAuthorizationServerUrl(): void
+    {
+        $config = new OAuthConfiguration();
+
+        $this->assertNull($config->getAuthorizationServerUrl());
+        $this->assertFalse($config->hasAuthorizationServer());
+    }
+
+    /**
+     * Test configuration with explicit authorization server URL.
+     */
+    public function testConfigurationWithAuthorizationServerUrl(): void
+    {
+        $config = new OAuthConfiguration(
+            authorizationServerUrl: 'https://auth.example.com'
+        );
+
+        $this->assertSame('https://auth.example.com', $config->getAuthorizationServerUrl());
+        $this->assertTrue($config->hasAuthorizationServer());
+    }
 }

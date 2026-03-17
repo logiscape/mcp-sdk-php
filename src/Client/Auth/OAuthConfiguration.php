@@ -57,6 +57,9 @@ class OAuthConfiguration
      * @param int $refreshBuffer Seconds before expiry to trigger refresh
      * @param string|null $redirectUri Override redirect URI (default: from callback handler)
      * @param bool $verifyTls Whether to verify TLS certificates (default: true for security)
+     * @param string|null $authorizationServerUrl Pre-configured authorization server URL, used as
+     *        fallback when RFC 9728 resource metadata discovery fails (e.g., for servers that don't
+     *        publish protected resource metadata)
      */
     public function __construct(
         private ?ClientCredentials $clientCredentials = null,
@@ -70,7 +73,8 @@ class OAuthConfiguration
         private bool $autoRefresh = true,
         private int $refreshBuffer = 60,
         private ?string $redirectUri = null,
-        private bool $verifyTls = true
+        private bool $verifyTls = true,
+        private ?string $authorizationServerUrl = null,
     ) {
         if ($tokenStorage === null) {
             // Warn about MemoryTokenStorage in web contexts
@@ -199,5 +203,21 @@ class OAuthConfiguration
     public function isVerifyTlsEnabled(): bool
     {
         return $this->verifyTls;
+    }
+
+    /**
+     * Get pre-configured authorization server URL.
+     */
+    public function getAuthorizationServerUrl(): ?string
+    {
+        return $this->authorizationServerUrl;
+    }
+
+    /**
+     * Check if a pre-configured authorization server is available.
+     */
+    public function hasAuthorizationServer(): bool
+    {
+        return $this->authorizationServerUrl !== null;
     }
 }
