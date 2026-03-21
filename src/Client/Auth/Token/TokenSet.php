@@ -41,6 +41,7 @@ class TokenSet
      * @param array<int, string> $scope The granted scopes
      * @param string|null $resourceUrl The protected resource URL this token is for
      * @param string|null $issuer The authorization server issuer URL
+     * @param string|null $resource The RFC 8707 resource identifier (from protected resource metadata)
      */
     public function __construct(
         public readonly string $accessToken,
@@ -49,7 +50,8 @@ class TokenSet
         public readonly string $tokenType = 'Bearer',
         public readonly array $scope = [],
         public readonly ?string $resourceUrl = null,
-        public readonly ?string $issuer = null
+        public readonly ?string $issuer = null,
+        public readonly ?string $resource = null
     ) {
     }
 
@@ -137,13 +139,15 @@ class TokenSet
      * @param string|null $issuer The authorization server issuer
      * @param array<int, string> $originalScope Original scopes to preserve on refresh per RFC 6749 Section 6.
      *        If the response doesn't include a scope, the original scopes are preserved.
+     * @param string|null $resource The RFC 8707 resource identifier (from protected resource metadata)
      * @return self
      */
     public static function fromTokenResponse(
         array $response,
         ?string $resourceUrl = null,
         ?string $issuer = null,
-        array $originalScope = []
+        array $originalScope = [],
+        ?string $resource = null
     ): self {
         $expiresAt = null;
         if (isset($response['expires_in'])) {
@@ -166,7 +170,8 @@ class TokenSet
             tokenType: $response['token_type'] ?? 'Bearer',
             scope: $scope,
             resourceUrl: $resourceUrl,
-            issuer: $issuer
+            issuer: $issuer,
+            resource: $resource
         );
     }
 
@@ -185,6 +190,7 @@ class TokenSet
             'scope' => $this->scope,
             'resource_url' => $this->resourceUrl,
             'issuer' => $this->issuer,
+            'resource' => $this->resource,
         ];
     }
 
@@ -203,7 +209,8 @@ class TokenSet
             tokenType: $data['token_type'] ?? 'Bearer',
             scope: $data['scope'] ?? [],
             resourceUrl: $data['resource_url'] ?? null,
-            issuer: $data['issuer'] ?? null
+            issuer: $data['issuer'] ?? null,
+            resource: $data['resource'] ?? null
         );
     }
 }

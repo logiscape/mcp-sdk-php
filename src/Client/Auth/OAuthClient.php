@@ -207,6 +207,8 @@ class OAuthClient implements OAuthClientInterface
             [
                 'grant_type' => 'refresh_token',
                 'refresh_token' => $tokens->refreshToken,
+                // RFC8707: Include resource in token request
+                'resource' => $tokens->resource,
             ],
             $credentials->getTokenRequestParams()
         );
@@ -222,7 +224,8 @@ class OAuthClient implements OAuthClientInterface
             $response,
             $tokens->resourceUrl,
             $issuer,
-            $tokens->scope  // Preserve original scopes per RFC 6749 Section 6
+            $tokens->scope,  // Preserve original scopes per RFC 6749 Section 6
+            $tokens->resource
         );
 
         // If no new refresh token was issued, keep the old one
@@ -234,7 +237,8 @@ class OAuthClient implements OAuthClientInterface
                 tokenType: $newTokens->tokenType,
                 scope: $newTokens->scope,
                 resourceUrl: $newTokens->resourceUrl,
-                issuer: $newTokens->issuer
+                issuer: $newTokens->issuer,
+                resource: $newTokens->resource
             );
         }
 
@@ -452,7 +456,8 @@ class OAuthClient implements OAuthClientInterface
         $tokens = TokenSet::fromTokenResponse(
             $tokenResponse,
             $request->resourceUrl,
-            $request->issuer
+            $request->issuer,
+            resource: $request->resource
         );
 
         // Store tokens
@@ -782,7 +787,8 @@ class OAuthClient implements OAuthClientInterface
         return TokenSet::fromTokenResponse(
             $tokenResponse,
             $resourceUrl,
-            $asMetadata->issuer
+            $asMetadata->issuer,
+            resource: $resourceMetadata->resource
         );
     }
 
