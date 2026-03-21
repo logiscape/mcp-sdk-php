@@ -57,8 +57,7 @@ class ServerRequest implements RequestWrapperInterface {
      * Factory method to create a ServerRequest from method and params.
      *
      * @param string $method
-     * @param array|null $params
-     * @return self
+     * @param array<string, mixed>|null $params
      */
     public static function fromMethodAndParams(string $method, ?array $params): static {
         $params = $params ?? [];
@@ -72,6 +71,7 @@ class ServerRequest implements RequestWrapperInterface {
         };
     }
 
+    /** @param array<string, mixed> $params */
     private static function createElicitationRequest(array $params): self {
         if (empty($params['message'])) {
             throw new \InvalidArgumentException('ElicitationCreateRequest requires "message"');
@@ -85,6 +85,7 @@ class ServerRequest implements RequestWrapperInterface {
         ));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createCreateMessageRequest(array $params): self {
         if (!isset($params['messages']) || !is_array($params['messages'])) {
             throw new \InvalidArgumentException('CreateMessageRequest requires "messages" array');
@@ -158,6 +159,7 @@ class ServerRequest implements RequestWrapperInterface {
         ));
     }
 
+    /** @param array<string, mixed> $m */
     private static function createSamplingMessage(array $m): SamplingMessage {
         if (!isset($m['role']) || !in_array($m['role'], ['user', 'assistant'], true)) {
             throw new \InvalidArgumentException('SamplingMessage requires a valid role');
@@ -176,6 +178,9 @@ class ServerRequest implements RequestWrapperInterface {
 
     /**
      * Parse content which may be a single block or an array of blocks.
+     *
+     * @param array<string|int, mixed> $c
+     * @return TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent|list<TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent>
      */
     private static function parseSamplingContent(array $c): TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent|array {
         // Single content block (has a 'type' key)
@@ -198,6 +203,7 @@ class ServerRequest implements RequestWrapperInterface {
         throw new \InvalidArgumentException('SamplingMessage content requires a type');
     }
 
+    /** @param array<string, mixed> $c */
     private static function createSamplingContentBlock(array $c): TextContent|ImageContent|AudioContent|ToolUseContent|ToolResultContent {
         return match ($c['type']) {
             'text' => self::createTextContent($c),
@@ -209,6 +215,7 @@ class ServerRequest implements RequestWrapperInterface {
         };
     }
 
+    /** @param array<string, mixed> $c */
     private static function createTextContent(array $c): TextContent {
         if (!isset($c['text'])) {
             throw new \InvalidArgumentException('TextContent requires text field');
@@ -226,6 +233,7 @@ class ServerRequest implements RequestWrapperInterface {
         return $textContent;
     }
 
+    /** @param array<string, mixed> $c */
     private static function createImageContent(array $c): ImageContent {
         if (!isset($c['data']) || !isset($c['mimeType'])) {
             throw new \InvalidArgumentException('ImageContent requires data and mimeType');
@@ -242,6 +250,7 @@ class ServerRequest implements RequestWrapperInterface {
         return $imageContent;
     }
 
+    /** @param array<string, mixed> $c */
     private static function createAudioContent(array $c): AudioContent {
         if (!isset($c['data']) || !isset($c['mimeType'])) {
             throw new \InvalidArgumentException('AudioContent requires data and mimeType');
@@ -255,6 +264,7 @@ class ServerRequest implements RequestWrapperInterface {
         return $content;
     }
 
+    /** @param array<string, mixed> $c */
     private static function createToolUseContent(array $c): ToolUseContent {
         if (!isset($c['id']) || !isset($c['name']) || !isset($c['input'])) {
             throw new \InvalidArgumentException('ToolUseContent requires id, name, and input');
@@ -262,6 +272,7 @@ class ServerRequest implements RequestWrapperInterface {
         return new ToolUseContent(id: $c['id'], name: $c['name'], input: $c['input']);
     }
 
+    /** @param array<string, mixed> $c */
     private static function createToolResultContent(array $c): ToolResultContent {
         if (!isset($c['toolUseId'])) {
             throw new \InvalidArgumentException('ToolResultContent requires toolUseId');
@@ -286,6 +297,7 @@ class ServerRequest implements RequestWrapperInterface {
         );
     }
 
+    /** @param array<string, mixed> $mp */
     private static function createModelPreferences(array $mp): ModelPreferences {
         $modelPreferences = new ModelPreferences(
             costPriority: $mp['costPriority'] ?? null,

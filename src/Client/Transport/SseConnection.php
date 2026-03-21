@@ -70,7 +70,7 @@ use Mcp\Types\Meta;
      /**
       * The cURL handle for the SSE connection
       */
-     private $curlHandle = null;
+     private ?\CurlHandle $curlHandle = null;
      
      /**
       * Buffer for incomplete SSE events
@@ -79,6 +79,8 @@ use Mcp\Types\Meta;
      
      /**
       * Queue of parsed JsonRpcMessage objects
+      *
+      * @var list<JsonRpcMessage>
       */
      private array $messageQueue = [];
      
@@ -109,6 +111,8 @@ use Mcp\Types\Meta;
      
      /**
       * File handle for IPC with background process
+      *
+      * @var resource|null
       */
      private $ipcHandle = null;
      
@@ -290,11 +294,11 @@ use Mcp\Types\Meta;
      
      /**
       * Creates and configures a cURL handle for the SSE connection.
-      * 
-      * @return resource The configured cURL handle
+      *
+      * @return \CurlHandle The configured cURL handle
       * @throws RuntimeException If cURL initialization fails
       */
-     private function createCurlHandle() {
+     private function createCurlHandle(): \CurlHandle {
          $endpoint = $this->config->getEndpoint();
          $headers = $this->prepareRequestHeaders();
          
@@ -335,8 +339,8 @@ use Mcp\Types\Meta;
      
      /**
       * Prepares HTTP headers for the SSE request.
-      * 
-      * @return array HTTP headers in cURL format
+      *
+      * @return list<string> HTTP headers in cURL format
       */
      private function prepareRequestHeaders(): array {
          // Start with headers from configuration
@@ -503,8 +507,8 @@ use Mcp\Types\Meta;
      
      /**
       * Converts raw JSON data to a JsonRpcMessage object.
-      * 
-      * @param array $data The decoded JSON data
+      *
+      * @param array<string|int, mixed> $data The decoded JSON data
       * @return JsonRpcMessage|null The converted message or null on error
       */
      private function convertToJsonRpcMessage(array $data): ?JsonRpcMessage {
@@ -538,8 +542,8 @@ use Mcp\Types\Meta;
      
      /**
       * Converts a single JSON-RPC message.
-      * 
-      * @param array $data The decoded JSON data
+      *
+      * @param array<string, mixed> $data The decoded JSON data
       * @return JsonRpcMessage|null The converted message or null on error
       */
      private function convertSingleMessage(array $data): ?JsonRpcMessage {
@@ -611,6 +615,8 @@ use Mcp\Types\Meta;
 
     /**
      * Parses notification parameters into a NotificationParams object.
+     *
+     * @param array<string, mixed> $params
      */
     private function parseNotificationParams(array $params): NotificationParams {
         $meta = isset($params['_meta']) && is_array($params['_meta'])
@@ -629,6 +635,8 @@ use Mcp\Types\Meta;
 
     /**
      * Parses request parameters into a RequestParams object.
+     *
+     * @param array<string, mixed> $params
      */
     private function parseRequestParams(array $params): RequestParams
     {
@@ -648,6 +656,8 @@ use Mcp\Types\Meta;
 
     /**
      * Helper to create a Meta object from an associative array.
+     *
+     * @param array<string, mixed> $metaArr
      */
     private function metaFromArray(array $metaArr): Meta {
         $meta = new Meta();

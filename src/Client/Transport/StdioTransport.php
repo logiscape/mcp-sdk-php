@@ -115,10 +115,16 @@ class StdioTransport {
 
         // Initialize read and write streams.
         $readStream = new class($this->pipes[1], $this->logger, $this->process) extends MemoryStream {
+            /** @var resource */
             private $pipe;
             private LoggerInterface $logger;
+            /** @var resource */
             private $process;
 
+            /**
+             * @param resource $pipe
+             * @param resource $process
+             */
             public function __construct($pipe, LoggerInterface $logger, $process) {
                 $this->pipe = $pipe;
                 $this->logger = $logger;
@@ -166,7 +172,7 @@ class StdioTransport {
              *
              * This method handles both single JSON-RPC objects and batch requests/responses.
              *
-             * @param array $data The JSON-RPC data to instantiate.
+             * @param array<string|int, mixed> $data The JSON-RPC data to instantiate.
              *
              * @return JsonRpcMessage The instantiated JsonRpcMessage.
              *
@@ -204,7 +210,7 @@ class StdioTransport {
             /**
              * Helper to parse a single JSON-RPC object (request/notification/response/error).
              *
-             * @param array $data The JSON-RPC data to instantiate.
+             * @param array<string, mixed> $data The JSON-RPC data to instantiate.
              *
              * @return JsonRpcMessage The instantiated JsonRpcMessage.
              *
@@ -274,6 +280,8 @@ class StdioTransport {
             
             /**
              * Simple check if $data is a "list array" (i.e. numeric keys).
+             *
+             * @param array<string|int, mixed> $data
              */
             private function isListArray(array $data): bool {
                 return array_is_list($data);
@@ -282,6 +290,8 @@ class StdioTransport {
 
             /**
              * Parses notification parameters into a NotificationParams object.
+             *
+             * @param array<string, mixed> $params
              */
             private function parseNotificationParams(array $params): NotificationParams {
                 $meta = isset($params['_meta']) && is_array($params['_meta'])
@@ -300,6 +310,8 @@ class StdioTransport {
 
             /**
              * Parses request parameters into a RequestParams object.
+             *
+             * @param array<string, mixed> $params
              */
             private function parseRequestParams(array $params): RequestParams {
                 $meta = isset($params['_meta']) && is_array($params['_meta'])
@@ -318,6 +330,8 @@ class StdioTransport {
 
             /**
              * Helper to convert an associative array to a Meta object.
+             *
+             * @param array<string, mixed> $metaArr
              */
             private function metaFromArray(array $metaArr): Meta {
                 $meta = new Meta();
@@ -330,10 +344,16 @@ class StdioTransport {
         };
 
         $writeStream = new class($this->pipes[0], $this->logger, $this->process) extends MemoryStream {
+            /** @var resource */
             private $pipe;
             private LoggerInterface $logger;
+            /** @var resource */
             private $process;
 
+            /**
+             * @param resource $pipe
+             * @param resource $process
+             */
             public function __construct($pipe, LoggerInterface $logger, $process) {
                 $this->pipe = $pipe;
                 $this->logger = $logger;
@@ -391,7 +411,7 @@ class StdioTransport {
                           $innerMessage instanceof \Mcp\Types\JSONRPCError) {
                     $payload = [
                         'jsonrpc' => '2.0',
-                        'id' => $innerMessage->id ? (string)$innerMessage->id->value : null
+                        'id' => (string)$innerMessage->id->value
                     ];
 
                     if ($innerMessage instanceof \Mcp\Types\JSONRPCResponse) {

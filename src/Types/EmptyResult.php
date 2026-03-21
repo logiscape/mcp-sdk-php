@@ -36,6 +36,8 @@ class EmptyResult extends Result
 {
     /**
      * Construct from server response data.
+     *
+     * @param array<string, mixed> $data
      */
     public static function fromResponseData(array $data): static
     {

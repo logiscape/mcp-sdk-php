@@ -15,7 +15,7 @@ class ElicitationCreateRequest extends Request {
     /**
      * @param string $message Human-readable message explaining why the interaction is needed
      * @param string|null $mode "form" or "url" (defaults to "form" if omitted)
-     * @param array|null $requestedSchema JSON Schema for form mode
+     * @param array<string, mixed>|null $requestedSchema JSON Schema for form mode
      * @param string|null $url URL for URL mode
      * @param string|null $elicitationId Unique identifier for URL mode elicitation
      */

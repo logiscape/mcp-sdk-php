@@ -168,12 +168,14 @@ class ServerSession extends BaseSession {
         return true;
     }
 
+    /** @param array<string, callable> $handlers */
     public function registerHandlers(array $handlers): void {
         foreach ($handlers as $method => $callable) {
             $this->methodRequestHandlers[$method] = $callable;
         }
     }
 
+    /** @param array<string, callable> $handlers */
     public function registerNotificationHandlers(array $handlers): void {
         foreach ($handlers as $method => $callable) {
             $this->methodNotificationHandlers[$method] = $callable;
@@ -184,8 +186,7 @@ class ServerSession extends BaseSession {
      * Handle incoming requests. If it's the initialize request, handle it specially.
      * Otherwise, ensure initialization is complete before handling other requests.
      *
-     * @param ClientRequest $request The incoming client request.
-     * @param callable $respond The responder callable.
+     * @param RequestResponder $responder The request responder wrapping the client request.
      */
     public function handleRequest(RequestResponder $responder): void {
         $request = $responder->getRequest(); // a ClientRequest
@@ -342,7 +343,7 @@ class ServerSession extends BaseSession {
      * which is limited in synchronous PHP transports. Returns null (unsupported).
      *
      * @param string $message Message describing what information is needed
-     * @param array|null $requestedSchema JSON Schema for the form fields
+     * @param array<string, mixed>|null $requestedSchema JSON Schema for the form fields
      * @param string|null $url URL for URL-mode elicitation
      * @return \Mcp\Types\ElicitationCreateResult|null The client's response, or null if not supported
      */
@@ -598,7 +599,7 @@ class ServerSession extends BaseSession {
      * Writes a generic notification to the client.
      *
      * @param string $method The method name of the notification.
-     * @param array|null $params The parameters of the notification.
+     * @param array<string, mixed>|null $params The parameters of the notification.
      */
     private function writeNotification(string $method, ?array $params = null): void {
         $notificationParams = null;

@@ -35,6 +35,7 @@ namespace Mcp\Server\Auth;
  */
 class JwtTokenValidator implements TokenValidatorInterface
 {
+    /** @var array<string, mixed>|null */
     private ?array $jwksCache = null;
     private ?int $jwksCacheTime = null;
     private int $jwksCacheTtl = 3600; // Cache JWKS for 1 hour
@@ -102,11 +103,6 @@ class JwtTokenValidator implements TokenValidatorInterface
             }
             $result = openssl_verify($data, $signature, $publicKey, OPENSSL_ALGO_SHA256);
             $valid = ($result === 1);
-            
-            // Free key resource if PHP < 8.0
-            if (is_resource($publicKey)) {
-                openssl_free_key($publicKey);
-            }
         } else {
             return new TokenValidationResult(false, [], 'Unsupported algorithm');
         }
@@ -155,10 +151,10 @@ class JwtTokenValidator implements TokenValidatorInterface
      * If a JWKS URI is configured, fetches the key from the JWKS endpoint.
      * Otherwise, uses the key provided in the constructor (assumed to be PEM format).
      * 
-     * @param array $header The decoded JWT header (contains 'kid' for JWKS lookup)
-     * @return \OpenSSLAsymmetricKey|resource|null The public key or null on failure
+     * @param array<string, mixed> $header The decoded JWT header (contains 'kid' for JWKS lookup)
+     * @return \OpenSSLAsymmetricKey|null The public key or null on failure
      */
-    private function getPublicKeyForRS256(array $header): mixed
+    private function getPublicKeyForRS256(array $header): \OpenSSLAsymmetricKey|null
     {
         // If JWKS URI is configured, fetch the key from there
         if ($this->jwksUri !== null) {
@@ -177,9 +173,9 @@ class JwtTokenValidator implements TokenValidatorInterface
      * Fetch a public key from the JWKS endpoint.
      * 
      * @param string|null $kid The key ID to look for
-     * @return \OpenSSLAsymmetricKey|resource|null The public key or null on failure
+     * @return \OpenSSLAsymmetricKey|null The public key or null on failure
      */
-    private function getKeyFromJwks(?string $kid): mixed
+    private function getKeyFromJwks(?string $kid): \OpenSSLAsymmetricKey|null
     {
         $jwks = $this->fetchJwks();
         if ($jwks === null || !isset($jwks['keys']) || !is_array($jwks['keys'])) {
@@ -226,7 +222,7 @@ class JwtTokenValidator implements TokenValidatorInterface
     /**
      * Fetch the JWKS from the configured URI, with caching.
      * 
-     * @return array|null The JWKS or null on failure
+     * @return array<string, mixed>|null The JWKS or null on failure
      */
     private function fetchJwks(): ?array
     {
@@ -272,10 +268,10 @@ class JwtTokenValidator implements TokenValidatorInterface
     /**
      * Convert a JWK (JSON Web Key) to a PEM-formatted public key.
      * 
-     * @param array $jwk The JWK data
-     * @return \OpenSSLAsymmetricKey|resource|null The public key or null on failure
+     * @param array<string, mixed> $jwk The JWK data
+     * @return \OpenSSLAsymmetricKey|null The public key or null on failure
      */
-    private function jwkToPem(array $jwk): mixed
+    private function jwkToPem(array $jwk): \OpenSSLAsymmetricKey|null
     {
         // We only support RSA keys for now
         if (($jwk['kty'] ?? '') !== 'RSA') {

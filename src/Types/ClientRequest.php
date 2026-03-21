@@ -85,8 +85,7 @@ class ClientRequest implements RequestWrapperInterface {
      * Factory method to create a ClientRequest from a method string and parameters array.
      *
      * @param string $method The RPC method name
-     * @param array|null $params The request parameters from the JSON-RPC message
-     * @return self
+     * @param array<string, mixed>|null $params The request parameters from the JSON-RPC message
      */
     public static function fromMethodAndParams(string $method, ?array $params): static {
         $params = $params ?? [];
@@ -113,6 +112,7 @@ class ClientRequest implements RequestWrapperInterface {
         };
     }
 
+    /** @param array<string, mixed> $params */
     private static function createInitializeRequest(array $params): self {
         // Handle capabilities
         $capParams = $params['capabilities'] ?? [];
@@ -195,6 +195,7 @@ class ClientRequest implements RequestWrapperInterface {
         return new self(new InitializeRequest($initializeParams));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createCompleteRequest(array $params): self {
         $argumentData = $params['argument'] ?? [];
         if (empty($argumentData['name']) || !isset($argumentData['value'])) {
@@ -221,6 +222,7 @@ class ClientRequest implements RequestWrapperInterface {
         return new self(new CompleteRequest($reqParams));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createSetLevelRequest(array $params): self {
         if (!isset($params['level'])) {
             throw new \InvalidArgumentException('SetLevelRequest "params" must include "level"');
@@ -230,6 +232,7 @@ class ClientRequest implements RequestWrapperInterface {
         return new self(new SetLevelRequest($level, $meta));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createGetPromptRequest(array $params): self {
         if (empty($params['name'])) {
             throw new \InvalidArgumentException('GetPromptRequest requires "name"');
@@ -248,16 +251,19 @@ class ClientRequest implements RequestWrapperInterface {
         return new self(new GetPromptRequest($getParams));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createListPromptsRequest(array $params): self {
         $cursor = $params['cursor'] ?? null;
         return new self(new ListPromptsRequest($cursor));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createListResourcesRequest(array $params): self {
         $cursor = $params['cursor'] ?? null;
         return new self(new ListResourcesRequest($cursor));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createReadResourceRequest(array $params): self {
         if (empty($params['uri'])) {
             throw new \InvalidArgumentException('ReadResourceRequest requires "uri"');
@@ -265,6 +271,7 @@ class ClientRequest implements RequestWrapperInterface {
         return new self(new ReadResourceRequest(uri: $params['uri']));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createSubscribeRequest(array $params): self {
         if (empty($params['uri'])) {
             throw new \InvalidArgumentException('SubscribeRequest requires "uri"');
@@ -273,6 +280,7 @@ class ClientRequest implements RequestWrapperInterface {
         return new self(new SubscribeRequest(uri: $params['uri'], _meta: $meta));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createUnsubscribeRequest(array $params): self {
         if (empty($params['uri'])) {
             throw new \InvalidArgumentException('UnsubscribeRequest requires "uri"');
@@ -281,6 +289,7 @@ class ClientRequest implements RequestWrapperInterface {
         return new self(new UnsubscribeRequest(uri: $params['uri'], _meta: $meta));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createCallToolRequest(array $params): self {
         if (empty($params['name'])) {
             throw new \InvalidArgumentException('CallToolRequest requires "name"');
@@ -299,16 +308,19 @@ class ClientRequest implements RequestWrapperInterface {
         return new self(new CallToolRequest($params['name'], $arguments, $task));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createListTemplatesRequest(array $params): self {
         $cursor = $params['cursor'] ?? null;
         return new self(new ListTemplatesRequest($cursor));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createListToolsRequest(array $params): self {
         $cursor = $params['cursor'] ?? null;
         return new self(new ListToolsRequest($cursor));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createTaskGetRequest(array $params): self {
         if (empty($params['taskId'])) {
             throw new \InvalidArgumentException('TaskGetRequest requires "taskId"');
@@ -316,6 +328,7 @@ class ClientRequest implements RequestWrapperInterface {
         return new self(new TaskGetRequest($params['taskId']));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createTaskResultRequest(array $params): self {
         if (empty($params['taskId'])) {
             throw new \InvalidArgumentException('TaskResultRequest requires "taskId"');
@@ -323,11 +336,13 @@ class ClientRequest implements RequestWrapperInterface {
         return new self(new TaskResultRequest($params['taskId']));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createTaskListRequest(array $params): self {
         $cursor = $params['cursor'] ?? null;
         return new self(new TaskListRequest($cursor));
     }
 
+    /** @param array<string, mixed> $params */
     private static function createTaskCancelRequest(array $params): self {
         if (empty($params['taskId'])) {
             throw new \InvalidArgumentException('TaskCancelRequest requires "taskId"');
@@ -335,6 +350,7 @@ class ClientRequest implements RequestWrapperInterface {
         return new self(new TaskCancelRequest($params['taskId']));
     }
 
+    /** @param array<string, mixed> $params */
     private static function extractMeta(array $params): ?Meta {
         if (!isset($params['_meta']) || !is_array($params['_meta'])) {
             return null;
