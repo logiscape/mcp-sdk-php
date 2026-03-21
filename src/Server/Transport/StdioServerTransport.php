@@ -38,8 +38,6 @@ use Mcp\Types\JSONRPCRequest;
 use Mcp\Types\JSONRPCNotification;
 use Mcp\Types\JSONRPCResponse;
 use Mcp\Types\JSONRPCError;
-use Mcp\Types\JSONRPCBatchRequest;
-use Mcp\Types\JSONRPCBatchResponse;
 use Mcp\Types\RequestParams;
 use Mcp\Types\NotificationParams;
 use Mcp\Types\Result;
@@ -169,68 +167,8 @@ class StdioServerTransport implements Transport {
             );
         }
 
-        // If top-level is an array => batch
-        if (is_array($decoded) && $this->isListArray($decoded)) {
-            return $this->instantiateBatch($decoded);
-        }
-
-        // Otherwise, parse as a single message
+        // Parse as a single message
         return $this->instantiateSingleMessage($decoded);
-    }
-
-    /**
-     * Determine if an array's keys are 0..n-1 (i.e. a list).
-     *
-     * @param array<mixed> $data
-     */
-    private function isListArray(array $data): bool {
-        // If you're on PHP 8.1+, you can simply do: return array_is_list($data);
-        return array_keys($data) === range(0, count($data) - 1);
-    }
-
-    /**
-     * Convert a JSON array of objects (batch) into a single JsonRpcMessage
-     * containing a JSONRPCBatchRequest or JSONRPCBatchResponse.
-     *
-     * @param array<int, mixed> $batchData - An indexed array of JSON-RPC sub-messages.
-     *
-     * @throws McpError on invalid sub-message
-     */
-    private function instantiateBatch(array $batchData): JsonRpcMessage {
-        if (count($batchData) === 0) {
-            // JSON-RPC spec says an empty array is a valid batch but requires no response.
-            // You can decide whether to treat it as an error or just return null.
-            // For illustration, let's just throw an error:
-            throw new McpError(
-                new TypesErrorData(
-                    code: -32600,
-                    message: 'Invalid Request: empty batch'
-                )
-            );
-        }
-
-        $subMessages = [];
-        foreach ($batchData as $item) {
-            if (!is_array($item)) {
-                // Each sub-message must be a valid JSON object
-                throw new McpError(
-                    new TypesErrorData(
-                        code: -32600,
-                        message: 'Invalid sub-message in batch (not an object)'
-                    )
-                );
-            }
-            // Reuse single-message parsing
-            $subMessages[] = $this->instantiateSingleMessage($item)->message;
-        }
-
-        // Heuristics to decide request batch vs. response batch:
-        $firstMsg = $subMessages[0];
-        if ($firstMsg instanceof JSONRPCRequest || $firstMsg instanceof JSONRPCNotification) {
-            return new JsonRpcMessage(new JSONRPCBatchRequest($subMessages));
-        } else {
-            return new JsonRpcMessage(new JSONRPCBatchResponse($subMessages));
-        }
     }
 
     /**

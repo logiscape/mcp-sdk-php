@@ -189,38 +189,6 @@ class ClientSessionInitializeTest extends TestCase
     }
 
     /**
-     * Test that supportsFeature('batch_messages') returns true for version 2025-03-26.
-     *
-     * The 'batch_messages' feature is supported in protocol version 2025-03-26 and later.
-     * This test verifies that feature detection correctly identifies support.
-     */
-    public function testSupportsFeatureBatchMessagesReturnsTrueForLatestVersion(): void
-    {
-        // Arrange
-        $readStream = new MemoryStream();
-        $writeStream = new MemoryStream();
-
-        $resultData = [
-            'protocolVersion' => Version::LATEST_PROTOCOL_VERSION, // 2025-03-26
-            'capabilities' => [],
-            'serverInfo' => [
-                'name' => 'test-server',
-                'version' => '1.0.0'
-            ]
-        ];
-
-        $readStream->send($this->createResponse($resultData));
-        $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
-
-        // Act
-        $session->initialize();
-        $supportsBatchMessages = $session->supportsFeature('batch_messages');
-
-        // Assert
-        $this->assertTrue($supportsBatchMessages, 'Protocol version 2025-03-26 should support batch_messages');
-    }
-
-    /**
      * Test that client accepts older supported protocol version from server (downgrade negotiation).
      *
      * Protocol version downgrade scenario:
@@ -236,7 +204,7 @@ class ClientSessionInitializeTest extends TestCase
      *
      * Example: A client on SDK v2.0 (protocol 2025-03-26) connects to a
      * server on SDK v1.0 (protocol 2024-11-05). The client must gracefully
-     * downgrade and disable features unsupported in 2024-11-05 (like batch_messages).
+     * downgrade and disable features unsupported in 2024-11-05 (like audio_content).
      *
      * Corresponds to ClientSession.php:151-157 (version validation and storage)
      */
@@ -261,7 +229,6 @@ class ClientSessionInitializeTest extends TestCase
         $session->initialize();
 
         $this->assertSame($olderVersion, $session->getNegotiatedProtocolVersion(), 'Client should accept older supported protocol version');
-        $this->assertFalse($session->supportsFeature('batch_messages'), 'Older protocol should not advertise batch_messages support');
     }
 
     /**
@@ -391,7 +358,6 @@ class ClientSessionInitializeTest extends TestCase
         $session = new ClientSession($readStream, $writeStream);
 
         // Act & Assert
-        $this->assertFalse($session->supportsFeature('batch_messages'), 'Features should not be supported before initialization');
         $this->assertFalse($session->supportsFeature('audio_content'), 'Features should not be supported before initialization');
         $this->assertFalse($session->supportsFeature('annotations'), 'Features should not be supported before initialization');
     }

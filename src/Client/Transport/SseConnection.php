@@ -512,32 +512,7 @@ use Mcp\Types\Meta;
       * @return JsonRpcMessage|null The converted message or null on error
       */
      private function convertToJsonRpcMessage(array $data): ?JsonRpcMessage {
-         // Handle batch messages
-         if (isset($data[0]) && is_array($data[0])) {
-             // This is a batch - process each item
-             $messages = [];
-             foreach ($data as $item) {
-                 $singleMessage = $this->convertSingleMessage($item);
-                 if ($singleMessage !== null) {
-                     $messages[] = $singleMessage->message;
-                 }
-             }
-             
-             if (empty($messages)) {
-                 return null;
-             }
-             
-             // Determine if this is a batch request/notification or response/error
-             $firstType = get_class($messages[0]);
-             if ($firstType === JSONRPCRequest::class || $firstType === JSONRPCNotification::class) {
-                 return new JsonRpcMessage(new \Mcp\Types\JSONRPCBatchRequest($messages));
-             } else {
-                 return new JsonRpcMessage(new \Mcp\Types\JSONRPCBatchResponse($messages));
-             }
-         } else {
-             // Single message
-             return $this->convertSingleMessage($data);
-         }
+         return $this->convertSingleMessage($data);
      }
      
      /**

@@ -50,7 +50,6 @@ class Version {
      */
     private const FEATURE_VERSIONS = [
         // 2025-03-26
-        'batch_messages' => '2025-03-26',
         'audio_content' => '2025-03-26',
         'annotations' => '2025-03-26',
         'tool_annotations' => '2025-03-26',

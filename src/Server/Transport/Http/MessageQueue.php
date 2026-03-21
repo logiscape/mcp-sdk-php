@@ -31,8 +31,6 @@ use Mcp\Types\JSONRPCRequest;
 use Mcp\Types\JSONRPCResponse;
 use Mcp\Types\JSONRPCError;
 use Mcp\Types\JSONRPCNotification;
-use Mcp\Types\JSONRPCBatchRequest;
-use Mcp\Types\JSONRPCBatchResponse;
 
 /**
  * Message queue for HTTP transport.
@@ -94,18 +92,7 @@ class MessageQueue
             return false;
         }
         
-        // Handle batch requests by expanding them into individual messages
-        $innerMessage = $message->message;
-        if ($innerMessage instanceof JSONRPCBatchRequest) {
-            // For batch requests, queue each message individually
-            foreach ($innerMessage->messages as $subMessage) {
-                $wrappedMessage = new JsonRpcMessage($subMessage);
-                $this->incomingQueue[] = $wrappedMessage;
-            }
-        } else {
-            // Add the single message to the queue
-            $this->incomingQueue[] = $message;
-        }
+        $this->incomingQueue[] = $message;
         
         return true;
     }
@@ -143,23 +130,14 @@ class MessageQueue
             return false;
         }
         
-        // Handle batch messages
+        // Track the message ID for request routing
         $innerMessage = $message->message;
-        if ($innerMessage instanceof JSONRPCBatchResponse) {
-            // For batch responses, track each message ID
-            foreach ($innerMessage->messages as $subMessage) {
-                $requestId = $subMessage->id;
-                $requestIdValue = $requestId->getValue();
-                $this->messageIdToSession[$requestIdValue] = $sessionId;
-            }
-        } elseif ($innerMessage instanceof JSONRPCRequest) {
-            // For individual requests, track the message ID
+        if ($innerMessage instanceof JSONRPCRequest) {
             $requestId = $innerMessage->id;
             $requestIdValue = $requestId->getValue();
             $this->messageIdToSession[$requestIdValue] = $sessionId;
         }
-        
-        // Add the message to the queue (whether batch or individual)
+
         $this->outgoingQueues[$sessionId][] = $message;
         
         return true;
@@ -175,41 +153,6 @@ class MessageQueue
     {
         $innerMessage = $message->message;
         
-        // Handle batch responses
-        if ($innerMessage instanceof JSONRPCBatchResponse) {
-            // For batch responses, find the session for the first response
-            // (all responses in a batch should be for the same session)
-            if (empty($innerMessage->messages)) {
-                return false;
-            }
-            
-            $firstResponse = $innerMessage->messages[0];
-            $requestId = $firstResponse->id;
-            $requestIdValue = $requestId->getValue();
-            
-            // Find the session that sent the request
-            if (!isset($this->messageIdToSession[$requestIdValue])) {
-                return false;
-            }
-            
-            $sessionId = $this->messageIdToSession[$requestIdValue];
-            
-            // Queue the batch response
-            $result = $this->queueOutgoing($message, $sessionId);
-            
-            // Clean up the mappings for all responses in the batch
-            if ($result) {
-                foreach ($innerMessage->messages as $response) {
-                    $responseId = $response->id;
-                    $responseIdValue = $responseId->getValue();
-                    unset($this->messageIdToSession[$responseIdValue]);
-                }
-            }
-            
-            return $result;
-        }
-        
-        // Handle individual responses/errors
         if ($innerMessage instanceof JSONRPCResponse || $innerMessage instanceof JSONRPCError) {
             $requestId = $innerMessage->id;
             $requestIdValue = $requestId->getValue();
@@ -239,60 +182,18 @@ class MessageQueue
      * Flush all outgoing messages for a session.
      *
      * @param string $sessionId Session ID
-     * @param bool $consolidate Whether to consolidate responses into batches (default: false)
      * @return JsonRpcMessage[] Array of messages
      */
-    public function flushOutgoing(string $sessionId, bool $consolidate = false): array
+    public function flushOutgoing(string $sessionId): array
     {
         if (!isset($this->outgoingQueues[$sessionId])) {
             return [];
         }
-        
+
         $messages = $this->outgoingQueues[$sessionId];
         $this->outgoingQueues[$sessionId] = [];
-        
-        // If consolidation is requested, batch compatible messages together
-        if ($consolidate && count($messages) > 1) {
-            return $this->consolidateMessages($messages);
-        }
-        
+
         return $messages;
-    }
-    
-    /**
-     * Consolidate multiple messages into batches where appropriate.
-     *
-     * @param JsonRpcMessage[] $messages Array of messages
-     * @return JsonRpcMessage[] Consolidated array of messages
-     */
-    private function consolidateMessages(array $messages): array
-    {
-        $responses = [];
-        $other = [];
-        
-        // Separate responses from other message types
-        foreach ($messages as $message) {
-            $innerMessage = $message->message;
-            if ($innerMessage instanceof JSONRPCResponse || $innerMessage instanceof JSONRPCError) {
-                $responses[] = $innerMessage;
-            } else {
-                $other[] = $message;
-            }
-        }
-        
-        $result = [];
-        
-        // Create a batch for responses if there are multiple
-        if (count($responses) > 1) {
-            $batchResponse = new JSONRPCBatchResponse($responses);
-            $result[] = new JsonRpcMessage($batchResponse);
-        } elseif (count($responses) === 1) {
-            // Re-wrap single response
-            $result[] = new JsonRpcMessage($responses[0]);
-        }
-        
-        // Add other message types
-        return array_merge($result, $other);
     }
     
     /**

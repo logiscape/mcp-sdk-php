@@ -39,8 +39,6 @@ use Mcp\Types\JSONRPCRequest;
 use Mcp\Types\JSONRPCNotification;
 use Mcp\Types\JSONRPCResponse;
 use Mcp\Types\JSONRPCError;
-use Mcp\Types\JSONRPCBatchRequest;
-use Mcp\Types\JSONRPCBatchResponse;
 use Mcp\Types\RequestId;
 use Mcp\Types\JsonRpcErrorObject;
 use Mcp\Types\NotificationParams;
@@ -179,31 +177,6 @@ class StdioTransport {
              * @throws InvalidArgumentException If the JSON-RPC data is invalid.
              */
             private function instantiateJsonRpcMessage(array $data): JsonRpcMessage {
-                // 1) Check if top-level is an array => potential batch
-                if ($this->isListArray($data)) {
-                    // parse each item as if single
-                    $subMessages = [];
-                    foreach ($data as $item) {
-                        // parse each sub-item via the same logic you’d use for single messages
-                        // but we’ll do that in a small helper for clarity:
-                        $subMessages[] = $this->instantiateSingleMessage($item);
-                    }
-                    
-                    // Heuristic: if the first item is a request or notification => assume a batch request
-                    // otherwise => assume a batch response
-                    $firstVariant = $subMessages[0]->message;
-                    
-                    if ($firstVariant instanceof \Mcp\Types\JSONRPCRequest ||
-                        $firstVariant instanceof \Mcp\Types\JSONRPCNotification) 
-                    {
-                        return new JsonRpcMessage(new \Mcp\Types\JSONRPCBatchRequest($subMessages));
-                    } else {
-                        // Otherwise assume response/error
-                        return new JsonRpcMessage(new \Mcp\Types\JSONRPCBatchResponse($subMessages));
-                    }
-                }
-                
-                // 2) Otherwise, parse single object as you already do
                 return $this->instantiateSingleMessage($data);
             }
             
@@ -278,16 +251,6 @@ class StdioTransport {
                 }
             }
             
-            /**
-             * Simple check if $data is a "list array" (i.e. numeric keys).
-             *
-             * @param array<string|int, mixed> $data
-             */
-            private function isListArray(array $data): bool {
-                return array_is_list($data);
-                // or older PHP: return array_keys($data) === range(0, count($data)-1);
-            }
-
             /**
              * Parses notification parameters into a NotificationParams object.
              *

@@ -31,8 +31,6 @@ use Mcp\Types\JSONRPCRequest;
 use Mcp\Types\JSONRPCNotification;
 use Mcp\Types\JSONRPCResponse;
 use Mcp\Types\JSONRPCError;
-use Mcp\Types\JSONRPCBatchRequest;
-use Mcp\Types\JSONRPCBatchResponse;
 use Mcp\Types\RequestId;
 use Mcp\Types\JsonRpcErrorObject;
 use Mcp\Shared\McpError;
@@ -219,9 +217,6 @@ class HttpServerTransport implements Transport
         
         if ($innerMessage instanceof JSONRPCResponse || $innerMessage instanceof JSONRPCError) {
             // For responses, route to the session that made the request
-            $this->messageQueue->queueResponse($message);
-        } elseif ($innerMessage instanceof JSONRPCBatchResponse) {
-            // Handle batch responses
             $this->messageQueue->queueResponse($message);
         } else {
             // For other message types without a clear session target,
@@ -454,49 +449,7 @@ class HttpServerTransport implements Transport
      */
     private function processJsonRpcData($data, HttpSession $session): bool
     {
-        // Handle batch request
-        if (is_array($data) && $this->isIndexedArray($data)) {
-            return $this->processBatchRequest($data, $session);
-        }
-        
-        // Handle single message
         return $this->processSingleMessage($data, $session);
-    }
-    
-    /**
-     * Process a batch request.
-     *
-     * @param array<int, mixed> $data Batch request data
-     * @param HttpSession $session Session
-     * @return bool True if the batch contains requests
-     * @throws \InvalidArgumentException If the data is invalid.
-     */
-    private function processBatchRequest(array $data, HttpSession $session): bool
-    {
-        if (empty($data)) {
-            // Empty batch is valid per spec, but useless
-            return false;
-        }
-        
-        $containsRequests = false;
-        $messages = [];
-        
-        // Process each message in the batch
-        foreach ($data as $item) {
-            if (!is_array($item)) {
-                throw new \InvalidArgumentException('Invalid batch item: not an object');
-            }
-            
-            try {
-                $isRequest = $this->processSingleMessage($item, $session);
-                $containsRequests = $containsRequests || $isRequest;
-            } catch (\Exception $e) {
-                // Log error but continue processing the batch
-                error_log('Error processing batch item: ' . $e->getMessage());
-            }
-        }
-        
-        return $containsRequests;
     }
     
     /**
@@ -730,26 +683,24 @@ class HttpServerTransport implements Transport
     public function createJsonResponse(HttpSession $session): HttpMessage
     {
         // Get pending messages for the session
-        $pendingMessages = $this->messageQueue->flushOutgoing($session->getId(), true);
-        
+        $pendingMessages = $this->messageQueue->flushOutgoing($session->getId());
+
         if (empty($pendingMessages)) {
             // No pending messages, return 202 Accepted
             return HttpMessage::createEmptyResponse(202);
         }
-        
-        // If there's only one message, return it directly
+
+        // Single message — return it directly
         if (count($pendingMessages) === 1) {
-            $message = $pendingMessages[0];
-            return HttpMessage::createJsonResponse($message->message, 200);
+            return HttpMessage::createJsonResponse($pendingMessages[0]->message, 200);
         }
-        
-        // If there are multiple messages, create a batch
-        $batchData = [];
-        foreach ($pendingMessages as $message) {
-            $batchData[] = $message->message;
+
+        // Multiple messages — return as a JSON array
+        $data = [];
+        foreach ($pendingMessages as $msg) {
+            $data[] = $msg->message;
         }
-        
-        return HttpMessage::createJsonResponse($batchData, 200);
+        return HttpMessage::createJsonResponse($data, 200);
     }
 
     /**
@@ -978,21 +929,6 @@ class HttpServerTransport implements Transport
     }
     
     /**
-     * Determine if an array is an indexed array (not associative).
-     *
-     * @param array<mixed> $array Array to check
-     * @return bool True if the array is indexed
-     */
-    private function isIndexedArray(array $array): bool
-    {
-        if (empty($array)) {
-            return true;
-        }
-        
-        return array_keys($array) === range(0, count($array) - 1);
-    }
-    
-    /**
      * Check if a request is an initialize request.
      *
      * @param HttpMessage $request Request message
@@ -1015,18 +951,6 @@ class HttpServerTransport implements Transport
             // Decode JSON
             $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
             
-            // Check for batch requests
-            if (is_array($data) && $this->isIndexedArray($data)) {
-                // Check first message in batch
-                if (empty($data)) {
-                    return false;
-                }
-                
-                $firstMessage = $data[0];
-                return $this->isInitializeMessage($firstMessage);
-            }
-            
-            // Check single message
             return $this->isInitializeMessage($data);
         } catch (\Exception $e) {
             return false;

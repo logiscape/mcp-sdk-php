@@ -73,7 +73,6 @@ This test is critical because if the handshake is broken, clients cannot connect
 - `testInitializeHandshakeSendsCorrectSequence()` - Verifies exact message sequence
 - `testGetInitializeResultSucceedsAfterInitialization()` - Validates result storage
 - `testGetNegotiatedProtocolVersionSucceedsAfterInitialization()` - Confirms version negotiation
-- `testSupportsFeatureBatchMessagesReturnsTrueForLatestVersion()` - Tests feature detection
 - `testInitializeRejectsUnsupportedProtocolVersion()` - Validates version rejection
 - `testSupportsFeatureReturnsFalseBeforeInitialization()` - Tests pre-initialization state
 - `testInitializeNegotiatesOlderSupportedProtocolVersion()` - Tests backward compatibility with older protocol versions
