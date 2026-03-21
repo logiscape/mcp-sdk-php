@@ -32,16 +32,13 @@ namespace Mcp\Types;
 /**
  * A placeholder object for responses that have no meaningful result data.
  */
-class EmptyResult extends Result
+final class EmptyResult extends Result
 {
     /**
-     * Construct from server response data.
-     *
      * @param array<string, mixed> $data
      */
-    public static function fromResponseData(array $data): static
+    public static function fromResponseData(array $data): self
     {
-        // If the server might return _meta, handle it:
         $meta = null;
         if (isset($data['_meta'])) {
             $metaData = $data['_meta'];
@@ -52,23 +49,13 @@ class EmptyResult extends Result
             }
         }
 
-        $obj = new static($meta);
+        $obj = new self($meta);
 
-        // If the server returns arbitrary keys, set them as extra fields:
         foreach ($data as $k => $v) {
             $obj->$k = $v;
         }
 
         $obj->validate();
         return $obj;
-    }
-
-    /**
-     * Validate the received data.
-     */
-    public function validate(): void
-    {
-        // For an "empty" result, you might do nothing special or call parent:
-        parent::validate();
     }
 }

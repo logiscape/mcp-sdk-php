@@ -31,6 +31,8 @@ namespace Mcp\Types;
 /**
  * Represents the `_meta` object found in various structures (e.g. Result, Request params).
  * This is an open object, so we just allow arbitrary fields.
+ *
+ * @property int|string|ProgressToken|null $progressToken Progress tracking token
  */
 class Meta implements McpModel {
     use ExtraFieldsTrait;

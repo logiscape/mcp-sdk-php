@@ -36,7 +36,7 @@ namespace Mcp\Types;
  *   | CreateMessageRequest
  *   | ListRootsRequest
  */
-class ServerRequest implements RequestWrapperInterface {
+final class ServerRequest implements RequestWrapperInterface {
     use ExtraFieldsTrait;
 
     private Request $request;
@@ -169,10 +169,7 @@ class ServerRequest implements RequestWrapperInterface {
         }
 
         $content = self::parseSamplingContent($m['content']);
-        $role = Role::tryFrom($m['role']);
-        if ($role === null) {
-            throw new \InvalidArgumentException("Invalid role value: '{$m['role']}'");
-        }
+        $role = Role::from($m['role']);
         return new SamplingMessage(role: $role, content: $content);
     }
 

@@ -627,40 +627,27 @@ final class FakeSession extends BaseSession
 /**
  * Dummy outgoing request for testing.
  *
- * Minimal implementation of McpModel for creating test requests.
+ * Extends the protocol Request base type to be compatible with sendRequest().
  */
-final class DummyOutgoingRequest implements \Mcp\Types\McpModel
+final class DummyOutgoingRequest extends \Mcp\Types\Request
 {
-    public function __construct(
-        public string $method,
-        public mixed $params = null
-    ) {}
-
-    public function validate(): void {}
-
-    public function jsonSerialize(): mixed
+    public function __construct(string $method)
     {
-        return [];
+        parent::__construct($method);
     }
 }
 
 /**
  * Dummy result type for testing.
  *
- * Minimal implementation of McpModel for deserializing test responses.
+ * Extends the protocol Result base type to be compatible with sendRequest().
  */
-final class DummyResult implements \Mcp\Types\McpModel
+final class DummyResult extends \Mcp\Types\Result
 {
+    /** @param array<string, mixed> $data */
     public static function fromResponseData(array $data): self
     {
         return new self();
-    }
-
-    public function validate(): void {}
-
-    public function jsonSerialize(): mixed
-    {
-        return [];
     }
 }
 

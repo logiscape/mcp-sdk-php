@@ -39,6 +39,34 @@ class Result implements McpModel {
         public ?Meta $_meta = null,
     ) {}
 
+    /**
+     * Construct a Result from server response data.
+     * Subclasses should override this to handle their specific fields.
+     *
+     * @param array<string, mixed> $data
+     * @return self
+     */
+    public static function fromResponseData(array $data): self {
+        $meta = null;
+        if (isset($data['_meta'])) {
+            $metaData = $data['_meta'];
+            unset($data['_meta']);
+            $meta = new Meta();
+            foreach ($metaData as $k => $v) {
+                $meta->$k = $v;
+            }
+        }
+
+        $obj = new self($meta);
+
+        foreach ($data as $k => $v) {
+            $obj->$k = $v;
+        }
+
+        $obj->validate();
+        return $obj;
+    }
+
     public function validate(): void {
         if ($this->_meta !== null) {
             $this->_meta->validate();

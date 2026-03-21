@@ -38,6 +38,7 @@ use Mcp\Types\CallToolResult;
 use Mcp\Types\ClientCapabilities;
 use Mcp\Types\ClientNotification;
 use Mcp\Types\ClientRequest;
+use Mcp\Types\RequestWrapperInterface;
 use Mcp\Types\ImageContent;
 use Mcp\Types\Implementation;
 use Mcp\Types\InitializeRequestParams;
@@ -249,10 +250,10 @@ class ServerSession extends BaseSession {
     /**
      * Handle the initialize request from the client.
      *
-     * @param ClientRequest $request The initialize request.
+     * @param RequestWrapperInterface $request The initialize request.
      * @param callable $respond The responder callable.
      */
-    private function handleInitialize(ClientRequest $request, callable $respond): void {
+    private function handleInitialize(RequestWrapperInterface $request, callable $respond): void {
         $this->initializationState = InitializationState::Initializing;
         /** @var InitializeRequestParams $params */
         $params = $request->getRequest()->params;
@@ -663,7 +664,7 @@ class ServerSession extends BaseSession {
         $this->transport->writeMessage($message);
     }
 
-    protected function waitForResponse(int $requestIdValue, string $resultType, ?\Mcp\Types\McpModel &$futureResult): \Mcp\Types\McpModel {
+    protected function waitForResponse(int $requestIdValue, string $resultType, ?\Mcp\Types\Result &$futureResult): \Mcp\Types\Result {
         // The server typically does not wait for responses from the client.
         throw new RuntimeException('Server does not support waiting for responses from the client.');
     }

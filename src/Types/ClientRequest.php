@@ -48,7 +48,7 @@ namespace Mcp\Types;
  * This acts as a root model for that union and provides a factory method
  * to construct the correct request variant based on the method name and params.
  */
-class ClientRequest implements RequestWrapperInterface {
+final class ClientRequest implements RequestWrapperInterface {
     use ExtraFieldsTrait;
 
     private Request $request;

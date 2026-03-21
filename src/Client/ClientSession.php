@@ -638,13 +638,13 @@ class ClientSession extends BaseSession {
      *
      * @param int    $requestIdValue The ID of the request to wait for.
      * @param string $resultType     The expected result type class name.
-     * @param \Mcp\Types\McpModel|null $futureResult Reference to store the received result.
+     * @param \Mcp\Types\Result|null $futureResult Reference to store the received result.
      *
      * @throws RuntimeException If the wait times out or if an unexpected response is received.
      *
-     * @return \Mcp\Types\McpModel The received result.
+     * @return \Mcp\Types\Result The received result.
      */
-    protected function waitForResponse(int $requestIdValue, string $resultType, ?\Mcp\Types\McpModel &$futureResult): \Mcp\Types\McpModel {
+    protected function waitForResponse(int $requestIdValue, string $resultType, ?\Mcp\Types\Result &$futureResult): \Mcp\Types\Result {
         $timeout = $this->getReadTimeout();
         $startTime = microtime(true);
 

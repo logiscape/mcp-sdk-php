@@ -31,6 +31,16 @@ namespace Mcp\Types;
 /**
  * Represents the `params` object in a Notification.
  * Similar to RequestParams, it can have `_meta?: object` and arbitrary fields.
+ *
+ * Known dynamic properties used by the MCP protocol:
+ * @property string|null $level Logging level (notifications/message)
+ * @property mixed $data Log data (notifications/message)
+ * @property string|null $logger Logger name (notifications/message)
+ * @property string|null $uri Resource URI (notifications/resources/updated)
+ * @property int|string|null $progressToken Progress token (notifications/progress)
+ * @property float|null $progress Current progress value (notifications/progress)
+ * @property float|null $total Total progress value (notifications/progress)
+ * @property string|null $elicitationId Elicitation identifier (notifications/elicitation/complete)
  */
 class NotificationParams implements McpModel {
     use ExtraFieldsTrait;
