@@ -212,14 +212,24 @@ class ServerSession extends BaseSession {
             $this->logger->info("Calling handler for method: $method");
             $handler = $this->methodRequestHandlers[$method];
             try {
-            $result = $handler($params); // call the user-defined handler
-            $responder->sendResponse($result);
-            } catch(\Throwable $e) {
-            	$this->logger->info("Handler Error: $e");
+                $result = $handler($params); // call the user-defined handler
+                $responder->sendResponse($result);
+            } catch (\Mcp\Shared\McpError $e) {
+                $this->logger->error("Handler error for method '$method': " . $e->getMessage());
+                $responder->sendResponse($e->error);
+            } catch (\Throwable $e) {
+                $this->logger->error("Handler error for method '$method': " . $e->getMessage());
+                $responder->sendResponse(new \Mcp\Shared\ErrorData(
+                    code: -32603, // Internal error (JSON-RPC standard)
+                    message: $e->getMessage()
+                ));
             }
         } else {
-            $this->logger->info("No registered handler for method: $method");
-            // Possibly send an error response or ignore
+            $this->logger->warning("No registered handler for method: $method");
+            $responder->sendResponse(new \Mcp\Shared\ErrorData(
+                code: -32601, // Method not found (JSON-RPC standard)
+                message: "Method not found: $method"
+            ));
         }
     }
 

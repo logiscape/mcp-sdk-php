@@ -40,9 +40,15 @@ use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
 use Mcp\Types\AudioContent;
 use Mcp\Types\Annotations;
+use Mcp\Shared\ErrorData;
+use Mcp\Shared\McpError;
+use Mcp\Types\JSONRPCError;
 use Mcp\Types\JSONRPCNotification;
+use Mcp\Types\ListToolsResult;
 use Mcp\Types\NotificationParams;
+use Mcp\Types\PingRequest;
 use Mcp\Types\RequestParams;
+use Mcp\Types\Result;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -756,6 +762,170 @@ final class ServerSessionTest extends TestCase
             $capturedParams->customExtension,
             'Extra wire fields should be preserved through param normalization'
         );
+    }
+
+    /**
+     * Test that handler exceptions produce a JSON-RPC error response instead of being silently swallowed.
+     *
+     * Before this fix, a handler that threw an exception would only log the error,
+     * leaving the client without any response (causing hangs on stdio or timeouts on HTTP).
+     *
+     * Corresponds to ServerSession.php handleRequest() catch block.
+     */
+    public function testHandlerExceptionReturnsJsonRpcError(): void
+    {
+        $transport = new InMemoryTransport();
+        $session = $this->createInitializedSession($transport);
+
+        // Register a handler that throws
+        $session->registerHandlers([
+            'tools/list' => function ($params) {
+                throw new \RuntimeException('Something went wrong in the handler');
+            },
+        ]);
+
+        $request = new ClientRequest(new \Mcp\Types\ListToolsRequest());
+        $responder = new RequestResponder(
+            requestId: new RequestId(10),
+            params: [],
+            request: $request,
+            session: $session
+        );
+
+        $session->handleRequest($responder);
+
+        $this->assertCount(1, $transport->writtenMessages, 'Server should send exactly one error response');
+
+        $response = $transport->writtenMessages[0];
+        $this->assertInstanceOf(JSONRPCError::class, $response->message);
+        $this->assertSame(-32603, $response->message->error->code, 'Should use JSON-RPC Internal Error code');
+        $this->assertSame('Something went wrong in the handler', $response->message->error->message);
+    }
+
+    /**
+     * Test that McpError exceptions preserve their original error code, message, and data.
+     *
+     * Handlers use McpError/McpServerException to throw specific JSON-RPC errors
+     * (e.g. -32602 for unknown tool). These must pass through unchanged rather than
+     * being flattened to -32603 Internal Error.
+     *
+     * Corresponds to ServerSession.php handleRequest() catch (McpError) branch.
+     */
+    public function testMcpErrorPreservesOriginalErrorData(): void
+    {
+        $transport = new InMemoryTransport();
+        $session = $this->createInitializedSession($transport);
+
+        $session->registerHandlers([
+            'tools/list' => function ($params) {
+                throw new McpError(new ErrorData(
+                    code: -32602,
+                    message: 'Unknown tool: nonexistent',
+                    data: ['toolName' => 'nonexistent']
+                ));
+            },
+        ]);
+
+        $request = new ClientRequest(new \Mcp\Types\ListToolsRequest());
+        $responder = new RequestResponder(
+            requestId: new RequestId(13),
+            params: [],
+            request: $request,
+            session: $session
+        );
+
+        $session->handleRequest($responder);
+
+        $this->assertCount(1, $transport->writtenMessages, 'Server should send exactly one error response');
+
+        $response = $transport->writtenMessages[0];
+        $this->assertInstanceOf(JSONRPCError::class, $response->message);
+        $this->assertSame(-32602, $response->message->error->code, 'McpError code should be preserved, not flattened to -32603');
+        $this->assertSame('Unknown tool: nonexistent', $response->message->error->message);
+        $this->assertSame(['toolName' => 'nonexistent'], $response->message->error->data, 'McpError data should be preserved');
+    }
+
+    /**
+     * Test that requests for unregistered methods produce a Method Not Found error response.
+     *
+     * Before this fix, an unregistered method would only log a message,
+     * leaving the client without any response.
+     *
+     * Corresponds to ServerSession.php handleRequest() else branch.
+     */
+    public function testUnregisteredMethodReturnsMethodNotFoundError(): void
+    {
+        $transport = new InMemoryTransport();
+        $session = $this->createInitializedSession($transport);
+
+        // Don't register any handlers — use ping which requires no params
+        $request = new ClientRequest(new PingRequest());
+        $responder = new RequestResponder(
+            requestId: new RequestId(11),
+            params: [],
+            request: $request,
+            session: $session
+        );
+
+        $session->handleRequest($responder);
+
+        $this->assertCount(1, $transport->writtenMessages, 'Server should send exactly one error response');
+
+        $response = $transport->writtenMessages[0];
+        $this->assertInstanceOf(JSONRPCError::class, $response->message);
+        $this->assertSame(-32601, $response->message->error->code, 'Should use JSON-RPC Method Not Found code');
+        $this->assertStringContainsString('Method not found', $response->message->error->message);
+    }
+
+    /**
+     * Test that a successful handler still works correctly after the error handling fix.
+     *
+     * Ensures the fix doesn't break the happy path.
+     */
+    public function testSuccessfulHandlerStillReturnsResult(): void
+    {
+        $transport = new InMemoryTransport();
+        $session = $this->createInitializedSession($transport);
+
+        $session->registerHandlers([
+            'tools/list' => function ($params) {
+                return new ListToolsResult([]);
+            },
+        ]);
+
+        $request = new ClientRequest(new \Mcp\Types\ListToolsRequest());
+        $responder = new RequestResponder(
+            requestId: new RequestId(12),
+            params: [],
+            request: $request,
+            session: $session
+        );
+
+        $session->handleRequest($responder);
+
+        $this->assertCount(1, $transport->writtenMessages, 'Server should send exactly one response');
+
+        $response = $transport->writtenMessages[0];
+        $this->assertInstanceOf(JSONRPCResponse::class, $response->message);
+        $this->assertInstanceOf(ListToolsResult::class, $response->message->result);
+    }
+
+    /**
+     * Create a ServerSession that is already in the Initialized state.
+     *
+     * Uses reflection to bypass the initialize handshake, allowing tests
+     * to focus on post-initialization handler behavior.
+     */
+    private function createInitializedSession(InMemoryTransport $transport): ServerSession
+    {
+        $session = $this->createSession($transport);
+
+        // Force into Initialized state via reflection
+        $reflection = new \ReflectionProperty($session, 'initializationState');
+        $reflection->setAccessible(true);
+        $reflection->setValue($session, InitializationState::Initialized);
+
+        return $session;
     }
 
     /**
