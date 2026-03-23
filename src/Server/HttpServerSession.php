@@ -33,7 +33,6 @@ use Mcp\Server\ServerSession;
 use Mcp\Shared\BaseSession;
 use Mcp\Types\Implementation;
 use Mcp\Types\ClientCapabilities;
-use Mcp\Types\ClientRootsCapability;
 use Mcp\Server\InitializationState;
 use Mcp\Types\InitializeRequestParams;
 
@@ -90,20 +89,12 @@ class HttpServerSession extends ServerSession
 
         if (!empty($data['clientParams'])) {
             $clientParamsData = $data['clientParams'];
-    
-            // Reconstruct ClientRootsCapability if roots are present in the data
-            $rootsData = $clientParamsData['capabilities']['roots'] ?? null;
-            $roots = null;
-    
-            if (is_array($rootsData)) {
-                // Instantiate ClientRootsCapability based on roots data
-                $roots = new ClientRootsCapability(
-                    listChanged: $rootsData['listChanged'] ?? false
-                );
-            }
-    
-            // Instantiate ClientCapabilities and pass the roots object
-            $capabilities = new ClientCapabilities($roots);
+
+            // Reconstruct ClientCapabilities from serialized data
+            $capabilitiesData = $clientParamsData['capabilities'] ?? [];
+            $capabilities = is_array($capabilitiesData) && !empty($capabilitiesData)
+                ? ClientCapabilities::fromArray($capabilitiesData)
+                : new ClientCapabilities();
     
             // Instantiate Implementation for clientInfo
             $clientInfo = new Implementation(

@@ -146,9 +146,6 @@ final class HttpServerSessionTest extends TestCase
      * clientParams data so that server logic can inspect the client's
      * declared capabilities after restoration.
      *
-     * Note: fromArray() does NOT restore sampling, elicitation, tasks,
-     * or experimental capabilities -- only roots. This is a known SDK
-     * limitation; those fields are silently dropped during reconstruction.
      */
     public function testFromArrayRestoresClientParams(): void
     {
@@ -224,9 +221,6 @@ final class HttpServerSessionTest extends TestCase
      * multiple serialization/deserialization cycles, which is critical for
      * long-lived HTTP sessions that may be saved and restored many times.
      *
-     * Note: fromArray() does NOT restore sampling, elicitation, tasks,
-     * or experimental capabilities -- only roots. This is a known SDK
-     * limitation.
      */
     public function testToArrayFromArrayRoundTrip(): void
     {
@@ -357,9 +351,6 @@ final class HttpServerSessionTest extends TestCase
      * reconstructed by fromArray(). This test confirms that the listChanged
      * flag survives serialization and is accessible in the restored session.
      *
-     * Note: fromArray() does NOT restore sampling, elicitation, tasks,
-     * or experimental capabilities -- only roots. This is a known SDK
-     * limitation.
      */
     public function testFromArrayWithRootsCapability(): void
     {
@@ -401,5 +392,54 @@ final class HttpServerSessionTest extends TestCase
             $rootsData['listChanged'] ?? false,
             'roots.listChanged should be true after round-trip'
         );
+    }
+
+    /**
+     * Verify that fromArray() correctly restores all client capabilities
+     * including sampling, elicitation, tasks, and experimental — not just roots.
+     *
+     * This ensures that capability-dependent server behavior does not regress
+     * between HTTP requests after a successful initialize handshake.
+     */
+    public function testFromArrayRestoresAllCapabilities(): void
+    {
+        $transport = new HttpServerSessionTestTransport();
+        $data = [
+            'initializationState' => InitializationState::Initialized->value,
+            'clientParams' => [
+                'protocolVersion' => '2025-11-25',
+                'capabilities' => json_decode(json_encode([
+                    'roots' => ['listChanged' => true],
+                    'sampling' => new \stdClass(),
+                    'elicitation' => new \stdClass(),
+                    'tasks' => new \stdClass(),
+                    'experimental' => ['customFeature' => true],
+                ]), true),
+                'clientInfo' => [
+                    'name' => 'full-caps-client',
+                    'version' => '1.0.0',
+                ],
+            ],
+            'negotiatedProtocolVersion' => '2025-11-25',
+        ];
+
+        $session = HttpServerSession::fromArray(
+            $data,
+            $transport,
+            $this->createInitOptions(),
+            new NullLogger()
+        );
+
+        $restoredRaw = $session->toArray();
+        $restored = json_decode(json_encode($restoredRaw['clientParams']), true);
+        $caps = $restored['capabilities'];
+
+        $this->assertNotNull($caps['roots'] ?? null, 'roots capability should be restored');
+        $this->assertTrue($caps['roots']['listChanged'], 'roots.listChanged should be true');
+        $this->assertArrayHasKey('sampling', $caps, 'sampling capability should be restored');
+        $this->assertArrayHasKey('elicitation', $caps, 'elicitation capability should be restored');
+        $this->assertArrayHasKey('tasks', $caps, 'tasks capability should be restored');
+        $this->assertArrayHasKey('experimental', $caps, 'experimental capability should be restored');
+        $this->assertTrue($caps['experimental']['customFeature'], 'experimental.customFeature should be true');
     }
 }
