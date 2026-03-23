@@ -41,6 +41,8 @@ namespace Mcp\Types;
  * @property float|null $progress Current progress value (notifications/progress)
  * @property float|null $total Total progress value (notifications/progress)
  * @property string|null $elicitationId Elicitation identifier (notifications/elicitation/complete)
+ * @property string|int|null $requestId Request ID (notifications/cancelled)
+ * @property string|null $reason Cancellation reason (notifications/cancelled)
  */
 class NotificationParams implements McpModel {
     use ExtraFieldsTrait;

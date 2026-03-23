@@ -40,6 +40,8 @@ use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
 use Mcp\Types\AudioContent;
 use Mcp\Types\Annotations;
+use Mcp\Types\JSONRPCNotification;
+use Mcp\Types\NotificationParams;
 use Mcp\Types\RequestParams;
 use PHPUnit\Framework\TestCase;
 
@@ -475,6 +477,285 @@ final class ServerSessionTest extends TestCase
         $this->assertInstanceOf(TextContent::class, $adapted->content[0]);
         $this->assertNull($adapted->content[0]->annotations, 'Annotations should be removed for older protocol');
         $this->assertSame('hello', $adapted->content[0]->text, 'Existing text content should be preserved');
+    }
+
+    /**
+     * Test that registered notification handlers are dispatched through the session path.
+     *
+     * Verifies the fix for a bug where ServerSession::handleNotification() special-cased
+     * notifications/initialized but silently dropped all other notifications without
+     * consulting $this->methodNotificationHandlers. This meant notification handlers
+     * registered via registerNotificationHandlers() were never invoked at runtime.
+     *
+     * Integration test flow:
+     * 1. Initialize session via BaseSession message path
+     * 2. Register a notification handler on the session
+     * 3. Send a notifications/roots/list_changed through BaseSession::handleIncomingMessage()
+     * 4. Verify the handler was invoked with the expected params
+     *
+     * Uses notifications/roots/list_changed (a parameterless notification) to test
+     * the dispatch path cleanly without depending on notification type internals.
+     *
+     * Corresponds to ServerSession.php:229-258 (handleNotification method)
+     */
+    public function testRegisteredNotificationHandlersAreDispatched(): void
+    {
+        $transport = new InMemoryTransport();
+        $options = new InitializationOptions(
+            serverName: 'test-server',
+            serverVersion: '1.0.0',
+            capabilities: new ServerCapabilities()
+        );
+        $session = new TestableServerSession($transport, $options);
+
+        // Step 1: Initialize the session
+        $initialize = new JsonRpcMessage(
+            new JSONRPCRequest(
+                jsonrpc: '2.0',
+                id: new RequestId(1),
+                method: 'initialize',
+                params: new RawInitializeParams(
+                    protocolVersion: Version::LATEST_PROTOCOL_VERSION,
+                    capabilities: [],
+                    clientInfo: ['name' => 'test-client', 'version' => '1.0.0']
+                )
+            )
+        );
+        $session->processIncoming($initialize);
+
+        // Step 2: Register a notification handler
+        $handlerInvoked = false;
+        $capturedParams = null;
+        $session->registerNotificationHandlers([
+            'notifications/roots/list_changed' => function ($params) use (&$handlerInvoked, &$capturedParams): void {
+                $handlerInvoked = true;
+                $capturedParams = $params;
+            },
+        ]);
+
+        // Step 3: Send the notifications/initialized to complete initialization
+        $initialized = new JsonRpcMessage(
+            new JSONRPCNotification(
+                jsonrpc: '2.0',
+                method: 'notifications/initialized',
+                params: null
+            )
+        );
+        $session->processIncoming($initialized);
+
+        // Step 4: Send a notifications/roots/list_changed through the base session path
+        $rootsChanged = new JsonRpcMessage(
+            new JSONRPCNotification(
+                jsonrpc: '2.0',
+                method: 'notifications/roots/list_changed',
+                params: null
+            )
+        );
+        $session->processIncoming($rootsChanged);
+
+        // Assert: Handler was invoked
+        $this->assertTrue($handlerInvoked, 'Registered notification handler should be dispatched');
+    }
+
+    /**
+     * Test that notification handlers for notifications/progress receive params.
+     *
+     * Unlike some notification types (e.g. CancelledNotification) that store data
+     * as direct properties, ProgressNotification passes ProgressNotificationParams
+     * to its parent Notification::$params. This test verifies that param-carrying
+     * notification types deliver their params to handlers correctly.
+     *
+     * Corresponds to ServerSession.php:229-258 (handleNotification method)
+     */
+    public function testNotificationHandlerReceivesParams(): void
+    {
+        $transport = new InMemoryTransport();
+        $options = new InitializationOptions(
+            serverName: 'test-server',
+            serverVersion: '1.0.0',
+            capabilities: new ServerCapabilities()
+        );
+        $session = new TestableServerSession($transport, $options);
+
+        // Initialize session
+        $session->processIncoming(new JsonRpcMessage(
+            new JSONRPCRequest(
+                jsonrpc: '2.0',
+                id: new RequestId(1),
+                method: 'initialize',
+                params: new RawInitializeParams(
+                    protocolVersion: Version::LATEST_PROTOCOL_VERSION,
+                    capabilities: [],
+                    clientInfo: ['name' => 'test-client', 'version' => '1.0.0']
+                )
+            )
+        ));
+        $session->processIncoming(new JsonRpcMessage(
+            new JSONRPCNotification(jsonrpc: '2.0', method: 'notifications/initialized', params: null)
+        ));
+
+        // Register handler for progress notifications
+        $capturedParams = null;
+        $session->registerNotificationHandlers([
+            'notifications/progress' => function ($params) use (&$capturedParams): void {
+                $capturedParams = $params;
+            },
+        ]);
+
+        // Send a progress notification with params
+        $progressParams = new NotificationParams();
+        $progressParams->progressToken = 'tok-1';
+        $progressParams->progress = 0.5;
+
+        $session->processIncoming(new JsonRpcMessage(
+            new JSONRPCNotification(
+                jsonrpc: '2.0',
+                method: 'notifications/progress',
+                params: $progressParams
+            )
+        ));
+
+        // Assert: Handler received the ProgressNotificationParams
+        $this->assertNotNull($capturedParams, 'Progress notification handler should receive params');
+    }
+
+    /**
+     * Test that notification handlers for notifications/cancelled receive synthesized params.
+     *
+     * CancelledNotification stores its payload as direct properties rather than in
+     * Notification::$params, so the session normalizes it back into NotificationParams
+     * before invoking registered handlers. This preserves the existing callback shape
+     * while keeping the wire payload available to handlers.
+     *
+     * Corresponds to ServerSession.php:247-275 (notification dispatch and param normalization)
+     */
+    public function testCancelledNotificationHandlerReceivesSynthesizedParams(): void
+    {
+        $transport = new InMemoryTransport();
+        $options = new InitializationOptions(
+            serverName: 'test-server',
+            serverVersion: '1.0.0',
+            capabilities: new ServerCapabilities()
+        );
+        $session = new TestableServerSession($transport, $options);
+
+        $session->processIncoming(new JsonRpcMessage(
+            new JSONRPCRequest(
+                jsonrpc: '2.0',
+                id: new RequestId(1),
+                method: 'initialize',
+                params: new RawInitializeParams(
+                    protocolVersion: Version::LATEST_PROTOCOL_VERSION,
+                    capabilities: [],
+                    clientInfo: ['name' => 'test-client', 'version' => '1.0.0']
+                )
+            )
+        ));
+        $session->processIncoming(new JsonRpcMessage(
+            new JSONRPCNotification(jsonrpc: '2.0', method: 'notifications/initialized', params: null)
+        ));
+
+        $capturedParams = null;
+        $session->registerNotificationHandlers([
+            'notifications/cancelled' => function ($params) use (&$capturedParams): void {
+                $capturedParams = $params;
+            },
+        ]);
+
+        $cancelledParams = new NotificationParams();
+        $cancelledParams->requestId = 'req-42';
+        $cancelledParams->reason = 'test cancellation';
+
+        $session->processIncoming(new JsonRpcMessage(
+            new JSONRPCNotification(
+                jsonrpc: '2.0',
+                method: 'notifications/cancelled',
+                params: $cancelledParams
+            )
+        ));
+
+        $this->assertInstanceOf(
+            NotificationParams::class,
+            $capturedParams,
+            'Cancelled notification handler should receive synthesized params'
+        );
+        $this->assertSame(
+            'req-42',
+            $capturedParams->requestId,
+            'Synthesized params should preserve the requestId from the wire payload'
+        );
+        $this->assertSame(
+            'test cancellation',
+            $capturedParams->reason,
+            'Synthesized params should preserve the reason from the wire payload'
+        );
+    }
+
+    /**
+     * Test that extra wire fields on notifications/cancelled survive param normalization.
+     *
+     * The MCP spec allows unofficial extension fields on notification params for forward
+     * compatibility. ClientNotification::createCancelledNotification() preserves extra
+     * fields via ExtraFieldsTrait, and getHandlerNotificationParams() must carry them
+     * into the synthesized NotificationParams so handlers see the full wire payload.
+     *
+     * Corresponds to ServerSession.php:276-281 (extra field forwarding)
+     */
+    public function testCancelledNotificationPreservesExtraFields(): void
+    {
+        $transport = new InMemoryTransport();
+        $options = new InitializationOptions(
+            serverName: 'test-server',
+            serverVersion: '1.0.0',
+            capabilities: new ServerCapabilities()
+        );
+        $session = new TestableServerSession($transport, $options);
+
+        $session->processIncoming(new JsonRpcMessage(
+            new JSONRPCRequest(
+                jsonrpc: '2.0',
+                id: new RequestId(1),
+                method: 'initialize',
+                params: new RawInitializeParams(
+                    protocolVersion: Version::LATEST_PROTOCOL_VERSION,
+                    capabilities: [],
+                    clientInfo: ['name' => 'test-client', 'version' => '1.0.0']
+                )
+            )
+        ));
+        $session->processIncoming(new JsonRpcMessage(
+            new JSONRPCNotification(jsonrpc: '2.0', method: 'notifications/initialized', params: null)
+        ));
+
+        $capturedParams = null;
+        $session->registerNotificationHandlers([
+            'notifications/cancelled' => function ($params) use (&$capturedParams): void {
+                $capturedParams = $params;
+            },
+        ]);
+
+        // Include an extra field beyond requestId and reason
+        $cancelledParams = new NotificationParams();
+        $cancelledParams->requestId = 'req-99';
+        $cancelledParams->reason = 'timeout';
+        $cancelledParams->customExtension = 'extra-value';
+
+        $session->processIncoming(new JsonRpcMessage(
+            new JSONRPCNotification(
+                jsonrpc: '2.0',
+                method: 'notifications/cancelled',
+                params: $cancelledParams
+            )
+        ));
+
+        $this->assertInstanceOf(NotificationParams::class, $capturedParams);
+        $this->assertSame('req-99', $capturedParams->requestId);
+        $this->assertSame('timeout', $capturedParams->reason);
+        $this->assertSame(
+            'extra-value',
+            $capturedParams->customExtension,
+            'Extra wire fields should be preserved through param normalization'
+        );
     }
 
     /**

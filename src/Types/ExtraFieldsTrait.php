@@ -49,4 +49,10 @@ trait ExtraFieldsTrait
     {
         return isset($this->extraFields[$name]);
     }
+
+    /** @return array<string, mixed> */
+    public function getExtraFields(): array
+    {
+        return $this->extraFields;
+    }
 }

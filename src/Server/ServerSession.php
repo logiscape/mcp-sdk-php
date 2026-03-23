@@ -48,6 +48,8 @@ use Mcp\Types\JSONRPCNotification;
 use Mcp\Types\JSONRPCResponse;
 use Mcp\Types\JsonRpcMessage;
 use Mcp\Types\LoggingLevel;
+use Mcp\Types\Notification;
+use Mcp\Types\NotificationParams;
 use Mcp\Types\PromptMessage;
 use Mcp\Types\Result;
 use Mcp\Types\TextContent;
@@ -243,8 +245,46 @@ class ServerSession extends BaseSession {
             throw new RuntimeException('Received notification before initialization was complete');
         }
 
-        // Fallback for notifications you haven't specialized:
-        $this->logger->info('Received notification: ' . $method);
+        // Dispatch to registered notification handlers
+        if (isset($this->methodNotificationHandlers[$method])) {
+            $this->logger->info("Calling notification handler for method: $method");
+            $handler = $this->methodNotificationHandlers[$method];
+            try {
+                $params = $this->getHandlerNotificationParams($actualNotification);
+                $handler($params);
+            } catch (\Throwable $e) {
+                $this->logger->error("Notification handler error: $e");
+            }
+        } else {
+            $this->logger->info('Received notification: ' . $method);
+        }
+    }
+
+    private function getHandlerNotificationParams(Notification $notification): ?NotificationParams
+    {
+        if ($notification->params !== null) {
+            return $notification->params;
+        }
+
+        if ($notification instanceof \Mcp\Types\CancelledNotification) {
+            $params = new NotificationParams();
+            $params->requestId = $notification->requestId->getValue();
+
+            if ($notification->reason !== null) {
+                $params->reason = $notification->reason;
+            }
+
+            // Preserve any extra wire fields for forward compatibility
+            foreach ($notification->getExtraFields() as $key => $value) {
+                if ($key !== 'requestId' && $key !== 'reason') {
+                    $params->$key = $value;
+                }
+            }
+
+            return $params;
+        }
+
+        return null;
     }
 
     /**
