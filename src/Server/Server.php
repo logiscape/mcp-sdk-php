@@ -69,7 +69,8 @@ class Server {
 
     public function __construct(
         private readonly string $name,
-        ?LoggerInterface $logger = null
+        ?LoggerInterface $logger = null,
+        private readonly string $version = '1.0.0',
     ) {
         $this->logger = $logger ?? new NullLogger();
         $this->logger->debug("Initializing server '$name'");
@@ -95,7 +96,7 @@ class Server {
 
         return new InitializationOptions(
             serverName: $this->name,
-            serverVersion: $this->getPackageVersion('mcp'),
+            serverVersion: $this->version,
             capabilities: $this->getCapabilities($notificationOptions, $experimentalCapabilities)
         );
     }
@@ -306,17 +307,6 @@ class Server {
         }
 
         $this->session->sendResponse($id, $error);
-    }
-
-    /**
-     * Retrieves the package version.
-     *
-     * @param string $package The package name.
-     * @return string The package version.
-     */
-    private function getPackageVersion(string $package): string {
-        // Return a static version. Actual implementation can read from composer.json or elsewhere.
-        return '1.0.0';
     }
 
     /**
