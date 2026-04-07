@@ -131,11 +131,16 @@ class McpServer
      *
      * @param string $name The server name advertised during initialization
      * @param LoggerInterface|null $logger [Added] Optional PSR-3 logger
+     * @param string $version The server version advertised during initialization
      */
-    public function __construct(string $name, ?LoggerInterface $logger = null)
+    public function __construct(
+        string $name,
+        ?LoggerInterface $logger = null,
+        string $version = '1.0.0',
+    )
     {
         $this->logger = $logger ?? new NullLogger();
-        $this->server = new Server($name, $this->logger);
+        $this->server = new Server($name, $this->logger, $version);
         $this->registerDefaultHandlers();
     }
 
