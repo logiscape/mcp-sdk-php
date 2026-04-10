@@ -83,6 +83,10 @@ class RequestResponder {
         return $this->request;
     }
 
+    public function getRequestId(): RequestId {
+        return $this->requestId;
+    }
+
     /**
      * Returns the Meta object associated with the request, if any.
      */

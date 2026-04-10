@@ -16,7 +16,7 @@
  * For the full copyright and license information, please view the LICENSE
  * file that was distributed with this source code.
  *
- * @package    logiscape/mcp-sdk-php 
+ * @package    logiscape/mcp-sdk-php
  * @author     Josh Abbott <https://joshabbott.com>
  * @copyright  Logiscape LLC
  * @license    MIT License
@@ -29,15 +29,37 @@ declare(strict_types=1);
 
 namespace Mcp\Server;
 
+use Mcp\Server\Elicitation\ElicitationSuspendException;
+use Mcp\Server\Elicitation\PendingElicitation;
 use Mcp\Server\ServerSession;
 use Mcp\Shared\BaseSession;
+use Mcp\Shared\RequestResponder;
+use Mcp\Types\ElicitationCreateResult;
 use Mcp\Types\Implementation;
 use Mcp\Types\ClientCapabilities;
+use Mcp\Types\JSONRPCRequest;
+use Mcp\Types\JSONRPCResponse;
+use Mcp\Types\JSONRPCError;
+use Mcp\Types\JsonRpcMessage;
+use Mcp\Types\RequestId;
+use Mcp\Types\RequestParams;
+use Mcp\Types\CallToolResult;
+use Mcp\Types\TextContent;
 use Mcp\Server\InitializationState;
 use Mcp\Types\InitializeRequestParams;
 
 class HttpServerSession extends ServerSession
 {
+    /**
+     * Pending elicitation states, keyed by server request ID.
+     *
+     * Multiple tool calls within the same HTTP request can each suspend
+     * independently, so this must be a map rather than a single slot.
+     *
+     * @var array<int, PendingElicitation>
+     */
+    protected array $pendingElicitations = [];
+
     protected function startMessageProcessing(): void
     {
         $this->isInitialized = true;
@@ -48,9 +70,252 @@ class HttpServerSession extends ServerSession
             if ($message === null) {
                 break;
             }
+
+            // Check if this is a response to a pending elicitation request
+            $matchedId = $this->matchElicitationResponse($message);
+            if ($matchedId !== null) {
+                $this->handleElicitationResponse($message, $matchedId);
+                continue;
+            }
+
             $this->handleIncomingMessage($message);
         }
         $this->close();
+    }
+
+    /**
+     * Override handleRequest to catch ElicitationSuspendException in HTTP mode.
+     *
+     * When a tool handler throws ElicitationSuspendException, we:
+     * 1. Save the pending state so the next HTTP request can resume
+     * 2. Write the elicitation/create request to the outgoing queue
+     * 3. Do NOT respond to the original tools/call request (deferred)
+     */
+    public function handleRequest(RequestResponder $responder): void
+    {
+        $request = $responder->getRequest();
+        $actualRequest = $request->getRequest();
+        $method = $actualRequest->method;
+        $params = $actualRequest->params ?? null;
+
+        if ($method === 'initialize') {
+            $respond = fn($result) => $responder->sendResponse($result);
+            $this->handleInitialize($request, $respond);
+            return;
+        }
+
+        if ($this->initializationState !== InitializationState::Initialized) {
+            throw new \RuntimeException('Received request before initialization was complete');
+        }
+
+        if (isset($this->methodRequestHandlers[$method])) {
+            $this->logger->info("Calling handler for method: $method");
+            $handler = $this->methodRequestHandlers[$method];
+            try {
+                $result = $handler($params);
+                $responder->sendResponse($result);
+            } catch (ElicitationSuspendException $e) {
+                $this->handleElicitationSuspend($e, $responder);
+            } catch (\Mcp\Shared\McpError $e) {
+                $this->logger->error("Handler error for method '$method': " . $e->getMessage());
+                $responder->sendResponse($e->error);
+            } catch (\Throwable $e) {
+                $this->logger->error("Handler error for method '$method': " . $e->getMessage());
+                $responder->sendResponse(new \Mcp\Shared\ErrorData(
+                    code: -32603,
+                    message: $e->getMessage()
+                ));
+            }
+        } else {
+            $this->logger->warning("No registered handler for method: $method");
+            $responder->sendResponse(new \Mcp\Shared\ErrorData(
+                code: -32601,
+                message: "Method not found: $method"
+            ));
+        }
+    }
+
+    /**
+     * Handle an ElicitationSuspendException from a tool handler.
+     *
+     * Sends the elicitation/create request to the client and saves the pending
+     * state so the tool handler can be resumed when the response arrives.
+     */
+    protected function handleElicitationSuspend(
+        ElicitationSuspendException $e,
+        RequestResponder $responder,
+    ): void {
+        // Assign a server request ID for the elicitation request
+        $serverRequestId = $this->getNextRequestId();
+        $this->setNextRequestId($serverRequestId + 1);
+
+        $this->logger->info("Suspending tool '{$e->toolName}' for elicitation (server request ID: $serverRequestId)");
+
+        // Save pending state keyed by server request ID
+        $this->pendingElicitations[$serverRequestId] = new PendingElicitation(
+            toolName: $e->toolName,
+            toolArguments: $e->toolArguments,
+            originalRequestId: $responder->getRequestId()->value,
+            serverRequestId: $serverRequestId,
+            elicitationSequence: $e->elicitationSequence,
+            previousResults: $e->previousResults,
+            createdAt: microtime(true),
+        );
+
+        // Write the elicitation/create request to the outgoing queue
+        $requestId = new RequestId($serverRequestId);
+        $jsonRpcRequest = new JSONRPCRequest(
+            jsonrpc: '2.0',
+            id: $requestId,
+            method: $e->request->method,
+            params: $e->request->params,
+        );
+        $this->writeMessage(new JsonRpcMessage($jsonRpcRequest));
+
+        // Do NOT respond to the original request — it remains pending until
+        // the client sends back the elicitation response in a subsequent HTTP request.
+    }
+
+    /**
+     * If an incoming message is a JSON-RPC response that matches a pending
+     * elicitation, return that elicitation's server request ID. Otherwise null.
+     */
+    protected function matchElicitationResponse(JsonRpcMessage $message): ?int
+    {
+        if (empty($this->pendingElicitations)) {
+            return null;
+        }
+
+        $inner = $message->message;
+        $responseId = null;
+
+        if ($inner instanceof JSONRPCResponse) {
+            $responseId = $inner->id->value;
+        } elseif ($inner instanceof JSONRPCError) {
+            $responseId = $inner->id->value;
+        }
+
+        if ($responseId !== null && isset($this->pendingElicitations[$responseId])) {
+            return $responseId;
+        }
+
+        return null;
+    }
+
+    /**
+     * Handle the client's response to one of our elicitation requests.
+     *
+     * Re-invokes the tool handler with the elicitation result pre-loaded,
+     * then responds to the original tools/call request.
+     */
+    protected function handleElicitationResponse(JsonRpcMessage $message, int $serverRequestId): void
+    {
+        $pending = $this->pendingElicitations[$serverRequestId];
+        unset($this->pendingElicitations[$serverRequestId]);
+
+        $inner = $message->message;
+
+        // Parse the elicitation result
+        if ($inner instanceof JSONRPCError) {
+            $this->logger->warning('Client returned error for elicitation request: ' . ($inner->error->message ?? 'unknown'));
+            // Respond to the original request with an error
+            $originalRequestId = new RequestId($pending->originalRequestId);
+            $this->sendResponse($originalRequestId, new \Mcp\Shared\ErrorData(
+                code: -32603,
+                message: 'Elicitation failed: client returned error'
+            ));
+            return;
+        }
+
+        // Build the elicitation result from the response
+        $resultData = $inner->result;
+        if (!is_array($resultData)) {
+            $resultData = (array) $resultData;
+        }
+
+        // Add this result to accumulated previous results
+        $allResults = $pending->previousResults;
+        $allResults[$pending->elicitationSequence] = $resultData;
+
+        // Re-invoke the tool handler with preloaded results
+        $toolName = $pending->toolName;
+        $originalRequestId = new RequestId($pending->originalRequestId);
+
+        if (!isset($this->methodRequestHandlers['tools/call'])) {
+            $this->sendResponse($originalRequestId, new \Mcp\Shared\ErrorData(
+                code: -32601,
+                message: 'No tools/call handler registered'
+            ));
+            return;
+        }
+
+        $handler = $this->methodRequestHandlers['tools/call'];
+
+        // Reconstruct the params as the original tools/call handler expects
+        $params = new RequestParams();
+        $params->name = $toolName;
+        $params->arguments = !empty($pending->toolArguments)
+            ? (object) $pending->toolArguments
+            : new \stdClass();
+        // Tag with elicitation results so McpServer can build the context
+        $params->_elicitationResults = $allResults;
+
+        try {
+            $result = $handler($params);
+            $this->sendResponse($originalRequestId, $result);
+        } catch (ElicitationSuspendException $e) {
+            // Another elicitation needed — save new pending state
+            $newServerRequestId = $this->getNextRequestId();
+            $this->setNextRequestId($newServerRequestId + 1);
+
+            $this->logger->info("Tool '{$toolName}' requires additional elicitation (sequence {$e->elicitationSequence})");
+
+            $this->pendingElicitations[$newServerRequestId] = new PendingElicitation(
+                toolName: $e->toolName,
+                toolArguments: $e->toolArguments,
+                originalRequestId: $pending->originalRequestId,
+                serverRequestId: $newServerRequestId,
+                elicitationSequence: $e->elicitationSequence,
+                previousResults: $e->previousResults,
+                createdAt: microtime(true),
+            );
+
+            $requestId = new RequestId($newServerRequestId);
+            $jsonRpcRequest = new JSONRPCRequest(
+                jsonrpc: '2.0',
+                id: $requestId,
+                method: $e->request->method,
+                params: $e->request->params,
+            );
+            $this->writeMessage(new JsonRpcMessage($jsonRpcRequest));
+        } catch (\Mcp\Shared\McpError $e) {
+            $this->sendResponse($originalRequestId, $e->error);
+        } catch (\Throwable $e) {
+            $this->sendResponse($originalRequestId, new \Mcp\Shared\ErrorData(
+                code: -32603,
+                message: $e->getMessage()
+            ));
+        }
+    }
+
+    /**
+     * Get the pending elicitation states.
+     *
+     * @return array<int, PendingElicitation> Keyed by server request ID
+     */
+    public function getPendingElicitations(): array
+    {
+        return $this->pendingElicitations;
+    }
+
+    /**
+     * Get a single pending elicitation (convenience for the common single-pending case).
+     *
+     * @return PendingElicitation|null The first pending elicitation, or null if none
+     */
+    public function getPendingElicitation(): ?PendingElicitation
+    {
+        return empty($this->pendingElicitations) ? null : reset($this->pendingElicitations);
     }
 
     /**
@@ -58,18 +323,25 @@ class HttpServerSession extends ServerSession
      */
     public function toArray(): array
     {
-        return [
-            // InitializationState is an enum; store its integer value
+        $data = [
             'initializationState' => $this->initializationState->value,
-            
-            // $clientParams is an object (InitializeRequestParams)
-            // so convert to an array or JSON
             'clientParams' => $this->clientParams
                 ? $this->clientParams->jsonSerialize()
                 : null,
-            
             'negotiatedProtocolVersion' => $this->negotiatedProtocolVersion,
+            'nextRequestId' => $this->getNextRequestId(),
         ];
+
+        // Persist pending elicitation states
+        if (!empty($this->pendingElicitations)) {
+            $serialized = [];
+            foreach ($this->pendingElicitations as $id => $pending) {
+                $serialized[$id] = $pending->toArray();
+            }
+            $data['pendingElicitations'] = $serialized;
+        }
+
+        return $data;
     }
 
     /**
@@ -95,25 +367,47 @@ class HttpServerSession extends ServerSession
             $capabilities = is_array($capabilitiesData) && !empty($capabilitiesData)
                 ? ClientCapabilities::fromArray($capabilitiesData)
                 : new ClientCapabilities();
-    
+
             // Instantiate Implementation for clientInfo
-            $clientInfo = new Implementation(
-                name: $clientParamsData['clientInfo']['name'] ?? '',
-                version: $clientParamsData['clientInfo']['version'] ?? ''
-            );
-    
+            $clientInfoData = $clientParamsData['clientInfo'] ?? [];
+            if ($clientInfoData instanceof Implementation) {
+                $clientInfo = $clientInfoData;
+            } else {
+                $clientInfo = new Implementation(
+                    name: $clientInfoData['name'] ?? '',
+                    version: $clientInfoData['version'] ?? ''
+                );
+            }
+
             // Now instantiate InitializeRequestParams
             $initParams = new InitializeRequestParams(
                 protocolVersion: $clientParamsData['protocolVersion'] ?? '',
                 capabilities: $capabilities,
                 clientInfo: $clientInfo
             );
-    
+
             $session->clientParams = $initParams;
         }
 
         $session->negotiatedProtocolVersion =
             $data['negotiatedProtocolVersion'] ?? $session->negotiatedProtocolVersion;
+
+        // Restore request ID counter
+        if (isset($data['nextRequestId'])) {
+            $session->setNextRequestId((int) $data['nextRequestId']);
+        }
+
+        // Restore pending elicitation states
+        if (!empty($data['pendingElicitations'])) {
+            foreach ($data['pendingElicitations'] as $id => $pendingData) {
+                $session->pendingElicitations[(int) $id] = PendingElicitation::fromArray($pendingData);
+            }
+        }
+        // Backward compatibility: single-slot format from earlier serializations
+        if (!empty($data['pendingElicitation']) && empty($data['pendingElicitations'])) {
+            $p = PendingElicitation::fromArray($data['pendingElicitation']);
+            $session->pendingElicitations[$p->serverRequestId] = $p;
+        }
 
         return $session;
     }

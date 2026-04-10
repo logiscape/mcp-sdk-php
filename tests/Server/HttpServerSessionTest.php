@@ -104,7 +104,8 @@ final class HttpServerSessionTest extends TestCase
         $this->assertArrayHasKey('initializationState', $data);
         $this->assertArrayHasKey('clientParams', $data);
         $this->assertArrayHasKey('negotiatedProtocolVersion', $data);
-        $this->assertCount(3, $data, 'toArray() should return exactly 3 keys');
+        $this->assertArrayHasKey('nextRequestId', $data);
+        $this->assertCount(4, $data, 'toArray() should return exactly 4 keys');
     }
 
     /**

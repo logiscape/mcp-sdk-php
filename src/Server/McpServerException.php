@@ -142,4 +142,33 @@ class McpServerException extends McpError
             message: "Result not available for task: {$taskId}"
         ));
     }
+
+    /**
+     * Create a URL elicitation required error (-32042).
+     *
+     * Per MCP spec: returned when a request cannot be processed until
+     * URL-mode elicitation is completed. The error data includes a list
+     * of elicitations the client must complete.
+     *
+     * @param array<int, array<string, mixed>> $elicitations List of elicitation requests
+     */
+    public static function urlElicitationRequired(array $elicitations, string $message = ''): self
+    {
+        return new self(new ErrorData(
+            code: McpError::URL_ELICITATION_REQUIRED,
+            message: $message ?: 'This request requires URL elicitation to proceed.',
+            data: ['elicitations' => $elicitations],
+        ));
+    }
+
+    /**
+     * Create an error for when the client does not support the required elicitation mode.
+     */
+    public static function elicitationNotSupported(string $mode = 'elicitation'): self
+    {
+        return new self(new ErrorData(
+            code: -32602,
+            message: "Client does not support {$mode}"
+        ));
+    }
 }

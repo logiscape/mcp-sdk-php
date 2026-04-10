@@ -33,11 +33,15 @@ namespace Mcp\Types;
  * According to the schema, `params` can have `_meta?: { progressToken?: ProgressToken }` and arbitrary fields.
  *
  * Known dynamic properties used by the MCP protocol:
+ * @property string|null $name Tool/prompt/resource name (tools/call, prompts/get, etc.)
+ * @property \stdClass|array<string, mixed>|null $arguments Tool arguments (tools/call)
+ * @property string|null $uri Resource URI (resources/read, resources/subscribe)
  * @property string|null $message Elicitation message (elicitation/create)
  * @property string|null $mode Elicitation mode: "form" or "url" (elicitation/create)
  * @property array<string, mixed>|null $requestedSchema JSON Schema for form mode (elicitation/create)
  * @property string|null $url URL for URL mode (elicitation/create)
  * @property string|null $elicitationId Elicitation identifier (elicitation/create)
+ * @property array<int, array<string, mixed>>|null $_elicitationResults Preloaded elicitation results (internal)
  */
 class RequestParams implements McpModel {
     use ExtraFieldsTrait;

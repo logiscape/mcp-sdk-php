@@ -22,6 +22,9 @@ declare(strict_types=1);
 namespace Mcp\Server;
 
 use Mcp\Server\Auth\TokenValidatorInterface;
+use Mcp\Server\Elicitation\ElicitationContext;
+use Mcp\Server\Elicitation\ElicitationDeclinedException;
+use Mcp\Server\Elicitation\ElicitationSuspendException;
 use Mcp\Server\Transport\Http\FileSessionStore;
 use Mcp\Server\Transport\Http\SessionStoreInterface;
 use Mcp\Server\Transport\Http\StandardPhpAdapter;
@@ -126,6 +129,12 @@ class McpServer
     /** @var TaskManager|null Task manager for long-running operations. */
     protected ?TaskManager $taskManager = null;
 
+    /** @var bool Whether elicitation support is enabled. */
+    protected bool $elicitationEnabled = false;
+
+    /** @var array<string, bool> Tool names that require ElicitationContext injection. */
+    protected array $toolsNeedElicitation = [];
+
     /**
      * Create a new McpServer instance.
      *
@@ -185,9 +194,36 @@ class McpServer
 
         $this->tools[] = $tool;
 
-        $this->toolHandlers[$name] = function ($args) use ($callback, $outputSchema) {
+        // Detect if callback needs ElicitationContext
+        $needsElicitation = $this->callbackNeedsElicitation($callback);
+        if ($needsElicitation) {
+            $this->toolsNeedElicitation[$name] = true;
+        }
+
+        $this->toolHandlers[$name] = function ($args) use ($name, $callback, $outputSchema, $needsElicitation) {
             $arguments = json_decode(json_encode($args), true) ?? [];
-            $ordered = $this->matchNamedParameters($callback, $arguments);
+
+            // Check for preloaded elicitation results (HTTP resume path)
+            $elicitationResults = [];
+            if (is_object($args) && isset($args->_elicitationResults)) {
+                $elicitationResults = (array) $args->_elicitationResults;
+            }
+
+            $elicitContext = null;
+            if ($needsElicitation && $this->elicitationEnabled) {
+                $session = $this->server->getSession();
+                $isHttpMode = ($session instanceof HttpServerSession);
+                $elicitContext = new ElicitationContext(
+                    session: $session,
+                    httpMode: $isHttpMode,
+                    preloadedResults: $elicitationResults,
+                    toolName: $name,
+                    toolArguments: $arguments,
+                    originalRequestId: 0, // Set by HttpServerSession when catching suspend
+                );
+            }
+
+            $ordered = $this->matchNamedParameters($callback, $arguments, $elicitContext);
 
             $result = $callback(...$ordered);
 
@@ -515,6 +551,46 @@ class McpServer
         return $this->taskManager;
     }
 
+    /**
+     * Enable elicitation support for tool handlers.
+     *
+     * When enabled, tool handlers can declare an ElicitationContext parameter
+     * to request information from the user through the client. The context is
+     * automatically injected and handles both stdio (synchronous blocking) and
+     * HTTP (suspend/resume) transports transparently.
+     *
+     * @return self For method chaining
+     */
+    public function enableElicitation(): self
+    {
+        $this->elicitationEnabled = true;
+        return $this;
+    }
+
+    /**
+     * Send a notifications/elicitation/complete notification to the client.
+     *
+     * Call this when your server learns (through its own endpoint, e.g., an
+     * OAuth callback) that an out-of-band URL-mode elicitation has completed.
+     * The client can then prompt the user to retry the original request.
+     *
+     * This is typically called from your OAuth callback handler or similar
+     * endpoint, outside of a tool handler context.
+     *
+     * @param string $elicitationId The ID of the completed elicitation
+     */
+    public function notifyElicitationComplete(string $elicitationId): void
+    {
+        $session = $this->server->getSession();
+        if ($session !== null) {
+            $session->sendElicitationCompleteNotification($elicitationId);
+        } else {
+            $this->logger->warning(
+                "Cannot send elicitation complete notification: no active session (elicitationId: {$elicitationId})"
+            );
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Run Methods
     // -----------------------------------------------------------------------
@@ -639,6 +715,8 @@ class McpServer
 
             try {
                 $result = $handler($arguments);
+            } catch (ElicitationSuspendException $e) {
+                throw $e; // Must propagate to HttpServerSession for suspend/resume
             } catch (McpServerException $e) {
                 throw $e; // Programming errors should propagate
             } catch (\Throwable $e) {
@@ -703,6 +781,11 @@ class McpServer
             $type = $param->getType();
             $typeName = $type instanceof ReflectionNamedType ? $type->getName() : 'string';
 
+            // Skip ElicitationContext parameters — they are injected, not user input
+            if ($typeName === ElicitationContext::class) {
+                continue;
+            }
+
             $jsonType = match ($typeName) {
                 'int', 'float' => 'number',
                 'bool' => 'boolean',
@@ -754,13 +837,15 @@ class McpServer
      * [Added] Match named arguments from a JSON object to a callback's parameters.
      *
      * Uses reflection to map argument names to parameter positions, providing
-     * correct ordering regardless of JSON key order.
+     * correct ordering regardless of JSON key order. ElicitationContext parameters
+     * are injected automatically when provided.
      *
      * @param callable $callback The target callback
      * @param array<string, mixed> $arguments Associative array of arguments
+     * @param ElicitationContext|null $elicitContext Optional context to inject
      * @return array<int, mixed> Ordered arguments matching the callback's parameter list
      */
-    protected function matchNamedParameters(callable $callback, array $arguments): array
+    protected function matchNamedParameters(callable $callback, array $arguments, ?ElicitationContext $elicitContext = null): array
     {
         $reflection = new ReflectionFunction(\Closure::fromCallable($callback));
         $parameters = $reflection->getParameters();
@@ -768,6 +853,15 @@ class McpServer
 
         foreach ($parameters as $param) {
             $name = $param->getName();
+            $type = $param->getType();
+            $typeName = $type instanceof ReflectionNamedType ? $type->getName() : '';
+
+            // Inject ElicitationContext
+            if ($typeName === ElicitationContext::class) {
+                $ordered[] = $elicitContext;
+                continue;
+            }
+
             if (array_key_exists($name, $arguments)) {
                 $ordered[] = $arguments[$name];
             } elseif ($param->isOptional()) {
@@ -778,5 +872,20 @@ class McpServer
         }
 
         return $ordered;
+    }
+
+    /**
+     * Check if a callback has an ElicitationContext parameter.
+     */
+    protected function callbackNeedsElicitation(callable $callback): bool
+    {
+        $reflection = new ReflectionFunction(\Closure::fromCallable($callback));
+        foreach ($reflection->getParameters() as $param) {
+            $type = $param->getType();
+            if ($type instanceof ReflectionNamedType && $type->getName() === ElicitationContext::class) {
+                return true;
+            }
+        }
+        return false;
     }
 }

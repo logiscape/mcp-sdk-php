@@ -55,6 +55,9 @@ use Mcp\Types\Result;
 use Mcp\Types\TextContent;
 use Mcp\Types\Tool;
 use Mcp\Server\InitializationOptions;
+use Mcp\Types\ElicitationCapability;
+use Mcp\Types\ElicitationCreateRequest;
+use Mcp\Types\ElicitationCreateResult;
 use Mcp\Server\Transport\Transport;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -77,6 +80,8 @@ class ServerSession extends BaseSession {
     protected array $methodRequestHandlers = [];
     /** @var array<string, callable> Method-keyed notification handlers registered via registerNotificationHandlers() */
     protected array $methodNotificationHandlers = [];
+    /** Whether sendRequest() should be allowed to wait for client responses (used for elicitation in stdio mode). */
+    protected bool $allowClientResponses = false;
 
     public function __construct(
         protected readonly Transport $transport,
@@ -117,6 +122,13 @@ class ServerSession extends BaseSession {
 
         $this->transport->stop();
         $this->close();
+    }
+
+    /**
+     * Get the client's initialization parameters (including capabilities).
+     */
+    public function getClientParams(): ?InitializeRequestParams {
+        return $this->clientParams;
     }
 
     /**
@@ -303,7 +315,7 @@ class ServerSession extends BaseSession {
      * @param RequestWrapperInterface $request The initialize request.
      * @param callable $respond The responder callable.
      */
-    private function handleInitialize(RequestWrapperInterface $request, callable $respond): void {
+    protected function handleInitialize(RequestWrapperInterface $request, callable $respond): void {
         $this->initializationState = InitializationState::Initializing;
         /** @var InitializeRequestParams $params */
         $params = $request->getRequest()->params;
@@ -390,21 +402,103 @@ class ServerSession extends BaseSession {
     /**
      * Send an elicitation request to the client.
      *
-     * Note: Not yet implemented. Elicitation requires bidirectional request/response
-     * which is limited in synchronous PHP transports. Returns null (unsupported).
+     * In stdio mode, this blocks until the client responds. In HTTP mode,
+     * this is not called directly — the ElicitationContext uses the
+     * suspend/resume pattern instead.
      *
      * @param string $message Message describing what information is needed
-     * @param array<string, mixed>|null $requestedSchema JSON Schema for the form fields
+     * @param array<string, mixed>|null $requestedSchema JSON Schema for form mode
      * @param string|null $url URL for URL-mode elicitation
-     * @return \Mcp\Types\ElicitationCreateResult|null The client's response, or null if not supported
+     * @param string|null $elicitationId Unique ID for URL-mode elicitation
+     * @return ElicitationCreateResult|null The client's response, or null if not supported
      */
     public function sendElicitationRequest(
         string $message,
         ?array $requestedSchema = null,
-        ?string $url = null
-    ): ?\Mcp\Types\ElicitationCreateResult {
-        $this->logger->info('Elicitation not yet implemented in synchronous transport');
-        return null;
+        ?string $url = null,
+        ?string $elicitationId = null,
+    ): ?ElicitationCreateResult {
+        // Check that the client supports elicitation at all
+        $requiredCap = new ClientCapabilities(elicitation: new ElicitationCapability());
+        if (!$this->checkClientCapability($requiredCap)) {
+            $this->logger->info('Client does not support elicitation');
+            return null;
+        }
+
+        $isUrlMode = ($url !== null);
+
+        // Check protocol version support
+        if (!$this->clientSupportsFeature('elicitation')) {
+            $this->logger->info('Negotiated protocol version does not support elicitation');
+            return null;
+        }
+        if ($isUrlMode && !$this->clientSupportsFeature('url_elicitation')) {
+            $this->logger->info('Negotiated protocol version does not support URL elicitation');
+            return null;
+        }
+
+        // Check sub-capabilities (form vs url)
+        // Per spec: servers MUST NOT send elicitation requests with modes
+        // not supported by the client. An empty "elicitation": {} object
+        // is equivalent to form-only support.
+        $elicitCap = $this->clientParams->capabilities->elicitation ?? null;
+        if ($isUrlMode && ($elicitCap === null || $elicitCap->url === null)) {
+            $this->logger->info('Client does not support URL-mode elicitation');
+            return null;
+        }
+        if (!$isUrlMode) {
+            // Form is supported when: form is explicitly declared, OR both
+            // form and url are null (empty object = form-only per spec).
+            $formSupported = $elicitCap !== null
+                && ($elicitCap->form !== null || ($elicitCap->form === null && $elicitCap->url === null));
+            if (!$formSupported) {
+                $this->logger->info('Client does not support form-mode elicitation');
+                return null;
+            }
+        }
+
+        // Build the request
+        $request = new ElicitationCreateRequest(
+            message: $message,
+            mode: $isUrlMode ? 'url' : 'form',
+            requestedSchema: $requestedSchema,
+            url: $url,
+            elicitationId: $elicitationId,
+        );
+
+        // Enable client response waiting temporarily, then send
+        $this->allowClientResponses = true;
+        try {
+            /** @var ElicitationCreateResult */
+            return $this->sendRequest($request, ElicitationCreateResult::class);
+        } catch (\Mcp\Shared\McpError $e) {
+            $this->logger->error('Elicitation request failed: ' . $e->getMessage());
+            return null;
+        } finally {
+            $this->allowClientResponses = false;
+        }
+    }
+
+    /**
+     * Send a notifications/elicitation/complete notification to the client.
+     *
+     * Indicates that an out-of-band URL-mode elicitation interaction has completed.
+     *
+     * @param string $elicitationId The ID of the completed elicitation
+     */
+    public function sendElicitationCompleteNotification(string $elicitationId): void
+    {
+        $notificationParams = new NotificationParams();
+        $notificationParams->elicitationId = $elicitationId;
+
+        $jsonRpcNotification = new JSONRPCNotification(
+            jsonrpc: '2.0',
+            method: 'notifications/elicitation/complete',
+            params: $notificationParams
+        );
+
+        $notification = new JsonRpcMessage($jsonRpcNotification);
+        $this->writeMessage($notification);
     }
 
     /**
@@ -715,8 +809,19 @@ class ServerSession extends BaseSession {
     }
 
     protected function waitForResponse(int $requestIdValue, string $resultType, ?\Mcp\Types\Result &$futureResult): \Mcp\Types\Result {
-        // The server typically does not wait for responses from the client.
-        throw new RuntimeException('Server does not support waiting for responses from the client.');
+        if (!$this->allowClientResponses) {
+            throw new RuntimeException('Server does not support waiting for responses from the client.');
+        }
+
+        // Block and read messages until the response for this request arrives.
+        // This is the same logic as BaseSession::waitForResponse() — works in stdio
+        // where the process stays alive and can read from stdin.
+        while ($futureResult === null) {
+            $message = $this->readNextMessage();
+            $this->handleIncomingMessage($message);
+        }
+
+        return $futureResult;
     }
 
     protected function readNextMessage(): JsonRpcMessage {

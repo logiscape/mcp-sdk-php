@@ -319,6 +319,15 @@ class Server {
     }
 
     /**
+     * Gets the active server session.
+     *
+     * @return ServerSession|null The current server session, or null if not set.
+     */
+    public function getSession(): ?ServerSession {
+        return $this->session;
+    }
+
+    /**
      * Checks if the connected client supports a specific feature.
      *
      * @param string $feature The feature to check.
