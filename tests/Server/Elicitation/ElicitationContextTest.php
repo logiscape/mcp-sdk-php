@@ -17,10 +17,14 @@ use Mcp\Server\Transport\Transport;
 use Mcp\Types\ClientCapabilities;
 use Mcp\Types\ElicitationCapability;
 use Mcp\Types\ElicitationCreateResult;
+use Mcp\Types\ElicitationCreateRequest;
 use Mcp\Types\Implementation;
 use Mcp\Types\InitializeRequestParams;
 use Mcp\Types\JsonRpcMessage;
+use Mcp\Types\Meta;
 use Mcp\Types\ServerCapabilities;
+use Mcp\Types\ServerRequest;
+use Mcp\Types\TaskRequestParams;
 use Psr\Log\NullLogger;
 
 /**
@@ -671,5 +675,174 @@ final class ElicitationContextTest extends TestCase
 
         $this->assertFalse($context->supportsForm());
         $this->assertTrue($context->supportsUrl());
+    }
+
+    // -------------------------------------------------------------------
+    // _meta and task support (2025-11-25 task-augmented elicitation)
+    // -------------------------------------------------------------------
+
+    /**
+     * ElicitationCreateRequest serializes _meta and task into params.
+     */
+    public function testElicitationCreateRequestSerializesMetaAndTask(): void
+    {
+        $meta = new Meta();
+        $meta->progressToken = 'tok-42';
+
+        $task = new TaskRequestParams(ttl: 30);
+
+        $request = new ElicitationCreateRequest(
+            message: 'Need info',
+            mode: 'form',
+            requestedSchema: ['type' => 'object', 'properties' => ['x' => ['type' => 'string']]],
+            _meta: $meta,
+            task: $task,
+        );
+
+        // Use json_encode/decode round-trip to get the final wire format
+        $json = json_decode(json_encode($request->jsonSerialize()), true);
+        $this->assertSame('elicitation/create', $json['method']);
+        $params = $json['params'];
+        $this->assertSame('Need info', $params['message']);
+        $this->assertArrayHasKey('_meta', $params);
+        $this->assertSame('tok-42', $params['_meta']['progressToken']);
+        $this->assertArrayHasKey('task', $params);
+        $this->assertSame(30, $params['task']['ttl']);
+    }
+
+    /**
+     * ElicitationCreateRequest without _meta/task serializes identically to before.
+     */
+    public function testElicitationCreateRequestSerializesWithoutMetaAndTask(): void
+    {
+        $request = new ElicitationCreateRequest(
+            message: 'Need info',
+            mode: 'form',
+            requestedSchema: ['type' => 'object', 'properties' => ['x' => ['type' => 'string']]],
+        );
+
+        $json = json_decode(json_encode($request->jsonSerialize()), true);
+        $params = $json['params'];
+        $this->assertArrayNotHasKey('_meta', $params);
+        $this->assertArrayNotHasKey('task', $params);
+        $this->assertSame('Need info', $params['message']);
+    }
+
+    /**
+     * ServerRequest::fromMethodAndParams round-trips _meta and task for elicitation/create.
+     */
+    public function testServerRequestDeserializesElicitationMetaAndTask(): void
+    {
+        $serverRequest = ServerRequest::fromMethodAndParams('elicitation/create', [
+            'message' => 'Enter name',
+            'mode' => 'form',
+            'requestedSchema' => ['type' => 'object', 'properties' => ['name' => ['type' => 'string']]],
+            '_meta' => ['progressToken' => 'pt-99'],
+            'task' => ['ttl' => 60],
+        ]);
+
+        /** @var ElicitationCreateRequest $inner */
+        $inner = $serverRequest->getRequest();
+        $this->assertInstanceOf(ElicitationCreateRequest::class, $inner);
+        $this->assertSame('Enter name', $inner->message);
+        $this->assertNotNull($inner->_meta);
+        $this->assertSame('pt-99', $inner->_meta->progressToken);
+        $this->assertNotNull($inner->task);
+        $this->assertSame(60, $inner->task->ttl);
+    }
+
+    /**
+     * ServerRequest::fromMethodAndParams works without _meta/task (regression).
+     */
+    public function testServerRequestDeserializesElicitationWithoutMetaAndTask(): void
+    {
+        $serverRequest = ServerRequest::fromMethodAndParams('elicitation/create', [
+            'message' => 'Enter name',
+            'requestedSchema' => ['type' => 'object', 'properties' => ['name' => ['type' => 'string']]],
+        ]);
+
+        /** @var ElicitationCreateRequest $inner */
+        $inner = $serverRequest->getRequest();
+        $this->assertInstanceOf(ElicitationCreateRequest::class, $inner);
+        $this->assertNull($inner->_meta);
+        $this->assertNull($inner->task);
+    }
+
+    /**
+     * ElicitationContext::form() HTTP suspend path carries _meta and task on the exception's request.
+     */
+    public function testFormHttpSuspendCarriesMetaAndTask(): void
+    {
+        $session = $this->createSessionWithCapabilities(
+            new ElicitationCapability(form: true)
+        );
+
+        $meta = new Meta();
+        $meta->progressToken = 'progress-1';
+        $task = new TaskRequestParams(ttl: 120);
+
+        $context = new ElicitationContext(
+            session: $session,
+            httpMode: true,
+            preloadedResults: [],
+            toolName: 'test-tool',
+            toolArguments: [],
+            originalRequestId: 5,
+        );
+
+        try {
+            $context->form(
+                'Fill this',
+                ['type' => 'object', 'properties' => ['a' => ['type' => 'string']]],
+                _meta: $meta,
+                task: $task,
+            );
+            $this->fail('Expected ElicitationSuspendException');
+        } catch (ElicitationSuspendException $e) {
+            $this->assertNotNull($e->request->_meta);
+            $this->assertSame('progress-1', $e->request->_meta->progressToken);
+            $this->assertNotNull($e->request->task);
+            $this->assertSame(120, $e->request->task->ttl);
+        }
+    }
+
+    /**
+     * ElicitationContext::url() HTTP suspend path carries _meta and task on the exception's request.
+     */
+    public function testUrlHttpSuspendCarriesMetaAndTask(): void
+    {
+        $session = $this->createSessionWithCapabilities(
+            new ElicitationCapability(form: true, url: true),
+            '2025-11-25'
+        );
+
+        $meta = new Meta();
+        $meta->progressToken = 'progress-url';
+        $task = new TaskRequestParams(ttl: 60);
+
+        $context = new ElicitationContext(
+            session: $session,
+            httpMode: true,
+            preloadedResults: [],
+            toolName: 'auth-tool',
+            toolArguments: [],
+            originalRequestId: 10,
+        );
+
+        try {
+            $context->url(
+                'Authenticate',
+                'https://example.com/auth',
+                'elicit-id',
+                _meta: $meta,
+                task: $task,
+            );
+            $this->fail('Expected ElicitationSuspendException');
+        } catch (ElicitationSuspendException $e) {
+            $this->assertNotNull($e->request->_meta);
+            $this->assertSame('progress-url', $e->request->_meta->progressToken);
+            $this->assertNotNull($e->request->task);
+            $this->assertSame(60, $e->request->task->ttl);
+        }
     }
 }

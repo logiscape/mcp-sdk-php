@@ -239,6 +239,228 @@ final class ElicitationHttpIntegrationTest extends TestCase
     }
 
     /**
+     * Test that _meta (progressToken) and extra fields (task) from the original
+     * tools/call request are restored when the handler resumes after elicitation.
+     *
+     * Regression test: previously, handleElicitationResponse() rebuilt RequestParams
+     * from scratch with only name, arguments, and _elicitationResults — discarding
+     * the original _meta.progressToken and any extra fields like task.
+     */
+    public function testResumedHandlerReceivesRestoredMetaAndExtraFields(): void
+    {
+        $transport = new ElicitationHttpTestTransport();
+        $session = $this->createInitializedSession($transport);
+
+        // Capture the params that the handler receives on resume
+        $capturedParams = null;
+
+        $session->registerHandlers([
+            'tools/call' => function ($params) use (&$capturedParams, $session) {
+                $capturedParams = $params;
+
+                $elicitationResults = [];
+                if (is_object($params) && isset($params->_elicitationResults)) {
+                    $elicitationResults = (array) $params->_elicitationResults;
+                }
+
+                $context = new ElicitationContext(
+                    session: $session,
+                    httpMode: true,
+                    preloadedResults: $elicitationResults,
+                    toolName: $params->name ?? 'unknown',
+                    toolArguments: [],
+                    originalRequestId: 0,
+                );
+
+                $result = $context->form('Confirm?', [
+                    'type' => 'object',
+                    'properties' => ['ok' => ['type' => 'boolean']],
+                ]);
+
+                return new \Mcp\Types\CallToolResult(
+                    content: [new \Mcp\Types\TextContent(text: 'done')]
+                );
+            },
+        ]);
+
+        // Set up pending elicitation with originalRequestParams that include
+        // _meta.progressToken and a task field — as if the original tools/call
+        // carried these values before the first suspension.
+        $ref = new \ReflectionClass($session);
+        $pendingField = $ref->getProperty('pendingElicitations');
+        $pendingField->setValue($session, [100 => new PendingElicitation(
+            toolName: 'my-tool',
+            toolArguments: ['x' => 42],
+            originalRequestId: 7,
+            serverRequestId: 100,
+            elicitationSequence: 0,
+            previousResults: [],
+            createdAt: microtime(true),
+            originalRequestParams: [
+                '_meta' => ['progressToken' => 'tok-abc-123'],
+                'task' => ['id' => 'task-99', 'context' => 'unit-test'],
+            ],
+        )]);
+
+        // Enqueue the client's elicitation response
+        $transport->enqueue(new JsonRpcMessage(new JSONRPCResponse(
+            jsonrpc: '2.0',
+            id: new RequestId(100),
+            result: ['action' => 'accept', 'content' => ['ok' => true]],
+        )));
+
+        // Process — triggers resume
+        $ref->getMethod('startMessageProcessing')->invoke($session);
+
+        // ---- Verify the handler received restored fields ----
+
+        $this->assertNotNull($capturedParams, 'Handler must have been invoked');
+
+        // _meta with progressToken must be restored
+        $this->assertNotNull($capturedParams->_meta, '_meta must be restored on resumed params');
+        $this->assertSame(
+            'tok-abc-123',
+            $capturedParams->_meta->progressToken,
+            'progressToken must survive the suspend/resume round-trip'
+        );
+
+        // Extra field "task" must be restored
+        $this->assertNotNull($capturedParams->task, 'task field must be restored on resumed params');
+        $this->assertSame('task-99', $capturedParams->task['id']);
+        $this->assertSame('unit-test', $capturedParams->task['context']);
+
+        // Standard tool fields must still be correct
+        $this->assertSame('my-tool', $capturedParams->name);
+        $this->assertIsObject($capturedParams->arguments);
+        $this->assertSame(42, $capturedParams->arguments->x);
+
+        // Tool result must respond to the original request ID
+        $this->assertNotEmpty($transport->writtenMessages);
+        $resultMsg = $transport->writtenMessages[0]->message;
+        $this->assertInstanceOf(JSONRPCResponse::class, $resultMsg);
+        $this->assertSame(7, $resultMsg->id->value);
+    }
+
+    /**
+     * Test that _meta and extra fields carry forward through chained
+     * (multi-round) elicitations — not just the first resume.
+     */
+    public function testChainedElicitationPreservesOriginalRequestParams(): void
+    {
+        $transport = new ElicitationHttpTestTransport();
+        $session = $this->createInitializedSession($transport);
+
+        $invokeCount = 0;
+        $lastCapturedParams = null;
+
+        $session->registerHandlers([
+            'tools/call' => function ($params) use (&$invokeCount, &$lastCapturedParams, $session) {
+                $invokeCount++;
+                $lastCapturedParams = $params;
+
+                $elicitationResults = [];
+                if (is_object($params) && isset($params->_elicitationResults)) {
+                    $elicitationResults = (array) $params->_elicitationResults;
+                }
+
+                $context = new ElicitationContext(
+                    session: $session,
+                    httpMode: true,
+                    preloadedResults: $elicitationResults,
+                    toolName: $params->name ?? 'unknown',
+                    toolArguments: [],
+                    originalRequestId: 0,
+                );
+
+                // First elicitation — will use preloaded result on 2nd+ invocation
+                $context->form('Step 1?', [
+                    'type' => 'object',
+                    'properties' => ['a' => ['type' => 'string']],
+                ]);
+
+                // Second elicitation — will suspend on 2nd invocation
+                $context->form('Step 2?', [
+                    'type' => 'object',
+                    'properties' => ['b' => ['type' => 'string']],
+                ]);
+
+                return new \Mcp\Types\CallToolResult(
+                    content: [new \Mcp\Types\TextContent(text: 'complete')]
+                );
+            },
+        ]);
+
+        // Simulate state after first suspension (sequence 0 answered)
+        $ref = new \ReflectionClass($session);
+        $pendingField = $ref->getProperty('pendingElicitations');
+        $pendingField->setValue($session, [200 => new PendingElicitation(
+            toolName: 'chain-tool',
+            toolArguments: [],
+            originalRequestId: 10,
+            serverRequestId: 200,
+            elicitationSequence: 0,
+            previousResults: [],
+            createdAt: microtime(true),
+            originalRequestParams: [
+                '_meta' => ['progressToken' => 'chain-tok'],
+                'task' => ['id' => 'task-chain'],
+            ],
+        )]);
+
+        // Answer first elicitation — handler will replay seq 0 and suspend on seq 1
+        $transport->enqueue(new JsonRpcMessage(new JSONRPCResponse(
+            jsonrpc: '2.0',
+            id: new RequestId(200),
+            result: ['action' => 'accept', 'content' => ['a' => 'first']],
+        )));
+        $ref->getMethod('startMessageProcessing')->invoke($session);
+
+        // Handler was invoked once and re-suspended for seq 1
+        $this->assertSame(1, $invokeCount);
+        $pending = $session->getPendingElicitations();
+        $this->assertCount(1, $pending);
+
+        $chainedPending = reset($pending);
+        $this->assertSame(1, $chainedPending->elicitationSequence);
+        $this->assertSame(10, $chainedPending->originalRequestId);
+
+        // originalRequestParams must have been forwarded to chained pending
+        $this->assertSame(
+            'chain-tok',
+            $chainedPending->originalRequestParams['_meta']['progressToken'] ?? null,
+            'originalRequestParams._meta must carry forward through chained elicitations'
+        );
+        $this->assertSame(
+            'task-chain',
+            $chainedPending->originalRequestParams['task']['id'] ?? null,
+            'originalRequestParams.task must carry forward through chained elicitations'
+        );
+
+        // Now answer second elicitation — handler completes
+        $chainedServerId = array_key_first($pending);
+        $transport->writtenMessages = [];
+        $transport->enqueue(new JsonRpcMessage(new JSONRPCResponse(
+            jsonrpc: '2.0',
+            id: new RequestId($chainedServerId),
+            result: ['action' => 'accept', 'content' => ['b' => 'second']],
+        )));
+        $ref->getMethod('startMessageProcessing')->invoke($session);
+
+        // Handler completed on second invocation
+        $this->assertSame(2, $invokeCount);
+
+        // _meta and task must be present on the final invocation's params
+        $this->assertNotNull($lastCapturedParams->_meta);
+        $this->assertSame('chain-tok', $lastCapturedParams->_meta->progressToken);
+        $this->assertSame('task-chain', $lastCapturedParams->task['id']);
+
+        // Response must target original request ID
+        $resultMsg = $transport->writtenMessages[0]->message;
+        $this->assertInstanceOf(JSONRPCResponse::class, $resultMsg);
+        $this->assertSame(10, $resultMsg->id->value);
+    }
+
+    /**
      * Test pending elicitation state survives serialization round-trip.
      */
     public function testPendingElicitationStatePersistence(): void

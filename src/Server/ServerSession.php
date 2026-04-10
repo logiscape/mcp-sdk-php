@@ -58,6 +58,8 @@ use Mcp\Server\InitializationOptions;
 use Mcp\Types\ElicitationCapability;
 use Mcp\Types\ElicitationCreateRequest;
 use Mcp\Types\ElicitationCreateResult;
+use Mcp\Types\Meta;
+use Mcp\Types\TaskRequestParams;
 use Mcp\Server\Transport\Transport;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -417,6 +419,8 @@ class ServerSession extends BaseSession {
         ?array $requestedSchema = null,
         ?string $url = null,
         ?string $elicitationId = null,
+        ?Meta $_meta = null,
+        ?TaskRequestParams $task = null,
     ): ?ElicitationCreateResult {
         // Check that the client supports elicitation at all
         $requiredCap = new ClientCapabilities(elicitation: new ElicitationCapability());
@@ -464,6 +468,8 @@ class ServerSession extends BaseSession {
             requestedSchema: $requestedSchema,
             url: $url,
             elicitationId: $elicitationId,
+            _meta: $_meta,
+            task: $task,
         );
 
         // Enable client response waiting temporarily, then send

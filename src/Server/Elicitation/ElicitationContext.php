@@ -27,6 +27,8 @@ use Mcp\Types\ClientCapabilities;
 use Mcp\Types\ElicitationCapability;
 use Mcp\Types\ElicitationCreateRequest;
 use Mcp\Types\ElicitationCreateResult;
+use Mcp\Types\Meta;
+use Mcp\Types\TaskRequestParams;
 
 /**
  * Transport-agnostic elicitation interface injected into tool handler callbacks.
@@ -116,7 +118,7 @@ class ElicitationContext
      * @param array<string, mixed> $requestedSchema JSON Schema defining expected response structure
      * @return ElicitationCreateResult|null The client's response, or null if not supported
      */
-    public function form(string $message, array $requestedSchema): ?ElicitationCreateResult
+    public function form(string $message, array $requestedSchema, ?Meta $_meta = null, ?TaskRequestParams $task = null): ?ElicitationCreateResult
     {
         if (!$this->supportsForm()) {
             return null;
@@ -135,6 +137,8 @@ class ElicitationContext
                 message: $message,
                 mode: 'form',
                 requestedSchema: $requestedSchema,
+                _meta: $_meta,
+                task: $task,
             );
             throw new ElicitationSuspendException(
                 request: $request,
@@ -150,6 +154,8 @@ class ElicitationContext
         return $this->session->sendElicitationRequest(
             message: $message,
             requestedSchema: $requestedSchema,
+            _meta: $_meta,
+            task: $task,
         );
     }
 
@@ -170,7 +176,7 @@ class ElicitationContext
      * @param string|null $elicitationId Unique identifier for this elicitation (auto-generated if null)
      * @return ElicitationCreateResult|null The client's consent response, or null if not supported
      */
-    public function url(string $message, string $url, ?string $elicitationId = null): ?ElicitationCreateResult
+    public function url(string $message, string $url, ?string $elicitationId = null, ?Meta $_meta = null, ?TaskRequestParams $task = null): ?ElicitationCreateResult
     {
         if (!$this->supportsUrl()) {
             return null;
@@ -191,6 +197,8 @@ class ElicitationContext
                 mode: 'url',
                 url: $url,
                 elicitationId: $elicitationId,
+                _meta: $_meta,
+                task: $task,
             );
             throw new ElicitationSuspendException(
                 request: $request,
@@ -207,6 +215,8 @@ class ElicitationContext
             message: $message,
             url: $url,
             elicitationId: $elicitationId,
+            _meta: $_meta,
+            task: $task,
         );
     }
 
@@ -218,9 +228,9 @@ class ElicitationContext
      * @return ElicitationCreateResult The accepted result (with content)
      * @throws ElicitationDeclinedException If the client declines, cancels, or doesn't support form elicitation
      */
-    public function requiresForm(string $message, array $requestedSchema): ElicitationCreateResult
+    public function requiresForm(string $message, array $requestedSchema, ?Meta $_meta = null, ?TaskRequestParams $task = null): ElicitationCreateResult
     {
-        $result = $this->form($message, $requestedSchema);
+        $result = $this->form($message, $requestedSchema, $_meta, $task);
         if ($result === null) {
             throw new ElicitationDeclinedException('unsupported', 'Client does not support form elicitation');
         }

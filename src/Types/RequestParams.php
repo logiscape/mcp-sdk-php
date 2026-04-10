@@ -42,6 +42,7 @@ namespace Mcp\Types;
  * @property string|null $url URL for URL mode (elicitation/create)
  * @property string|null $elicitationId Elicitation identifier (elicitation/create)
  * @property array<int, array<string, mixed>>|null $_elicitationResults Preloaded elicitation results (internal)
+ * @property TaskRequestParams|null $task Task parameters for task-augmented requests (2025-11-25)
  */
 class RequestParams implements McpModel {
     use ExtraFieldsTrait;

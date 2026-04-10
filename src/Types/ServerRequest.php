@@ -76,12 +76,30 @@ final class ServerRequest implements RequestWrapperInterface {
         if (empty($params['message'])) {
             throw new \InvalidArgumentException('ElicitationCreateRequest requires "message"');
         }
+
+        // Parse _meta (2025-11-25 task-augmented)
+        $_meta = null;
+        if (isset($params['_meta'])) {
+            $_meta = new Meta();
+            foreach ($params['_meta'] as $k => $v) {
+                $_meta->$k = $v;
+            }
+        }
+
+        // Parse task (2025-11-25 task-augmented)
+        $task = null;
+        if (isset($params['task']) && is_array($params['task'])) {
+            $task = TaskRequestParams::fromArray($params['task']);
+        }
+
         return new self(new ElicitationCreateRequest(
             message: $params['message'],
             mode: $params['mode'] ?? null,
             requestedSchema: $params['requestedSchema'] ?? null,
             url: $params['url'] ?? null,
             elicitationId: $params['elicitationId'] ?? null,
+            _meta: $_meta,
+            task: $task,
         ));
     }
 

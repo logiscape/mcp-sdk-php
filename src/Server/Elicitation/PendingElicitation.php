@@ -33,6 +33,7 @@ class PendingElicitation
     /**
      * @param array<string, mixed> $toolArguments
      * @param array<int, array<string, mixed>> $previousResults
+     * @param array<string, mixed> $originalRequestParams Serialized original tools/call request params (_meta, task, etc.)
      */
     public function __construct(
         public readonly string $toolName,
@@ -42,6 +43,7 @@ class PendingElicitation
         public readonly int $elicitationSequence,
         public readonly array $previousResults = [],
         public readonly float $createdAt = 0.0,
+        public readonly array $originalRequestParams = [],
     ) {}
 
     /**
@@ -57,6 +59,7 @@ class PendingElicitation
             'elicitationSequence' => $this->elicitationSequence,
             'previousResults' => $this->previousResults,
             'createdAt' => $this->createdAt ?: microtime(true),
+            'originalRequestParams' => $this->originalRequestParams,
         ];
     }
 
@@ -73,6 +76,7 @@ class PendingElicitation
             elicitationSequence: (int) ($data['elicitationSequence'] ?? 0),
             previousResults: $data['previousResults'] ?? [],
             createdAt: (float) ($data['createdAt'] ?? 0.0),
+            originalRequestParams: $data['originalRequestParams'] ?? [],
         );
     }
 }

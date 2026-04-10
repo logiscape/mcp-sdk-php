@@ -18,6 +18,8 @@ class ElicitationCreateRequest extends Request {
      * @param array<string, mixed>|null $requestedSchema JSON Schema for form mode
      * @param string|null $url URL for URL mode
      * @param string|null $elicitationId Unique identifier for URL mode elicitation
+     * @param Meta|null $_meta Optional metadata (e.g. progressToken) per MCP 2025-11-25
+     * @param TaskRequestParams|null $task Optional task parameters for task-augmented requests
      */
     public function __construct(
         public readonly string $message,
@@ -25,8 +27,10 @@ class ElicitationCreateRequest extends Request {
         public ?array $requestedSchema = null,
         public ?string $url = null,
         public ?string $elicitationId = null,
+        public ?Meta $_meta = null,
+        public ?TaskRequestParams $task = null,
     ) {
-        $params = new RequestParams();
+        $params = new RequestParams(_meta: $_meta);
         $params->message = $message;
         if ($mode !== null) {
             $params->mode = $mode;
@@ -39,6 +43,9 @@ class ElicitationCreateRequest extends Request {
         }
         if ($elicitationId !== null) {
             $params->elicitationId = $elicitationId;
+        }
+        if ($task !== null) {
+            $params->task = $task;
         }
         parent::__construct('elicitation/create', $params);
     }

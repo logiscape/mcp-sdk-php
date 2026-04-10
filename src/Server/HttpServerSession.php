@@ -115,7 +115,7 @@ class HttpServerSession extends ServerSession
                 $result = $handler($params);
                 $responder->sendResponse($result);
             } catch (ElicitationSuspendException $e) {
-                $this->handleElicitationSuspend($e, $responder);
+                $this->handleElicitationSuspend($e, $responder, $params);
             } catch (\Mcp\Shared\McpError $e) {
                 $this->logger->error("Handler error for method '$method': " . $e->getMessage());
                 $responder->sendResponse($e->error);
@@ -144,12 +144,22 @@ class HttpServerSession extends ServerSession
     protected function handleElicitationSuspend(
         ElicitationSuspendException $e,
         RequestResponder $responder,
+        ?RequestParams $originalParams = null,
     ): void {
         // Assign a server request ID for the elicitation request
         $serverRequestId = $this->getNextRequestId();
         $this->setNextRequestId($serverRequestId + 1);
 
         $this->logger->info("Suspending tool '{$e->toolName}' for elicitation (server request ID: $serverRequestId)");
+
+        // Serialize original request params to preserve _meta, task, and other fields
+        $serializedParams = [];
+        if ($originalParams !== null) {
+            $serialized = $originalParams->jsonSerialize();
+            $serializedParams = $serialized instanceof \stdClass
+                ? (array) $serialized
+                : (is_array($serialized) ? $serialized : []);
+        }
 
         // Save pending state keyed by server request ID
         $this->pendingElicitations[$serverRequestId] = new PendingElicitation(
@@ -160,6 +170,7 @@ class HttpServerSession extends ServerSession
             elicitationSequence: $e->elicitationSequence,
             previousResults: $e->previousResults,
             createdAt: microtime(true),
+            originalRequestParams: $serializedParams,
         );
 
         // Write the elicitation/create request to the outgoing queue
@@ -251,8 +262,26 @@ class HttpServerSession extends ServerSession
 
         $handler = $this->methodRequestHandlers['tools/call'];
 
-        // Reconstruct the params as the original tools/call handler expects
+        // Reconstruct the params, restoring original request fields (_meta, task, etc.)
         $params = new RequestParams();
+
+        // Restore _meta (preserves progressToken, etc.) from original request
+        if (isset($pending->originalRequestParams['_meta']) && is_array($pending->originalRequestParams['_meta'])) {
+            $meta = new \Mcp\Types\Meta();
+            foreach ($pending->originalRequestParams['_meta'] as $k => $v) {
+                $meta->$k = $v;
+            }
+            $params->_meta = $meta;
+        }
+
+        // Restore extra fields from original request (e.g. task)
+        foreach ($pending->originalRequestParams as $key => $value) {
+            if ($key !== '_meta' && $key !== 'name' && $key !== 'arguments') {
+                $params->$key = $value;
+            }
+        }
+
+        // Set tool-specific fields
         $params->name = $toolName;
         $params->arguments = !empty($pending->toolArguments)
             ? (object) $pending->toolArguments
@@ -278,6 +307,7 @@ class HttpServerSession extends ServerSession
                 elicitationSequence: $e->elicitationSequence,
                 previousResults: $e->previousResults,
                 createdAt: microtime(true),
+                originalRequestParams: $pending->originalRequestParams,
             );
 
             $requestId = new RequestId($newServerRequestId);
