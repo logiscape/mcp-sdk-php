@@ -35,9 +35,20 @@ class McpServerElicitationTestTransport implements Transport
     /** @var JsonRpcMessage[] */
     public array $written = [];
 
+    /** @var JsonRpcMessage[] */
+    private array $incoming = [];
+
+    public function enqueue(JsonRpcMessage $message): void
+    {
+        $this->incoming[] = $message;
+    }
+
     public function start(): void {}
     public function stop(): void {}
-    public function readMessage(): ?JsonRpcMessage { return null; }
+    public function readMessage(): ?JsonRpcMessage
+    {
+        return array_shift($this->incoming);
+    }
     public function writeMessage(JsonRpcMessage $message): void
     {
         $this->written[] = $message;
@@ -300,6 +311,109 @@ final class McpServerElicitationTest extends TestCase
             'Please authorize access to your GitHub repositories.',
             $elicitation['message'],
         );
+    }
+
+    /**
+     * End-to-end: form-mode elicitation through the full McpServer + HttpServerSession
+     * suspend/resume path.
+     *
+     * Round 1: tools/call → tool handler calls $elicit->form() → suspend exception
+     *          → HttpServerSession sends elicitation/create request to client
+     * Round 2: client responds with elicitation result → HttpServerSession re-invokes
+     *          tools/call → McpServer forwards _elicitationResults → tool handler
+     *          gets preloaded result → completes → tools/call response sent
+     *
+     * This exercises the data flow that was broken when _elicitationResults was set
+     * on the RequestParams but not forwarded to the per-tool handler via $arguments.
+     */
+    public function testFormElicitationSuspendResumeEndToEnd(): void
+    {
+        // ── arrange ─────────────────────────────────────────────────
+        $mcpServer = new McpServer('e2e-test');
+        $mcpServer->enableElicitation();
+
+        $mcpServer->tool(
+            'greet-user',
+            'Greet by name using elicitation',
+            function (string $greeting, ElicitationContext $elicit) {
+                $result = $elicit->form('What is your name?', [
+                    'type' => 'object',
+                    'properties' => ['name' => ['type' => 'string']],
+                    'required' => ['name'],
+                ]);
+                if ($result === null || $result->action !== 'accept') {
+                    return 'No name provided';
+                }
+                $name = $result->content['name'] ?? 'stranger';
+                return "{$greeting}, {$name}!";
+            },
+        );
+
+        [$transport, $session] = $this->buildWiredSession($mcpServer);
+
+        // ── round 1: tools/call → suspend ───────────────────────────
+        $requestId     = new RequestId(1);
+        $clientRequest = new ClientRequest(
+            new CallToolRequest('greet-user', ['greeting' => 'Hello']),
+        );
+        $responder = new RequestResponder(
+            $requestId,
+            ['name' => 'greet-user', 'arguments' => ['greeting' => 'Hello']],
+            $clientRequest,
+            $session,
+        );
+
+        $session->handleRequest($responder);
+
+        // The session must have written an elicitation/create request (not a tools/call response)
+        $this->assertCount(1, $transport->written, 'Exactly one message should be written (elicitation request)');
+        $elicitMsg = $transport->written[0]->message;
+        $this->assertInstanceOf(
+            \Mcp\Types\JSONRPCRequest::class,
+            $elicitMsg,
+            'Written message must be a JSON-RPC request (elicitation/create), not a response',
+        );
+        $this->assertSame('elicitation/create', $elicitMsg->method);
+
+        // A pending elicitation must exist
+        $pending = $session->getPendingElicitation();
+        $this->assertNotNull($pending, 'Pending elicitation must be saved');
+        $this->assertSame('greet-user', $pending->toolName);
+        $this->assertSame(1, $pending->originalRequestId);
+        $serverRequestId = $pending->serverRequestId;
+
+        // ── round 2: client responds → resume → complete ────────────
+        $transport->written = [];
+
+        // Feed the elicitation response into the transport
+        $elicitResponse = new JSONRPCResponse(
+            jsonrpc: '2.0',
+            id: new RequestId($serverRequestId),
+            result: ['action' => 'accept', 'content' => ['name' => 'Alice']],
+        );
+        $transport->enqueue(new JsonRpcMessage($elicitResponse));
+
+        // Process the queued response
+        $sessionRef = new \ReflectionClass($session);
+        $sessionRef->getMethod('startMessageProcessing')->invoke($session);
+
+        // The session must have written the final tools/call response
+        $this->assertNotEmpty($transport->written, 'Tool result must be written after resume');
+        $resultMsg = $transport->written[0]->message;
+        $this->assertInstanceOf(
+            JSONRPCResponse::class,
+            $resultMsg,
+            'Final message must be a JSON-RPC response (tools/call result)',
+        );
+        $this->assertSame(1, $resultMsg->id->value, 'Response must match original request ID');
+
+        // Verify the tool completed with the elicited data
+        $resultJson = json_encode($resultMsg->result);
+        $this->assertStringContainsString('Hello', $resultJson);
+        $this->assertStringContainsString('Alice', $resultJson);
+
+        // Pending elicitation must be cleared
+        $this->assertNull($session->getPendingElicitation(), 'Pending elicitation must be cleared after resume');
     }
 
     /**

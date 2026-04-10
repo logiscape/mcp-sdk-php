@@ -707,6 +707,11 @@ class McpServer
             $name = $params->name;
             $arguments = $params->arguments ?? new \stdClass();
 
+            // Forward elicitation results for HTTP resume path
+            if (is_object($params) && isset($params->_elicitationResults)) {
+                $arguments->_elicitationResults = $params->_elicitationResults;
+            }
+
             if (!isset($this->toolHandlers[$name])) {
                 throw McpServerException::unknownTool($name);
             }
