@@ -769,9 +769,10 @@ final class ElicitationContextTest extends TestCase
     }
 
     /**
-     * ElicitationContext::form() HTTP suspend path carries _meta and task on the exception's request.
+     * ElicitationContext::form() HTTP suspend path carries _meta but strips task
+     * (task-augmented elicitation is not yet implemented).
      */
-    public function testFormHttpSuspendCarriesMetaAndTask(): void
+    public function testFormHttpSuspendCarriesMetaAndStripsTask(): void
     {
         $session = $this->createSessionWithCapabilities(
             new ElicitationCapability(form: true)
@@ -801,15 +802,16 @@ final class ElicitationContextTest extends TestCase
         } catch (ElicitationSuspendException $e) {
             $this->assertNotNull($e->request->_meta);
             $this->assertSame('progress-1', $e->request->_meta->progressToken);
-            $this->assertNotNull($e->request->task);
-            $this->assertSame(120, $e->request->task->ttl);
+            // Task-augmented elicitation is not yet supported; task must be stripped
+            $this->assertNull($e->request->task);
         }
     }
 
     /**
-     * ElicitationContext::url() HTTP suspend path carries _meta and task on the exception's request.
+     * ElicitationContext::url() HTTP suspend path carries _meta but strips task
+     * (task-augmented elicitation is not yet implemented).
      */
-    public function testUrlHttpSuspendCarriesMetaAndTask(): void
+    public function testUrlHttpSuspendCarriesMetaAndStripsTask(): void
     {
         $session = $this->createSessionWithCapabilities(
             new ElicitationCapability(form: true, url: true),
@@ -841,8 +843,8 @@ final class ElicitationContextTest extends TestCase
         } catch (ElicitationSuspendException $e) {
             $this->assertNotNull($e->request->_meta);
             $this->assertSame('progress-url', $e->request->_meta->progressToken);
-            $this->assertNotNull($e->request->task);
-            $this->assertSame(60, $e->request->task->ttl);
+            // Task-augmented elicitation is not yet supported; task must be stripped
+            $this->assertNull($e->request->task);
         }
     }
 }

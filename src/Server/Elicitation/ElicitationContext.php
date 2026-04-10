@@ -124,6 +124,10 @@ class ElicitationContext
             return null;
         }
 
+        // Task-augmented elicitation is not yet implemented; strip to
+        // prevent sending a request the SDK cannot correctly complete.
+        $task = null;
+
         $seq = $this->sequenceCounter++;
 
         // HTTP resume path: return preloaded result if available
@@ -181,6 +185,10 @@ class ElicitationContext
         if (!$this->supportsUrl()) {
             return null;
         }
+
+        // Task-augmented elicitation is not yet implemented; strip to
+        // prevent sending a request the SDK cannot correctly complete.
+        $task = null;
 
         $elicitationId = $elicitationId ?? bin2hex(random_bytes(16));
         $seq = $this->sequenceCounter++;

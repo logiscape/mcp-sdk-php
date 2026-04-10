@@ -461,6 +461,18 @@ class ServerSession extends BaseSession {
             }
         }
 
+        // Task-augmented elicitation is not yet implemented end-to-end;
+        // strip the task param to avoid sending a request the SDK cannot
+        // correctly complete (the response handler only supports
+        // ElicitationCreateResult, not CreateTaskResult).
+        if ($task !== null) {
+            $this->logger->warning(
+                'Task-augmented elicitation is not yet supported; '
+                . 'the task parameter has been stripped from this request'
+            );
+            $task = null;
+        }
+
         // Build the request
         $request = new ElicitationCreateRequest(
             message: $message,
