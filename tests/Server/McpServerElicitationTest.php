@@ -66,7 +66,6 @@ final class McpServerElicitationTest extends TestCase
     public function testElicitationContextExcludedFromSchema(): void
     {
         $server = new McpServer('test');
-        $server->enableElicitation();
 
         $server->tool(
             'configure',
@@ -106,7 +105,6 @@ final class McpServerElicitationTest extends TestCase
     public function testToolWithoutElicitationContext(): void
     {
         $server = new McpServer('test');
-        $server->enableElicitation();
 
         $server->tool('add', 'Add numbers', function (float $a, float $b) {
             return "Sum: " . ($a + $b);
@@ -132,7 +130,6 @@ final class McpServerElicitationTest extends TestCase
     public function testToolsNeedElicitationTracking(): void
     {
         $server = new McpServer('test');
-        $server->enableElicitation();
 
         $server->tool('simple', 'No elicitation', function (string $input) {
             return $input;
@@ -149,16 +146,6 @@ final class McpServerElicitationTest extends TestCase
         $this->assertArrayNotHasKey('simple', $needs);
         $this->assertArrayHasKey('interactive', $needs);
         $this->assertTrue($needs['interactive']);
-    }
-
-    /**
-     * Test enableElicitation returns self for chaining.
-     */
-    public function testEnableElicitationChaining(): void
-    {
-        $server = new McpServer('test');
-        $result = $server->enableElicitation();
-        $this->assertSame($server, $result);
     }
 
     // -------------------------------------------------------------------
@@ -250,7 +237,6 @@ final class McpServerElicitationTest extends TestCase
     {
         // ── arrange ─────────────────────────────────────────────────
         $mcpServer = new McpServer('e2e-test');
-        $mcpServer->enableElicitation();
 
         $mcpServer->tool(
             'connect-github',
@@ -330,7 +316,6 @@ final class McpServerElicitationTest extends TestCase
     {
         // ── arrange ─────────────────────────────────────────────────
         $mcpServer = new McpServer('e2e-test');
-        $mcpServer->enableElicitation();
 
         $mcpServer->tool(
             'greet-user',
@@ -427,7 +412,6 @@ final class McpServerElicitationTest extends TestCase
         $authorised = false;           // mutable flag simulating token storage
 
         $mcpServer = new McpServer('e2e-test');
-        $mcpServer->enableElicitation();
 
         $mcpServer->tool(
             'fetch-repos',

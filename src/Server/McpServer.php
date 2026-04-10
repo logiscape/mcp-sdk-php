@@ -129,9 +129,6 @@ class McpServer
     /** @var TaskManager|null Task manager for long-running operations. */
     protected ?TaskManager $taskManager = null;
 
-    /** @var bool Whether elicitation support is enabled. */
-    protected bool $elicitationEnabled = false;
-
     /** @var array<string, bool> Tool names that require ElicitationContext injection. */
     protected array $toolsNeedElicitation = [];
 
@@ -210,7 +207,7 @@ class McpServer
             }
 
             $elicitContext = null;
-            if ($needsElicitation && $this->elicitationEnabled) {
+            if ($needsElicitation) {
                 $session = $this->server->getSession();
                 $isHttpMode = ($session instanceof HttpServerSession);
                 $elicitContext = new ElicitationContext(
@@ -549,22 +546,6 @@ class McpServer
     public function getTaskManager(): ?TaskManager
     {
         return $this->taskManager;
-    }
-
-    /**
-     * Enable elicitation support for tool handlers.
-     *
-     * When enabled, tool handlers can declare an ElicitationContext parameter
-     * to request information from the user through the client. The context is
-     * automatically injected and handles both stdio (synchronous blocking) and
-     * HTTP (suspend/resume) transports transparently.
-     *
-     * @return self For method chaining
-     */
-    public function enableElicitation(): self
-    {
-        $this->elicitationEnabled = true;
-        return $this;
     }
 
     /**

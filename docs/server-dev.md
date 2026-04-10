@@ -15,7 +15,8 @@ A comprehensive guide to developing Model Context Protocol servers using the `lo
 - [Part 5: Securing Remote Servers with OAuth](#part-5-securing-remote-servers-with-oauth)
 - [Part 6: Structured Output](#part-6-structured-output)
 - [Part 7: Returning Rich Content](#part-7-returning-rich-content)
-- [Part 8: Multi-Capability Servers](#part-8-multi-capability-servers)
+- [Part 8: Requesting Input with Elicitation](#part-8-requesting-input-with-elicitation)
+- [Part 9: Multi-Capability Servers](#part-9-multi-capability-servers)
 - [Appendix A: Configuration Reference](#appendix-a-configuration-reference)
 - [Appendix B: Deployment Checklist](#appendix-b-deployment-checklist)
 
@@ -1199,7 +1200,289 @@ $server->run();
 
 ---
 
-## Part 8: Multi-Capability Servers
+## Part 8: Requesting Input with Elicitation
+
+Elicitation lets a tool pause mid-execution and ask the **user** (via the MCP client) for additional information. It turns what would otherwise be a rigid one-shot tool call into an interactive workflow -- the tool can collect missing parameters, confirm a destructive action, or kick off an out-of-band flow like OAuth.
+
+Elicitation was introduced in the MCP `2025-06-18` revision and extended with URL mode in `2025-11-25`. The SDK supports both modes and the same tool code works across the stdio and HTTP transports.
+
+### How Elicitation Works
+
+The SDK automatically injects an `ElicitationContext` into any tool callback that declares one -- no manual wiring is needed, and the context does not appear in the tool's JSON Schema. From there, two different protocol flows are available, depending on which method you call:
+
+**Round-trip flow** (`$elicit->form(...)`, `$elicit->requiresForm(...)`, `$elicit->url(...)`):
+
+1. The MCP client advertises an `elicitation` capability during initialization
+2. Your tool calls `form()` or `url()` on the context
+3. The SDK sends an `elicitation/create` request to the client
+4. The client presents UI to the user and returns the response
+5. Your tool receives the result and continues executing in the same tool call
+
+**Error-based flow** (`$elicit->throwUrlRequired(...)`, `$elicit->throwMultipleUrlRequired(...)`):
+
+1. Your tool discovers it is missing an out-of-band prerequisite (credentials, consent, etc.)
+2. The tool calls `throwUrlRequired()`, which throws a JSON-RPC `-32042` `URLElicitationRequired` error
+3. The current tool call **terminates immediately** -- no result is returned
+4. The client presents the URL to the user and opens it in a secure browser context
+5. The user completes the out-of-band flow (OAuth, API key entry, payment, etc.) directly with your server's web UI
+6. **Later**, the client retries the original tool call from scratch; this time your tool finds the credentials present and proceeds normally
+
+The round-trip flow is appropriate when the client can collect everything inline. The error-based flow is the correct pattern whenever the interaction must not pass through the MCP client -- anything involving credentials, OAuth, or payment.
+
+> **Note:** MCP defines two elicitation modes -- **form** (inline structured data) and **url** (out-of-band flows). This guide covers both. The `2025-11-25` spec also introduces *task-augmented* elicitation, which is still experimental and intentionally not documented here.
+
+### Form Mode: Collecting Structured Data
+
+Form mode asks the client to collect one or more values from the user and return them inline. The SDK exposes this via `$elicit->form()` and the stricter `$elicit->requiresForm()` helper, which throws an `ElicitationDeclinedException` when the user declines or cancels.
+
+> **Schema restrictions:** form-mode schemas must be a flat object whose properties are primitives (`string`, `number`, `integer`, `boolean`), single-select enums, or **multi-select enums expressed as an `array` of enum `items`**. Nested objects and arrays of objects are not supported by design -- the restriction exists so clients can render a simple form UI. See the [spec](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation) for the full list of supported keywords.
+
+> **Security:** never use form mode to request passwords, API keys, tokens, or payment credentials. Use URL mode for anything sensitive.
+
+#### Simple Form Example
+
+```php
+<?php
+// elicitation_form_simple.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+use Mcp\Server\Elicitation\ElicitationContext;
+use Mcp\Server\Elicitation\ElicitationDeclinedException;
+
+$server = new McpServer('elicitation-simple');
+
+$server->tool(
+    name: 'send-greeting',
+    description: 'Send a personalized greeting, asking the user for their name if needed',
+    callback: function (ElicitationContext $elicit, string $name = ''): string {
+        // If the model didn't supply a name, ask the user directly.
+        if ($name === '') {
+            try {
+                $result = $elicit->requiresForm(
+                    message: 'What name should I use for the greeting?',
+                    requestedSchema: [
+                        'type' => 'object',
+                        'properties' => [
+                            'name' => [
+                                'type' => 'string',
+                                'title' => 'Your name',
+                                'minLength' => 1,
+                            ],
+                        ],
+                        'required' => ['name'],
+                    ],
+                );
+                $name = $result->content['name'];
+            } catch (ElicitationDeclinedException $e) {
+                return 'No greeting sent -- a name is required.';
+            }
+        }
+
+        return "Hello, {$name}!";
+    }
+);
+
+$server->run();
+```
+
+A few things worth noting:
+
+- `ElicitationContext` can appear anywhere in the parameter list. The SDK strips it before building the tool's input schema, so the model only sees `name`.
+- `requiresForm()` returns an `ElicitationCreateResult` on `accept` and throws on `decline` or `cancel`. Use the looser `form()` variant if you want to inspect the action yourself.
+- `$result->content` is an associative array whose keys match the `properties` you requested.
+
+#### Multi-Field Form Example
+
+A form can request several primitive fields in a single round-trip. This example confirms a destructive action and collects a reason at the same time:
+
+```php
+<?php
+// elicitation_form_multi.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+use Mcp\Server\Elicitation\ElicitationContext;
+use Mcp\Server\Elicitation\ElicitationDeclinedException;
+
+$server = new McpServer('elicitation-multi');
+
+$server->tool(
+    name: 'archive-project',
+    description: 'Archive a project after confirming with the user',
+    callback: function (string $projectId, ElicitationContext $elicit): string {
+        try {
+            $result = $elicit->requiresForm(
+                message: "Archive project '{$projectId}'? This cannot be undone from the client.",
+                requestedSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'confirm' => [
+                            'type' => 'boolean',
+                            'title' => 'Confirm archive',
+                            'description' => 'Must be checked to proceed',
+                            'default' => false,
+                        ],
+                        'reason' => [
+                            'type' => 'string',
+                            'title' => 'Reason',
+                            'description' => 'Why are you archiving this project?',
+                            'minLength' => 3,
+                            'maxLength' => 200,
+                        ],
+                        'visibility' => [
+                            'type' => 'string',
+                            'title' => 'Post-archive visibility',
+                            'enum' => ['hidden', 'read-only', 'public'],
+                            'default' => 'hidden',
+                        ],
+                    ],
+                    'required' => ['confirm', 'reason'],
+                ],
+            );
+        } catch (ElicitationDeclinedException $e) {
+            return "Archive cancelled ({$e->action}).";
+        }
+
+        if (!$result->content['confirm']) {
+            return 'Archive cancelled -- confirmation checkbox was not ticked.';
+        }
+
+        // In a real server, archive the project here.
+        return sprintf(
+            "Archived '%s' (visibility: %s). Reason: %s",
+            $projectId,
+            $result->content['visibility'],
+            $result->content['reason'],
+        );
+    }
+);
+
+$server->run();
+```
+
+#### Checking Client Capability
+
+Not every MCP client supports elicitation. If your tool can still do useful work without it, use `supportsForm()` to fall back gracefully:
+
+```php
+$server->tool(
+    name: 'suggest-tag',
+    description: 'Suggest a tag for a note, optionally asking the user to pick one',
+    callback: function (string $noteText, ElicitationContext $elicit): string {
+        $candidates = ['work', 'personal', 'ideas', 'todo'];
+
+        if (!$elicit->supportsForm()) {
+            // Client can't elicit -- just return our best guess.
+            return "Suggested tag: {$candidates[0]}";
+        }
+
+        $result = $elicit->form(
+            message: 'Which tag best fits this note?',
+            requestedSchema: [
+                'type' => 'object',
+                'properties' => [
+                    'tag' => [
+                        'type' => 'string',
+                        'title' => 'Tag',
+                        'enum' => $candidates,
+                    ],
+                ],
+                'required' => ['tag'],
+            ],
+        );
+
+        if ($result === null || $result->action !== 'accept') {
+            return "Suggested tag: {$candidates[0]}";
+        }
+
+        return "You picked: {$result->content['tag']}";
+    }
+);
+```
+
+### URL Mode: Out-of-Band Flows (OAuth, API Keys, Payments)
+
+Form mode is fine for non-sensitive data, but anything involving credentials, OAuth, or payment must go through URL mode -- the MCP client is never allowed to see the user's secrets. In URL mode the server hands the client a URL, the client opens it in a secure browser context, and the user interacts with the server's own web UI directly.
+
+The recommended pattern is the **error-based flow**: when your tool discovers it is missing an out-of-band prerequisite, call `$elicit->throwUrlRequired()`. This throws a JSON-RPC `-32042` error that tells the client "retry this tool call once the user has completed the URL interaction."
+
+```php
+<?php
+// elicitation_url_oauth.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+use Mcp\Server\Elicitation\ElicitationContext;
+
+$server = new McpServer('elicitation-oauth');
+
+// Replace this with your real token store (bound to the authenticated MCP user).
+function lookup_github_token(): ?string
+{
+    return $_SESSION['github_token'] ?? null;
+}
+
+$server->tool(
+    name: 'list-my-repos',
+    description: 'List the authenticated user\'s GitHub repositories',
+    callback: function (ElicitationContext $elicit, int $limit = 10): string {
+        $token = lookup_github_token();
+
+        if ($token === null) {
+            // No credentials yet -- ask the client to open our connect URL.
+            // The client retries this tool call once the user finishes the flow.
+            $elicit->throwUrlRequired(
+                message: 'Connect your GitHub account to list repositories.',
+                url: 'https://myserver.example.com/oauth/github/start?state=' . bin2hex(random_bytes(8)),
+            );
+        }
+
+        // If we reach here, the retry succeeded -- do the real work.
+        $repos = ['alpha', 'beta', 'gamma']; // real call would use $token
+        return "Your repos:\n- " . implode("\n- ", array_slice($repos, 0, $limit));
+    }
+);
+
+$server->run();
+```
+
+Key points about URL mode:
+
+- `throwUrlRequired()` never returns -- it always throws. Treat it as a terminator.
+- The URL you provide must be a page **on your own server** (or a trusted provider). Your server is responsible for authenticating the visiting user before redirecting them to any third-party authorization endpoint -- see the [MCP security guidance](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation) for details.
+- Credentials obtained through the URL flow must be stored server-side, bound to the authenticated MCP user identity, and never sent back to the client.
+- If a single call needs multiple out-of-band interactions, use `throwMultipleUrlRequired()` with an array of `['message' => ..., 'url' => ...]` entries.
+
+#### Notifying the Client When the Flow Completes
+
+Clients may choose to wait for a `notifications/elicitation/complete` notification before retrying the tool call. This notification is a **hint**, not a requirement -- clients are always expected to provide a manual retry path, so sending it is optional and your tool will still work without it.
+
+The notification can only be sent through a live, connected MCP session (the transport must have an open channel back to the client). In practice that means you can reliably send it from **inside a running tool callback**, where an `ElicitationContext` is already in scope:
+
+```php
+// Inside a tool callback that has observed completion of its own out-of-band flow:
+$elicit->notifyUrlComplete($elicitationId);
+```
+
+This is useful for tools that can check their own completion state -- for example, a tool that stores a "pending credential" row when it throws the URL error, and on its next invocation notices the row has been filled in.
+
+> **Heads up (stateless HTTP hosting):** on typical cPanel-style PHP hosting the OAuth redirect handler runs in a **completely separate HTTP request** from the MCP endpoint. That handler has no live MCP session to write to, so it cannot send this notification directly -- doing so would require additional infrastructure (an SSE connection registry, a shared pub/sub queue, etc.) that is outside the scope of the convenience wrapper. That's fine: the client will let the user retry manually, and the retried tool call can detect the now-present credentials and complete normally. For long-running stdio servers the same process holds the session, so in-tool notifications from background work are trivial.
+
+### Elicitation and the HTTP Transport
+
+Elicitation works identically whether you are running over stdio or HTTP, but the mechanics differ under the hood:
+
+- **Stdio:** the call to `form()` blocks until the client responds, then returns normally.
+- **HTTP:** the SDK cannot block a PHP request waiting for a human, so it **suspends** the in-progress tool call, returns the elicitation request to the client, and transparently **resumes** the tool callback on the next HTTP round-trip. Your tool code is re-entered from the top -- but each completed `form()` / `url()` call returns its previously-collected result instead of firing a new request.
+
+This means you should write elicitation code as if it were straight-line and synchronous, even under HTTP. The only rule is: **elicitation calls must happen in a deterministic order**. Don't make an elicitation call conditional on data that changes between resumes (e.g. `rand()`, the current timestamp, or external state that may have shifted), or the resume logic won't be able to match up the preloaded results.
+
+No extra wiring is required in your server file -- `McpServer::run()` / `runHttp()` handle the suspend/resume plumbing automatically.
+
+---
+
+## Part 9: Multi-Capability Servers
 
 Real-world MCP servers combine tools, prompts, and resources. Here is a complete server that demonstrates all three working together:
 
