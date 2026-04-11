@@ -556,37 +556,27 @@ class HttpServerTransport implements Transport
     /**
      * Create a JSON-RPC response message.
      *
+     * The decoded result is left as the raw associative array (including
+     * any _meta payload). Typed Result subclasses are constructed
+     * downstream by sendRequest()'s response handler in BaseSession, which
+     * is the only place that knows which Result subclass to instantiate.
+     * Wrapping in a generic Result here would either drop _meta or assign
+     * a raw array to its typed ?Meta property and trip a TypeError.
+     *
      * @param array<string, mixed> $data Response data
      * @return JsonRpcMessage Response message
      */
     private function createResponseMessage(array $data): JsonRpcMessage
     {
         $id = new RequestId($data['id']);
-        $result = $data['result'];
-        
-        // Create a generic Result object
-        $resultObj = new \Mcp\Types\Result();
-        
-        // Copy result properties
-        if (is_array($result)) {
-            foreach ($result as $key => $value) {
-                if ($key !== '_meta') {
-                    $resultObj->$key = $value;
-                }
-            }
-            
-            // Handle metadata if present
-            if (isset($result['_meta'])) {
-                $resultObj->_meta = $result['_meta'];
-            }
-        }
-        
+        $resultArr = is_array($data['result'] ?? null) ? $data['result'] : [];
+
         $response = new JSONRPCResponse(
             jsonrpc: '2.0',
             id: $id,
-            result: $resultObj
+            result: $resultArr
         );
-        
+
         return new JsonRpcMessage($response);
     }
     

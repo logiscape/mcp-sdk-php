@@ -144,9 +144,17 @@ abstract class BaseSession {
                 throw new McpError($errorData);
             } elseif ($innerMessage instanceof JSONRPCResponse) {
                 // It's a success response
-                // Validate the result using $resultType
+                // Server transports wrap incoming response results in a generic
+                // Result object; client transports pass the raw array. Normalize
+                // so typed fromResponseData(array) calls work in both cases.
+                $rawResult = $innerMessage->result;
+                if ($rawResult instanceof Result) {
+                    $rawResult = self::resultObjectToArray($rawResult);
+                } elseif (!is_array($rawResult)) {
+                    $rawResult = (array) $rawResult;
+                }
                 /** @var T $resultInstance */
-                $resultInstance = $resultType::fromResponseData($innerMessage->result);
+                $resultInstance = $resultType::fromResponseData($rawResult);
                 $futureResult = $resultInstance;
             } else {
                 // Invalid response
@@ -159,6 +167,78 @@ abstract class BaseSession {
 
         // Wait for the response synchronously
         return $this->waitForResponse($requestIdValue, $resultType, $futureResult);
+    }
+
+    /**
+     * Flatten a generic Result object (as produced by server transports when
+     * parsing incoming JSON-RPC responses) into the associative array shape
+     * that typed Result::fromResponseData() implementations expect.
+     *
+     * Dynamic properties set on a Result instance land in its protected
+     * $extraFields bag via ExtraFieldsTrait::__set, so a plain
+     * get_object_vars() from this scope would not see them — use reflection
+     * to read every declared and inherited property regardless of visibility.
+     *
+     * @return array<string, mixed>
+     */
+    private static function resultObjectToArray(Result $result): array {
+        $all = self::readAllProperties($result);
+        $extra = $all['extraFields'] ?? [];
+        unset($all['extraFields']);
+
+        $data = [];
+        foreach ($all as $k => $v) {
+            if ($v !== null) {
+                $data[$k] = $v;
+            }
+        }
+        if (is_array($extra)) {
+            $data = array_merge($data, $extra);
+        }
+
+        if (isset($data['_meta']) && $data['_meta'] instanceof \Mcp\Types\Meta) {
+            $meta = $data['_meta'];
+            $metaVars = self::readAllProperties($meta);
+            $metaExtra = $metaVars['extraFields'] ?? [];
+            unset($metaVars['extraFields']);
+            $metaArr = [];
+            foreach ($metaVars as $k => $v) {
+                if ($v !== null) {
+                    $metaArr[$k] = $v;
+                }
+            }
+            if (is_array($metaExtra)) {
+                $metaArr = array_merge($metaArr, $metaExtra);
+            }
+            $data['_meta'] = $metaArr;
+        }
+
+        return $data;
+    }
+
+    /**
+     * Read every declared and inherited property on an object (public,
+     * protected, and private) as an associative array.
+     *
+     * @return array<string, mixed>
+     */
+    private static function readAllProperties(object $object): array {
+        $out = [];
+        $ref = new \ReflectionObject($object);
+        while ($ref !== false) {
+            foreach ($ref->getProperties() as $prop) {
+                $name = $prop->getName();
+                if (array_key_exists($name, $out)) {
+                    continue;
+                }
+                $prop->setAccessible(true);
+                if ($prop->isInitialized($object)) {
+                    $out[$name] = $prop->getValue($object);
+                }
+            }
+            $ref = $ref->getParentClass();
+        }
+        return $out;
     }
 
     /**

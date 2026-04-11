@@ -40,7 +40,6 @@ use Mcp\Types\JSONRPCResponse;
 use Mcp\Types\JSONRPCError;
 use Mcp\Types\RequestParams;
 use Mcp\Types\NotificationParams;
-use Mcp\Types\Result;
 use RuntimeException;
 use InvalidArgumentException;
 
@@ -308,26 +307,23 @@ class StdioServerTransport implements Transport {
     /**
      * Build a JSONRPCResponse object from decoded data.
      *
+     * The decoded result is left as the raw associative array (including
+     * any _meta payload) — typed Result subclasses are constructed
+     * downstream by sendRequest()'s response handler in BaseSession, which
+     * is the only place that knows which Result subclass to instantiate.
+     * Wrapping in a generic Result here would lose _meta and force a
+     * TypeError on the typed $_meta property.
+     *
      * @param array<string, mixed> $data
      */
     private function buildResponseMessage(array $data, ?RequestId $id): JSONRPCResponse {
-        // E.g. you do a "generic" mapping to a simple Result object
-        $resultArr = $data['result'];
-        $resultObj = new Result();
-        if (is_array($resultArr)) {
-            foreach ($resultArr as $k => $v) {
-                if ($k !== '_meta') {
-                    $resultObj->$k = $v;
-                }
-            }
-        }
-        $resp = new JSONRPCResponse(
+        $resultArr = is_array($data['result'] ?? null) ? $data['result'] : [];
+
+        return new JSONRPCResponse(
             jsonrpc: '2.0',
             id: $id,
-            result: $resultObj
+            result: $resultArr
         );
-        $resp->validate();
-        return $resp;
     }
 
     /**
