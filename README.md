@@ -142,9 +142,10 @@ The SDK is currently aiming to support the 2025-11-25 revision of the MCP Spec.
 - Structured tool output
 - New metadata such as icons
 - Experimental support for tasks
+- Elicitation
 
 ### Partial Implementation or In Development
-- Elicitation
+- Experimental support for task-augmented elicitation
 
 ## Credits
 

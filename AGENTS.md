@@ -16,12 +16,29 @@ This is a PHP implementation of the Model Context Protocol (MCP), allowing appli
 ```bash
 # Run all tests
 ./vendor/bin/phpunit
+# or via composer script
+composer test
 
 # Run specific test file
 ./vendor/bin/phpunit tests/Server/ServerSessionTest.php
 
 # Run specific test method
 ./vendor/bin/phpunit --filter testMethodName tests/Server/ServerSessionTest.php
+```
+
+### Static Analysis
+PHPStan is configured via `phpstan.neon` and available as a dev dependency.
+```bash
+# Run static analysis
+./vendor/bin/phpstan analyse
+# or via composer script
+composer analyse
+```
+
+### Regression Check
+The `check` composer script runs the full regression suite (PHPUnit tests followed by PHPStan analysis). Use this before committing changes.
+```bash
+composer check
 ```
 
 ### Installation & Dependencies
