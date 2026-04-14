@@ -7,3 +7,6 @@ composer.lock
 
 # Local PHPUnit config overrides
 /phpunit.xml
+
+# Conformance test results (generated artifacts)
+/conformance/results/

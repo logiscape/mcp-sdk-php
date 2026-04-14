@@ -1,0 +1,85 @@
+# MCP Conformance Baseline
+#
+# Lists expected failures with root causes. The conformance tool uses this
+# to distinguish regressions (previously-passing tests that fail) from known
+# limitations (tests that have never passed).
+#
+# Each entry documents WHY the test fails so SDK fixes can be targeted in future updates.
+#
+# Usage:
+#   npx @modelcontextprotocol/conformance server --url http://localhost:3000 \
+#     --suite all --expected-failures conformance/conformance-baseline.yml
+#   npx @modelcontextprotocol/conformance client \
+#     --command "php conformance/everything-client.php" \
+#     --suite all --expected-failures conformance/conformance-baseline.yml
+#
+# Last updated: 2026-04-14
+# Conformance tool version: 0.1.16
+
+server:
+  # --- SDK limitation: McpServer drops _meta from tool handler callbacks ---
+  - tools-call-with-progress
+    # McpServer::tool() strips _meta before invoking the callback, so
+    # progressToken is never available to tool handlers. Fix: pass _meta
+    # through to callbacks (or provide an extras parameter like TS SDK).
+
+  # --- SDK limitation: HTTP transport is stateless (no server-to-client requests) ---
+  - tools-call-sampling
+    # sampling/createMessage requires the server to send a request to the
+    # client and wait for a response. The PHP HTTP transport is stateless
+    # per-request, so BaseSession::sendRequest() cannot block for a client
+    # response. This works in stdio mode but not HTTP mode.
+
+  - tools-call-elicitation
+    # Same root cause as tools-call-sampling: elicitation/create is a
+    # server-to-client request that requires bidirectional communication.
+
+  - elicitation-sep1034-defaults
+    # Same root cause: requires server-to-client elicitation request.
+
+  - elicitation-sep1330-enums
+    # Same root cause: requires server-to-client elicitation request.
+
+  # --- SDK gap: McpServer::tool() does not accept custom inputSchema ---
+  - json-schema-2020-12
+    # McpServer auto-generates inputSchema from callback reflection, which
+    # cannot produce $schema, $defs, $ref, or additionalProperties fields.
+    # Fix: add optional inputSchema parameter to McpServer::tool().
+
+  # --- SDK gap: no DNS rebinding protection ---
+  - dns-rebinding-protection
+    # HttpServerTransport does not validate Host/Origin headers.
+    # Local servers without auth must reject requests from non-localhost
+    # origins. Fix: add Host/Origin validation in handleRequest().
+
+client:
+  # --- Not yet implemented in PHP client SDK ---
+  - elicitation-sep1034-client-defaults
+    # Requires client-side elicitation request handler support.
+
+  - sse-retry
+    # Requires SSE reconnection with retry field and Last-Event-ID (SEP-1699).
+
+  # --- OAuth client not yet implemented ---
+  - auth/metadata-default
+  - auth/metadata-var1
+  - auth/metadata-var2
+  - auth/metadata-var3
+  - auth/basic-cimd
+  - auth/scope-from-www-authenticate
+  - auth/scope-from-scopes-supported
+  - auth/scope-omitted-when-undefined
+  - auth/scope-step-up
+  - auth/scope-retry-limit
+  - auth/token-endpoint-auth-basic
+  - auth/token-endpoint-auth-post
+  - auth/token-endpoint-auth-none
+  - auth/pre-registration
+  - auth/2025-03-26-oauth-metadata-backcompat
+  - auth/2025-03-26-oauth-endpoint-fallback
+  # auth/resource-mismatch is NOT listed — it passes
+  - auth/offline-access-scope
+  - auth/offline-access-not-supported
+  - auth/client-credentials-jwt
+  - auth/client-credentials-basic
+  - auth/cross-app-access-complete-flow
