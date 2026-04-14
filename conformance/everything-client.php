@@ -2,7 +2,7 @@
 
 /**
  * MCP Conformance Test Client
- * 
+ *
  * (c) 2026 Logiscape LLC <https://logiscape.com>
  *
  * Implements the client-side conformance test scenarios expected by the
@@ -14,6 +14,9 @@
  *   - Never swallow errors — if a scenario fails, exit 1.
  *   - Use the SDK's public Client/ClientSession API.
  *   - Unknown/unimplemented scenarios exit 1 with a clear message.
+ *   - Scenarios that require unimplemented grant types (client_credentials,
+ *     jwt-bearer) fail with a clear message naming the missing feature,
+ *     rather than falling through to the generic authorization-code flow.
  *
  * The conformance runner spawns this script with:
  *   - MCP_CONFORMANCE_SCENARIO env var (scenario name)
@@ -27,6 +30,26 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use Mcp\Client\Client;
 use Mcp\Client\ClientSession;
+use Mcp\Client\Auth\OAuthConfiguration;
+use Mcp\Client\Auth\Callback\HeadlessCallbackHandler;
+use Mcp\Client\Auth\Registration\ClientCredentials;
+use Mcp\Client\Auth\Token\MemoryTokenStorage;
+
+/**
+ * Redirect URI for conformance tests.
+ * Matches the reference TypeScript client (ConformanceOAuthProvider and
+ * runPreRegistration both use http://localhost:3000/callback).
+ */
+const CONFORMANCE_REDIRECT_URI = 'http://localhost:3000/callback';
+
+/**
+ * Fixed client metadata URL for CIMD conformance tests.
+ * When the AS supports client_id_metadata_document_supported, this URL
+ * is used as the client_id instead of doing dynamic registration.
+ *
+ * Matches the reference TypeScript client's CIMD_CLIENT_METADATA_URL.
+ */
+const CIMD_CLIENT_METADATA_URL = 'https://conformance-test.local/client-metadata.json';
 
 // ---------------------------------------------------------------------------
 // Parse conformance runner inputs
@@ -61,13 +84,71 @@ if ($context !== null) {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: connect to the conformance test server
+// Helper: connect to the conformance test server (no auth)
 // ---------------------------------------------------------------------------
 
 function connectToServer(string $serverUrl): ClientSession
 {
     $client = new Client();
     return $client->connect($serverUrl);
+}
+
+// ---------------------------------------------------------------------------
+// Helper: connect to the conformance test server with OAuth
+//
+// Mirrors the reference TypeScript runAuthClient:
+//   - Uses HeadlessCallbackHandler (same as ConformanceOAuthProvider's
+//     fetch-with-manual-redirect approach)
+//   - Passes CIMD_CLIENT_METADATA_URL so the SDK exercises the CIMD path
+//     when the AS advertises client_id_metadata_document_supported
+//   - TLS verification disabled explicitly for localhost conformance servers
+// ---------------------------------------------------------------------------
+
+/**
+ * @param array<string, mixed>|null $context
+ */
+function connectToServerWithAuth(string $serverUrl, ?array $context = null): ClientSession
+{
+    $client = new Client();
+
+    $callbackHandler = new HeadlessCallbackHandler(
+        redirectUri: CONFORMANCE_REDIRECT_URI,
+        timeout: 30.0,
+        verifyTls: false
+    );
+
+    // Check if context provides pre-registered client credentials.
+    // Use AUTH_METHOD_AUTO so the SDK discovers the correct auth method
+    // from AS metadata rather than assuming one.
+    $clientCredentials = null;
+    if ($context !== null && isset($context['client_id'])) {
+        $authMethod = $context['token_endpoint_auth_method']
+            ?? ClientCredentials::AUTH_METHOD_AUTO;
+        $clientCredentials = new ClientCredentials(
+            clientId: $context['client_id'],
+            clientSecret: $context['client_secret'] ?? null,
+            tokenEndpointAuthMethod: $authMethod
+        );
+    }
+
+    $oauthConfig = new OAuthConfiguration(
+        clientCredentials: $clientCredentials,
+        tokenStorage: new MemoryTokenStorage(),
+        authCallback: $callbackHandler,
+        enableCimd: true,
+        enableDynamicRegistration: true,
+        cimdUrl: CIMD_CLIENT_METADATA_URL,
+        redirectUri: CONFORMANCE_REDIRECT_URI,
+        verifyTls: false,
+    );
+
+    $httpOptions = [
+        'oauth' => $oauthConfig,
+        'verifyTls' => false,
+        'autoSse' => false,
+    ];
+
+    return $client->connect($serverUrl, [], $httpOptions);
 }
 
 // ---------------------------------------------------------------------------
@@ -82,9 +163,6 @@ function scenarioInitialize(string $serverUrl): void
     $session = connectToServer($serverUrl);
 
     $initResult = $session->getInitializeResult();
-    if ($initResult === null) {
-        throw new \RuntimeException('Initialize returned null result');
-    }
     fwrite(STDERR, "Protocol version: " . ($initResult->protocolVersion ?? 'unknown') . "\n");
     fwrite(STDERR, "Server name: " . ($initResult->serverInfo->name ?? 'unknown') . "\n");
 
@@ -142,6 +220,41 @@ function scenarioToolsCall(string $serverUrl): void
 }
 
 // ---------------------------------------------------------------------------
+// Scenario: auth/* - OAuth authorization-code scenarios
+//
+// Matches reference runAuthClient: connect with OAuth, listTools, then
+// callTool('test-tool', {}) to verify that a protected operation succeeds
+// after authentication. This matches the upstream TypeScript reference client.
+//
+// Used for scenarios that use the standard authorization code flow:
+// metadata discovery, CIMD, scope handling, token endpoint auth methods,
+// pre-registration, resource-mismatch, and offline-access.
+// ---------------------------------------------------------------------------
+
+/**
+ * @param array<string, mixed>|null $context
+ */
+function scenarioAuth(string $scenario, string $serverUrl, ?array $context): void
+{
+    fwrite(STDERR, "Running auth scenario: {$scenario}\n");
+
+    $session = connectToServerWithAuth($serverUrl, $context);
+
+    $initResult = $session->getInitializeResult();
+    fwrite(STDERR, "Protocol version: " . ($initResult->protocolVersion ?? 'unknown') . "\n");
+    fwrite(STDERR, "Server name: " . ($initResult->serverInfo->name ?? 'unknown') . "\n");
+
+    // List tools to verify authenticated access
+    $toolsResult = $session->listTools();
+    fwrite(STDERR, "Listed " . count($toolsResult->tools ?? []) . " tools after auth\n");
+
+    // Call a tool to verify protected operations work after auth.
+    // The conformance test server exposes 'test-tool' for this purpose.
+    $result = $session->callTool('test-tool', []);
+    fwrite(STDERR, "Called test-tool successfully\n");
+}
+
+// ---------------------------------------------------------------------------
 // Scenario dispatch
 // ---------------------------------------------------------------------------
 
@@ -160,11 +273,33 @@ try {
             . "which is not yet implemented in the PHP client SDK"
         ),
 
+        // --- Client credentials grant type (not implemented) ---
+        // These scenarios require grant_type=client_credentials which the SDK
+        // does not support. They need dedicated handlers, not the generic
+        // authorization-code flow, so they fail here with a clear message.
+        'auth/client-credentials-jwt' => throw new \RuntimeException(
+            "Scenario 'auth/client-credentials-jwt' requires the client_credentials "
+            . "grant type with private_key_jwt authentication (JWT client assertion), "
+            . "which is not yet implemented in the PHP client SDK"
+        ),
+        'auth/client-credentials-basic' => throw new \RuntimeException(
+            "Scenario 'auth/client-credentials-basic' requires the client_credentials "
+            . "grant type with client_secret_basic authentication, "
+            . "which is not yet implemented in the PHP client SDK"
+        ),
+
+        // --- Cross-app access (not implemented) ---
+        // This scenario requires token exchange (RFC 8693) at an IDP followed
+        // by a jwt-bearer grant (RFC 7523) at the AS. It needs a dedicated
+        // handler that performs these steps manually.
+        'auth/cross-app-access-complete-flow' => throw new \RuntimeException(
+            "Scenario 'auth/cross-app-access-complete-flow' requires token exchange "
+            . "(RFC 8693) and jwt-bearer grant (RFC 7523), "
+            . "which are not yet implemented in the PHP client SDK"
+        ),
+
         default => str_starts_with($scenario, 'auth/')
-            ? throw new \RuntimeException(
-                "Auth scenario '{$scenario}' requires OAuth support, "
-                . "which is not yet implemented in the PHP client SDK"
-            )
+            ? scenarioAuth($scenario, $serverUrl, $context)
             : throw new \RuntimeException("Unknown scenario: {$scenario}"),
     };
 

@@ -609,6 +609,15 @@ class OAuthClient implements OAuthClientInterface
         // Priority 1: Pre-registered credentials
         if ($this->config->hasClientCredentials()) {
             $credentials = $this->config->getClientCredentials();
+
+            // When the caller explicitly opted into auto-discovery of the auth
+            // method (AUTH_METHOD_AUTO), resolve it from AS metadata.
+            if ($credentials->tokenEndpointAuthMethod === ClientCredentials::AUTH_METHOD_AUTO) {
+                $resolved = $this->resolveAuthMethodFromMetadata($credentials, $asMetadata);
+                $this->clientCredentialsCache[$issuer] = $resolved;
+                return $resolved;
+            }
+
             $this->clientCredentialsCache[$issuer] = $credentials;
             return $credentials;
         }
@@ -656,6 +665,56 @@ class OAuthClient implements OAuthClientInterface
 
         throw new OAuthException(
             'No client credentials available. Configure pre-registered credentials, CIMD, or enable DCR.'
+        );
+    }
+
+    /**
+     * Resolve the token endpoint auth method from AS metadata for
+     * credentials that opted into auto-discovery (AUTH_METHOD_AUTO).
+     *
+     * @param ClientCredentials $credentials The credentials with auth method set to 'auto'
+     * @param AuthorizationServerMetadata $asMetadata Authorization server metadata
+     * @return ClientCredentials Credentials with the resolved auth method
+     * @throws OAuthException If no compatible auth method is found
+     */
+    private function resolveAuthMethodFromMetadata(
+        ClientCredentials $credentials,
+        AuthorizationServerMetadata $asMetadata
+    ): ClientCredentials {
+        $supported = $asMetadata->tokenEndpointAuthMethodsSupported;
+        $hasSecret = $credentials->clientSecret !== null;
+
+        // When the client has a secret, prefer secret-based methods first.
+        // Only fall back to 'none' if no secret-based method is available.
+        // This prevents confidential clients from silently dropping their
+        // credentials when the AS happens to advertise 'none'.
+        if ($hasSecret) {
+            foreach ($supported as $method) {
+                if (in_array($method, [
+                    ClientCredentials::AUTH_METHOD_CLIENT_SECRET_BASIC,
+                    ClientCredentials::AUTH_METHOD_CLIENT_SECRET_POST,
+                ], true)) {
+                    return new ClientCredentials(
+                        $credentials->clientId,
+                        $credentials->clientSecret,
+                        $method
+                    );
+                }
+            }
+        }
+
+        // Public client or no secret-based method available
+        if (in_array(ClientCredentials::AUTH_METHOD_NONE, $supported, true)) {
+            return new ClientCredentials(
+                $credentials->clientId,
+                $credentials->clientSecret,
+                ClientCredentials::AUTH_METHOD_NONE
+            );
+        }
+
+        throw new OAuthException(
+            'No compatible token endpoint auth method found in AS metadata. '
+            . 'Supported: ' . implode(', ', $supported)
         );
     }
 

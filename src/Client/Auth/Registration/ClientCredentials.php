@@ -41,6 +41,15 @@ class ClientCredentials
     public const AUTH_METHOD_CLIENT_SECRET_BASIC = 'client_secret_basic';
 
     /**
+     * Sentinel value: discover the auth method from AS metadata at runtime.
+     *
+     * Use this when the caller has credentials but does not know which auth
+     * method the authorization server supports. The OAuthClient will resolve
+     * it from the AS's token_endpoint_auth_methods_supported field.
+     */
+    public const AUTH_METHOD_AUTO = 'auto';
+
+    /**
      * @param string $clientId The client identifier
      * @param string|null $clientSecret The client secret (if applicable)
      * @param string $tokenEndpointAuthMethod The authentication method for the token endpoint

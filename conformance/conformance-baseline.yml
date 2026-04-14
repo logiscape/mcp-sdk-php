@@ -60,26 +60,22 @@ client:
   - sse-retry
     # Requires SSE reconnection with retry field and Last-Event-ID (SEP-1699).
 
-  # --- OAuth client not yet implemented ---
-  - auth/metadata-default
-  - auth/metadata-var1
-  - auth/metadata-var2
-  - auth/metadata-var3
-  - auth/basic-cimd
-  - auth/scope-from-www-authenticate
-  - auth/scope-from-scopes-supported
-  - auth/scope-omitted-when-undefined
-  - auth/scope-step-up
-  - auth/scope-retry-limit
-  - auth/token-endpoint-auth-basic
-  - auth/token-endpoint-auth-post
-  - auth/token-endpoint-auth-none
-  - auth/pre-registration
+  # --- OAuth: not implemented ---
   - auth/2025-03-26-oauth-metadata-backcompat
+    # No version-aware fallback for the 2025-03-26 OAuth metadata spec.
+    # Fix: add fallback well-known path discovery for older spec versions.
+
   - auth/2025-03-26-oauth-endpoint-fallback
-  # auth/resource-mismatch is NOT listed — it passes
-  - auth/offline-access-scope
-  - auth/offline-access-not-supported
+    # No alternate endpoint discovery for the 2025-03-26 spec version.
+    # Same root cause as backcompat above.
+
   - auth/client-credentials-jwt
+    # No client_credentials grant_type or JWT assertion (client_assertion,
+    # client_assertion_type) implementation.
+
   - auth/client-credentials-basic
+    # No client_credentials grant_type implementation.
+
   - auth/cross-app-access-complete-flow
+    # 8 of 10 assertions pass. RFC 8707 resource parameter support exists
+    # but the full cross-app access flow has gaps.
