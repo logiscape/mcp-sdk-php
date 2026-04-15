@@ -1,0 +1,7 @@
+{
+    "private": true,
+    "description": "Dev tooling for MCP SDK PHP conformance testing",
+    "devDependencies": {
+        "@modelcontextprotocol/conformance": "0.1.16"
+    }
+}

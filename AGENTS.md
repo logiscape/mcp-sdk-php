@@ -10,9 +10,21 @@ This is a PHP implementation of the Model Context Protocol (MCP), allowing appli
 - Supports both traditional CLI/stdio and web hosting environments
 - Includes McpServer convenience wrapper for building fully functional MCP servers with just a few lines of PHP code
 
-## Development Commands
+## Development Testing Commands
 
-### Testing
+### Testing Suite Installation & Dependencies
+```bash
+# Install dependencies
+composer install
+
+# Update dependencies
+composer update
+
+# Install optional logging support (required for webclient and some examples)
+composer require monolog/monolog
+```
+
+### Unit Tests
 ```bash
 # Run all tests
 ./vendor/bin/phpunit
@@ -41,17 +53,32 @@ The `check` composer script runs the full regression suite (PHPUnit tests follow
 composer check
 ```
 
-### Installation & Dependencies
+### Conformance Testing
+The SDK integrates the official [MCP conformance test suite](https://github.com/modelcontextprotocol/conformance) which validates protocol compliance against the spec. The conformance tool version is pinned in `package.json` so tests are reproducible — the baseline file is tied to the installed version.
+
 ```bash
-# Install dependencies
-composer install
+# First time setup (installs pinned conformance tool version)
+npm install
 
-# Update dependencies
-composer update
+# Run all conformance tests (server + client)
+composer conformance
 
-# Install optional logging support (required for webclient and some examples)
-composer require monolog/monolog
+# Run server conformance tests only
+composer conformance-server
+
+# Run client conformance tests only
+composer conformance-client
+
+# Run a single scenario
+php conformance/run-conformance.php server tools-list
 ```
+
+**How it works:**
+- Server tests: The runner starts `conformance/everything-server.php` via PHP's built-in server, runs the conformance suite against it, then stops the server automatically via shutdown handler.
+- Client tests: The conformance framework spawns `conformance/everything-client.php` with test scenario env vars and a test server URL.
+- Known failures are tracked in `conformance/conformance-baseline.yml` with root cause documentation. The conformance tool uses this baseline to distinguish regressions from known limitations — if a previously passing test starts failing, it's flagged as a regression (exit code 1).
+
+**When to run:** Run `composer conformance` after making changes to protocol handling, transport layers, session management, or McpServer. It is not included in `composer check` because it requires Node.js, but should be run separately before merging significant SDK changes.
 
 ## Building An MCP Server
 
@@ -173,7 +200,7 @@ Tests use PHPUnit 10+ and follow these conventions:
 ### OAuth Support
 - HTTP transport includes OAuth 2.1 authorization framework
 - Server-side implementation available in `Server/Auth/`
-- Client-side implementation still in development
+- Client-side implementation available in `Client/Auth/`
 - See `examples/server_auth/` for usage
 
 ## MCP Protocol Capabilities

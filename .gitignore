@@ -8,5 +8,9 @@ composer.lock
 # Local PHPUnit config overrides
 /phpunit.xml
 
+# Node.js (conformance test tooling)
+/node_modules/
+package-lock.json
+
 # Conformance test results (generated artifacts)
 /conformance/results/

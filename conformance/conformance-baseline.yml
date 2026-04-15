@@ -6,12 +6,10 @@
 #
 # Each entry documents WHY the test fails so SDK fixes can be targeted in future updates.
 #
-# Usage:
-#   npx @modelcontextprotocol/conformance server --url http://localhost:3000 \
-#     --suite all --expected-failures conformance/conformance-baseline.yml
-#   npx @modelcontextprotocol/conformance client \
-#     --command "php conformance/everything-client.php" \
-#     --suite all --expected-failures conformance/conformance-baseline.yml
+# Usage (via composer scripts — recommended):
+#   composer conformance            # Run both server and client tests
+#   composer conformance-server     # Run server tests only
+#   composer conformance-client     # Run client tests only
 #
 # Last updated: 2026-04-14
 # Conformance tool version: 0.1.16

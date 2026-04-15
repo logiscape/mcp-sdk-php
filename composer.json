@@ -30,6 +30,9 @@
     "scripts": {
         "test": "phpunit",
         "analyse": "phpstan analyse",
-        "check": ["@test", "@analyse"]
+        "check": ["@test", "@analyse"],
+        "conformance": "@php conformance/run-conformance.php",
+        "conformance-server": "@php conformance/run-conformance.php server",
+        "conformance-client": "@php conformance/run-conformance.php client"
     }
 }
