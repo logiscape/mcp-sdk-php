@@ -710,6 +710,7 @@ $server
         'enable_sse' => false,         // Disable SSE for shared hosting compatibility
         'shared_hosting' => true,      // Optimize for shared hosting
         'server_header' => 'My-MCP-Server/1.0',
+        'allowed_origins' => ['yoursite.com'],  // DNS rebinding protection (see below)
     ])
     ->sessionStore(new FileSessionStore(__DIR__ . '/mcp_sessions'))
     ->tool('ping', 'Check if the server is alive', function (): string {
@@ -717,6 +718,30 @@ $server
     })
     ->run();
 ```
+
+### DNS Rebinding Protection
+
+The MCP spec requires servers to validate the `Origin` header to prevent [DNS rebinding attacks](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#security-warning). The SDK handles this automatically for local development servers and provides the `allowed_origins` config option for remote deployments.
+
+**Local servers (PHP built-in server):** Protection is auto-enabled. When you run `php -S localhost:3000 server.php`, the SDK automatically rejects requests from non-localhost origins. No configuration needed.
+
+**Remote servers (Apache, nginx, etc.):** You should set `allowed_origins` to the hostname(s) your server is accessible from. This is important when browser-based MCP clients connect to your server, since browsers send `Origin` headers that will be validated:
+
+```php
+$server->httpOptions([
+    'allowed_origins' => ['mcp.example.com'],
+]);
+```
+
+The values are hostnames (not full URLs), and matching is port-agnostic. Multiple hostnames are supported:
+
+```php
+$server->httpOptions([
+    'allowed_origins' => ['mcp.example.com', 'staging.example.com'],
+]);
+```
+
+If `allowed_origins` is not set on a production web server, Origin validation is disabled and browser origins are not restricted. This may be acceptable for deployments that only serve non-browser MCP clients and rely on OAuth bearer tokens, but browser-accessible HTTP endpoints should configure `allowed_origins` so the server can reject unexpected web origins.
 
 ### Production Hardening
 
@@ -1641,6 +1666,7 @@ $server->run();
 | `enable_sse` | bool | false | Enable Server-Sent Events (disable for shared hosting) |
 | `shared_hosting` | bool/null | null (auto-detect) | Force shared hosting optimizations |
 | `server_header` | string | `MCP-PHP-Server/1.0` | Server identification header |
+| `allowed_origins` | array/null | null | Allowed hostnames for Origin validation (auto-set for `cli-server` SAPI) |
 | `auth_enabled` | bool | false | Enable OAuth token validation |
 | `authorization_servers` | array | [] | Authorization server URLs |
 | `resource` | string/null | null | Protected resource identifier |

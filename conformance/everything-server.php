@@ -520,4 +520,8 @@ $lowLevel->registerHandler('completion/complete', function ($params) {
 // Run — auto-detects stdio vs HTTP
 // ---------------------------------------------------------------------------
 
+// DNS rebinding protection is auto-enabled by McpServer::runHttp() for localhost
+// servers. The conformance test sends Origin headers that are validated against
+// the default localhost allowlist (['localhost', '127.0.0.1', '::1']).
+
 $server->run();

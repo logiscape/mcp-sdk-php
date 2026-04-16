@@ -38,12 +38,6 @@ server:
   - elicitation-sep1330-enums
     # Same root cause: requires server-to-client elicitation request.
 
-  # --- SDK gap: no DNS rebinding protection ---
-  - dns-rebinding-protection
-    # HttpServerTransport does not validate Host/Origin headers.
-    # Local servers without auth must reject requests from non-localhost
-    # origins. Fix: add Host/Origin validation in handleRequest().
-
 client:
   # --- Not yet implemented in PHP client SDK ---
   - elicitation-sep1034-client-defaults

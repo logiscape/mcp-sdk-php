@@ -233,6 +233,11 @@ class HttpServerTransport implements Transport
      */
     public function handleRequest(HttpMessage $request): HttpMessage
     {
+        // DNS rebinding protection: validate Origin header (MCP spec MUST requirement)
+        if ($rejection = $this->validateOrigin($request)) {
+            return $rejection;
+        }
+
         $path = parse_url($request->getUri() ?? '/', PHP_URL_PATH);
         if ($request->getMethod() === 'GET' && stripos($path, $this->config->getResourceMetadataPath()) !== false) {
             return HttpMessage::createJsonResponse($this->getProtectedResourceMetadata());
@@ -884,6 +889,53 @@ class HttpServerTransport implements Transport
 
         // Store the validated claims in the session for later use
         $session->setMetadata('oauth_claims', $result->claims);
+        return null;
+    }
+
+    /**
+     * Validate the Origin header to prevent DNS rebinding attacks.
+     *
+     * Per the MCP spec: servers MUST validate the Origin header on all incoming
+     * connections. If the Origin header is present and invalid, servers MUST
+     * respond with HTTP 403 Forbidden.
+     *
+     * Validation is active when the 'allowed_origins' config option is set to a
+     * non-empty array of allowed hostnames (port-agnostic, e.g. ['localhost',
+     * '127.0.0.1', '[::1]']). McpServer auto-enables this for localhost servers.
+     *
+     * @return HttpMessage|null A 403 response on rejection, or null to allow
+     */
+    private function validateOrigin(HttpMessage $request): ?HttpMessage
+    {
+        $allowedOrigins = $this->config->get('allowed_origins');
+        if ($allowedOrigins === null || $allowedOrigins === []) {
+            return null; // No allowlist configured — validation disabled
+        }
+
+        $origin = $request->getHeader('origin');
+        if ($origin === null) {
+            return null; // No Origin header — non-browser client, allow
+        }
+
+        // Extract hostname from Origin (port-agnostic, matching TS SDK pattern)
+        $host = parse_url($origin, PHP_URL_HOST);
+        if ($host === null || $host === false) {
+            return HttpMessage::createJsonResponse(
+                ['jsonrpc' => '2.0', 'error' => ['code' => -32000, 'message' => 'Forbidden: invalid Origin header']],
+                403
+            );
+        }
+
+        // Normalize: strip IPv6 brackets (parse_url returns [::1], normalize to ::1)
+        $hostname = strtolower(trim($host, '[]'));
+
+        if (!in_array($hostname, $allowedOrigins, true)) {
+            return HttpMessage::createJsonResponse(
+                ['jsonrpc' => '2.0', 'error' => ['code' => -32000, 'message' => 'Forbidden: Origin not allowed']],
+                403
+            );
+        }
+
         return null;
     }
 

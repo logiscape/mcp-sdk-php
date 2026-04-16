@@ -623,6 +623,19 @@ class McpServer
      */
     public function runHttp(): void
     {
+        // Auto-enable DNS rebinding protection when running under PHP's built-in
+        // development server (cli-server SAPI) and the user has not explicitly
+        // configured allowed_origins. This matches the pattern used by the
+        // TypeScript SDK's createMcpExpressApp() and the Python SDK's FastMCP,
+        // which auto-protect localhost-bound servers (CVE-2025-66414 / CVE-2025-66416).
+        //
+        // For production SAPIs (apache2handler, fpm-fcgi, etc.), protection is
+        // opt-in via httpOptions(['allowed_origins' => ['yourdomain.com']]) since
+        // the PHP host config does not reflect the actual bind address.
+        if (!array_key_exists('allowed_origins', $this->httpOptions) && PHP_SAPI === 'cli-server') {
+            $this->httpOptions['allowed_origins'] = ['localhost', '127.0.0.1', '::1'];
+        }
+
         $notificationOptions = new NotificationOptions(
             promptsChanged: $this->promptsChanged,
             resourcesChanged: $this->resourcesChanged,

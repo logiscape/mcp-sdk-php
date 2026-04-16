@@ -56,6 +56,7 @@ class Config
         'resource' => null,               // Protected resource identifier
         'resource_metadata_path' => '/.well-known/oauth-protected-resource',
         'token_validator' => null,        // Instance of TokenValidatorInterface
+        'allowed_origins' => null,        // Allowed hostnames for Origin validation (null = disabled, auto-set by McpServer for localhost)
     ];
     
     /**
