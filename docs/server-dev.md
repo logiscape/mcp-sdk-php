@@ -1661,7 +1661,7 @@ $server->run();
 
 | Method | Description |
 |--------|-------------|
-| `tool(name, description, callback, title?, icons?, outputSchema?)` | Register a tool |
+| `tool(name, description, callback, title?, icons?, outputSchema?, inputSchema?)` | Register a tool |
 | `prompt(name, description, callback, title?, icons?)` | Register a prompt |
 | `resource(uri, name, callback, description?, mimeType?, title?, icons?, size?)` | Register a resource |
 | `httpOptions(array)` | Set HTTP transport configuration |

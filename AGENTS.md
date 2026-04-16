@@ -20,6 +20,9 @@ composer install
 # Update dependencies
 composer update
 
+# Install pinned conformance tool version
+npm install
+
 # Install optional logging support (required for webclient and some examples)
 composer require monolog/monolog
 ```
@@ -57,9 +60,6 @@ composer check
 The SDK integrates the official [MCP conformance test suite](https://github.com/modelcontextprotocol/conformance) which validates protocol compliance against the spec. The conformance tool version is pinned in `package.json` so tests are reproducible — the baseline file is tied to the installed version.
 
 ```bash
-# First time setup (installs pinned conformance tool version)
-npm install
-
 # Run all conformance tests (server + client)
 composer conformance
 
