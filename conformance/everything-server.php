@@ -65,6 +65,36 @@ $server->tool('test_simple_text', 'Returns a simple text response', function ():
     return 'Hello from the conformance test server!';
 });
 
+// JSON Schema 2020-12 tool — exercises $schema, $defs, $ref, additionalProperties
+$server->tool(
+    name: 'json_schema_2020_12_tool',
+    description: 'Tool with JSON Schema 2020-12 keywords for conformance testing',
+    callback: function (string $name): string {
+        return "Received: name=$name";
+    },
+    inputSchema: [
+        '$schema' => 'https://json-schema.org/draft/2020-12/schema',
+        'type' => 'object',
+        'properties' => [
+            'address' => ['$ref' => '#/$defs/address'],
+            'name' => ['type' => 'string'],
+        ],
+        'required' => ['address', 'name'],
+        'additionalProperties' => false,
+        '$defs' => [
+            'address' => [
+                'type' => 'object',
+                'properties' => [
+                    'street' => ['type' => 'string'],
+                    'city' => ['type' => 'string'],
+                ],
+                'required' => ['street', 'city'],
+                'additionalProperties' => false,
+            ],
+        ],
+    ],
+);
+
 $server->tool('test_image_content', 'Returns an image content block', function (): CallToolResult {
     return new CallToolResult(
         content: [new ImageContent(data: TEST_PNG_BASE64, mimeType: 'image/png')]

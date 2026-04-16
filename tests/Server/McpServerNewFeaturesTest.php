@@ -88,6 +88,80 @@ final class McpServerNewFeaturesTest extends TestCase
     }
 
     /**
+     * Test that tool() accepts a custom inputSchema that overrides reflection-generated schema.
+     * Verifies JSON Schema 2020-12 keywords ($schema, $defs, additionalProperties) are preserved.
+     */
+    public function testToolWithCustomInputSchema(): void {
+        $server = new McpServer('test');
+        $server->tool(
+            name: 'schema_tool',
+            description: 'Tool with custom schema',
+            callback: function (string $name): string {
+                return "Hello, $name";
+            },
+            inputSchema: [
+                '$schema' => 'https://json-schema.org/draft/2020-12/schema',
+                'type' => 'object',
+                'properties' => [
+                    'address' => ['$ref' => '#/$defs/address'],
+                    'name' => ['type' => 'string'],
+                ],
+                'required' => ['address', 'name'],
+                'additionalProperties' => false,
+                '$defs' => [
+                    'address' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'street' => ['type' => 'string'],
+                        ],
+                    ],
+                ],
+            ],
+        );
+
+        $underlying = $server->getServer();
+        $handlers = $underlying->getHandlers();
+
+        $listResult = $handlers['tools/list'](null);
+        $this->assertInstanceOf(ListToolsResult::class, $listResult);
+
+        $tool = $listResult->tools[0];
+        $serialized = json_decode(json_encode($tool), true);
+        $schema = $serialized['inputSchema'];
+
+        // Verify JSON Schema 2020-12 keywords are preserved
+        $this->assertEquals('https://json-schema.org/draft/2020-12/schema', $schema['$schema']);
+        $this->assertFalse($schema['additionalProperties']);
+        $this->assertArrayHasKey('$defs', $schema);
+        $this->assertArrayHasKey('address', $schema['$defs']);
+        $this->assertEquals(['$ref' => '#/$defs/address'], $schema['properties']['address']);
+        $this->assertEquals('object', $schema['type']);
+    }
+
+    /**
+     * Test that inputSchema=null still uses reflection-generated schema.
+     */
+    public function testToolWithoutInputSchemaUsesReflection(): void {
+        $server = new McpServer('test');
+        $server->tool(
+            name: 'reflected',
+            description: 'Reflection schema',
+            callback: fn(float $a, string $b) => "$a $b",
+        );
+
+        $underlying = $server->getServer();
+        $handlers = $underlying->getHandlers();
+        $listResult = $handlers['tools/list'](null);
+        $schema = json_decode(json_encode($listResult->tools[0]->inputSchema), true);
+
+        $this->assertEquals('object', $schema['type']);
+        $this->assertEquals('number', $schema['properties']['a']['type']);
+        $this->assertEquals('string', $schema['properties']['b']['type']);
+        $this->assertContains('a', $schema['required']);
+        $this->assertContains('b', $schema['required']);
+    }
+
+    /**
      * Test prompt with title parameter.
      */
     public function testPromptWithTitle(): void {

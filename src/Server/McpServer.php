@@ -168,6 +168,7 @@ class McpServer
      * @param string|null $title Display title for the tool
      * @param array<int, array<string, mixed>>|null $icons Icons for the tool
      * @param array<string, mixed>|null $outputSchema JSON Schema for structured output
+     * @param array<string, mixed>|null $inputSchema Custom JSON Schema for input (overrides reflection-generated schema)
      * @return self For method chaining
      */
     public function tool(
@@ -177,8 +178,11 @@ class McpServer
         ?string $title = null,
         ?array $icons = null,
         ?array $outputSchema = null,
+        ?array $inputSchema = null,
     ): self {
-        $schema = $this->buildSchemaFromCallback($callback);
+        $schema = $inputSchema !== null
+            ? ToolInputSchema::fromArray(array_merge(['type' => 'object'], $inputSchema))
+            : $this->buildSchemaFromCallback($callback);
 
         $tool = new Tool(
             name: $name,

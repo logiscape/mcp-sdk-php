@@ -38,12 +38,6 @@ server:
   - elicitation-sep1330-enums
     # Same root cause: requires server-to-client elicitation request.
 
-  # --- SDK gap: McpServer::tool() does not accept custom inputSchema ---
-  - json-schema-2020-12
-    # McpServer auto-generates inputSchema from callback reflection, which
-    # cannot produce $schema, $defs, $ref, or additionalProperties fields.
-    # Fix: add optional inputSchema parameter to McpServer::tool().
-
   # --- SDK gap: no DNS rebinding protection ---
   - dns-rebinding-protection
     # HttpServerTransport does not validate Host/Origin headers.
