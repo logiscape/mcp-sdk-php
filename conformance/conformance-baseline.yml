@@ -15,11 +15,13 @@
 # Conformance tool version: 0.1.16
 
 server:
-  # --- SDK limitation: McpServer drops _meta from tool handler callbacks ---
+  # --- SDK limitation: HTTP transport returns batched JSON, not SSE streams ---
   - tools-call-with-progress
-    # McpServer::tool() strips _meta before invoking the callback, so
-    # progressToken is never available to tool handlers. Fix: pass _meta
-    # through to callbacks (or provide an extras parameter like TS SDK).
+    # _meta.progressToken is now passed to tool callbacks via ProgressContext,
+    # and progress notifications are correctly batched in the JSON response.
+    # However, the conformance test client expects notifications via SSE streaming
+    # (onprogress callback), which requires the server to stream events during
+    # the request rather than batching them in the response body.
 
   # --- SDK limitation: HTTP transport is stateless (no server-to-client requests) ---
   - tools-call-sampling

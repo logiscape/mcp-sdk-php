@@ -45,9 +45,12 @@ use Mcp\Types\TaskGetResult;
 use Mcp\Types\TaskListResult;
 use Mcp\Types\TextContent;
 use Mcp\Types\TextResourceContents;
+use Mcp\Types\Meta;
+use Mcp\Types\ProgressToken;
 use Mcp\Types\Tool;
 use Mcp\Types\ToolInputProperties;
 use Mcp\Types\ToolInputSchema;
+use Mcp\Shared\ProgressContext;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use ReflectionFunction;
@@ -195,13 +198,14 @@ class McpServer
 
         $this->tools[] = $tool;
 
-        // Detect if callback needs ElicitationContext
+        // Detect if callback needs ElicitationContext or ProgressContext
         $needsElicitation = $this->callbackNeedsElicitation($callback);
         if ($needsElicitation) {
             $this->toolsNeedElicitation[$name] = true;
         }
+        $needsProgress = $this->callbackNeedsProgress($callback);
 
-        $this->toolHandlers[$name] = function ($args) use ($name, $callback, $outputSchema, $needsElicitation) {
+        $this->toolHandlers[$name] = function ($args, ?Meta $meta = null) use ($name, $callback, $outputSchema, $needsElicitation, $needsProgress) {
             $arguments = json_decode(json_encode($args), true) ?? [];
 
             // Check for preloaded elicitation results (HTTP resume path)
@@ -224,7 +228,20 @@ class McpServer
                 );
             }
 
-            $ordered = $this->matchNamedParameters($callback, $arguments, $elicitContext);
+            // Create ProgressContext if callback needs it and a progressToken was provided
+            $progressContext = null;
+            if ($needsProgress && $meta !== null) {
+                $rawToken = $meta->progressToken ?? null;
+                if ($rawToken !== null) {
+                    $token = $rawToken instanceof ProgressToken ? $rawToken : new ProgressToken($rawToken);
+                    $session = $this->server->getSession();
+                    if ($session !== null) {
+                        $progressContext = new ProgressContext($session, $token);
+                    }
+                }
+            }
+
+            $ordered = $this->matchNamedParameters($callback, $arguments, $elicitContext, $progressContext);
 
             $result = $callback(...$ordered);
 
@@ -704,6 +721,7 @@ class McpServer
         $this->server->registerHandler('tools/call', function ($params) {
             $name = $params->name;
             $arguments = $params->arguments ?? new \stdClass();
+            $meta = $params->_meta ?? null;
 
             // Forward elicitation results for HTTP resume path
             if (is_object($params) && isset($params->_elicitationResults)) {
@@ -717,7 +735,7 @@ class McpServer
             $handler = $this->toolHandlers[$name];
 
             try {
-                $result = $handler($arguments);
+                $result = $handler($arguments, $meta);
             } catch (ElicitationSuspendException $e) {
                 throw $e; // Must propagate to HttpServerSession for suspend/resume
             } catch (McpServerException $e) {
@@ -784,8 +802,8 @@ class McpServer
             $type = $param->getType();
             $typeName = $type instanceof ReflectionNamedType ? $type->getName() : 'string';
 
-            // Skip ElicitationContext parameters — they are injected, not user input
-            if ($typeName === ElicitationContext::class) {
+            // Skip injected context parameters — they are not user input
+            if ($typeName === ElicitationContext::class || $typeName === ProgressContext::class) {
                 continue;
             }
 
@@ -848,7 +866,7 @@ class McpServer
      * @param ElicitationContext|null $elicitContext Optional context to inject
      * @return array<int, mixed> Ordered arguments matching the callback's parameter list
      */
-    protected function matchNamedParameters(callable $callback, array $arguments, ?ElicitationContext $elicitContext = null): array
+    protected function matchNamedParameters(callable $callback, array $arguments, ?ElicitationContext $elicitContext = null, ?ProgressContext $progressContext = null): array
     {
         $reflection = new ReflectionFunction(\Closure::fromCallable($callback));
         $parameters = $reflection->getParameters();
@@ -862,6 +880,18 @@ class McpServer
             // Inject ElicitationContext
             if ($typeName === ElicitationContext::class) {
                 $ordered[] = $elicitContext;
+                continue;
+            }
+
+            // Inject ProgressContext
+            if ($typeName === ProgressContext::class) {
+                if ($progressContext === null && !$param->allowsNull() && !$param->isOptional()) {
+                    throw new \InvalidArgumentException(
+                        "Tool callback declares non-nullable ProgressContext parameter '{$name}'. "
+                        . "Use ?ProgressContext \${$name} = null so the tool can execute when no progressToken is provided."
+                    );
+                }
+                $ordered[] = $progressContext;
                 continue;
             }
 
@@ -886,6 +916,21 @@ class McpServer
         foreach ($reflection->getParameters() as $param) {
             $type = $param->getType();
             if ($type instanceof ReflectionNamedType && $type->getName() === ElicitationContext::class) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Check if a callback has a ProgressContext parameter.
+     */
+    protected function callbackNeedsProgress(callable $callback): bool
+    {
+        $reflection = new ReflectionFunction(\Closure::fromCallable($callback));
+        foreach ($reflection->getParameters() as $param) {
+            $type = $param->getType();
+            if ($type instanceof ReflectionNamedType && $type->getName() === ProgressContext::class) {
                 return true;
             }
         }

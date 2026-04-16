@@ -157,13 +157,21 @@ $server->tool('test_error_handling', 'Throws an error for testing', function ():
     throw new \RuntimeException('Test error from conformance server');
 });
 
-// Progress tool — registered through McpServer's public API. If McpServer
-// strips _meta.progressToken before passing to the callback, the conformance
-// test will FAIL. That is correct — it surfaces a real SDK limitation.
-$server->tool('test_tool_with_progress', 'Sends progress notifications', function () use ($server): CallToolResult {
-    // The TypeScript SDK passes _meta via an extras parameter. If PHP's McpServer
-    // doesn't pass it, we have no progressToken and progress notifications won't
-    // be sent. This is an honest reflection of the SDK's current capability.
+// Progress tool — McpServer injects ProgressContext when the callback declares
+// it, just like ElicitationContext. The conformance test sends _meta.progressToken
+// and expects progress notifications: 0/100, 50/100, 100/100.
+// We use ProgressContext for the injection but send notifications via session
+// for full control over progress/total values.
+$server->tool('test_tool_with_progress', 'Sends progress notifications', function (?\Mcp\Shared\ProgressContext $progress = null) use ($server): CallToolResult {
+    $session = $server->getServer()->getSession();
+    $token = $progress?->getToken();
+    if ($session !== null && $token !== null) {
+        $session->sendProgressNotification($token, 0, 100);
+        usleep(50000);
+        $session->sendProgressNotification($token, 50, 100);
+        usleep(50000);
+        $session->sendProgressNotification($token, 100, 100);
+    }
     return new CallToolResult(
         content: [new TextContent(text: 'Progress complete')]
     );

@@ -305,7 +305,15 @@ final class ClientRequest implements RequestWrapperInterface {
             $task = TaskRequestParams::fromArray($params['task']);
         }
 
-        return new self(new CallToolRequest($params['name'], $arguments, $task));
+        $meta = null;
+        if (isset($params['_meta']) && is_array($params['_meta'])) {
+            $meta = new Meta();
+            foreach ($params['_meta'] as $k => $v) {
+                $meta->$k = $v;
+            }
+        }
+
+        return new self(new CallToolRequest($params['name'], $arguments, $task, $meta));
     }
 
     /** @param array<string, mixed> $params */

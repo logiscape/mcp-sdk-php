@@ -4,13 +4,28 @@ declare(strict_types=1);
 
 namespace Mcp\Tests\Server;
 
+use Mcp\Server\HttpServerSession;
 use Mcp\Server\McpServer;
 use Mcp\Server\McpServerException;
 use Mcp\Server\NotificationOptions;
+use Mcp\Shared\ProgressContext;
+use Mcp\Shared\RequestResponder;
+use Mcp\Types\CallToolRequest;
 use Mcp\Types\CallToolResult;
+use Mcp\Types\ClientCapabilities;
+use Mcp\Types\ClientRequest;
+use Mcp\Types\Implementation;
+use Mcp\Server\InitializationState;
+use Mcp\Types\InitializeRequestParams;
+use Mcp\Types\JsonRpcMessage;
 use Mcp\Types\ListToolsResult;
+use Mcp\Types\Meta;
+use Mcp\Types\ProgressToken;
+use Mcp\Types\RequestId;
 use Mcp\Types\TaskCapability;
 use Mcp\Types\TextContent;
+use Mcp\Server\Transport\Transport;
+use Psr\Log\NullLogger;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -162,6 +177,188 @@ final class McpServerNewFeaturesTest extends TestCase
     }
 
     /**
+     * Test that ProgressContext parameter is excluded from the tool's input schema.
+     */
+    public function testProgressContextExcludedFromSchema(): void {
+        $server = new McpServer('test');
+        $server->tool(
+            name: 'with-progress',
+            description: 'Progress tool',
+            callback: fn(?ProgressContext $progress, string $input) => "done: $input",
+        );
+
+        $underlying = $server->getServer();
+        $handlers = $underlying->getHandlers();
+        $listResult = $handlers['tools/list'](null);
+        $schema = json_decode(json_encode($listResult->tools[0]->inputSchema), true);
+
+        // ProgressContext should NOT appear in properties
+        $this->assertArrayHasKey('input', $schema['properties']);
+        $this->assertArrayNotHasKey('progress', $schema['properties']);
+        $this->assertContains('input', $schema['required']);
+    }
+
+    /**
+     * Test that nullable ProgressContext receives null when no session is active.
+     * The tool should still execute successfully (isError === false).
+     */
+    public function testProgressContextNullWithoutSession(): void {
+        $server = new McpServer('test');
+
+        $server->tool(
+            name: 'progress-tool',
+            description: 'Tool with optional progress',
+            callback: function (?ProgressContext $progress = null): string {
+                return 'progress is ' . ($progress === null ? 'null' : 'set');
+            },
+        );
+
+        $underlying = $server->getServer();
+        $handlers = $underlying->getHandlers();
+
+        $params = new \stdClass();
+        $params->name = 'progress-tool';
+        $params->arguments = new \stdClass();
+        $meta = new Meta();
+        $meta->progressToken = 'test-token-123';
+        $params->_meta = $meta;
+
+        $result = $handlers['tools/call']($params);
+        $this->assertInstanceOf(CallToolResult::class, $result);
+        $this->assertFalse($result->isError, 'Tool with nullable ProgressContext should succeed even without an active session');
+        $this->assertEquals('progress is null', $result->content[0]->text);
+    }
+
+    /**
+     * Test that non-nullable ProgressContext produces a clear SDK error when
+     * no progressToken/session is available, rather than a silent TypeError.
+     */
+    public function testNonNullableProgressContextFailsClearly(): void {
+        $server = new McpServer('test');
+
+        $server->tool(
+            name: 'strict-progress',
+            description: 'Tool requiring progress',
+            callback: function (ProgressContext $progress): string {
+                return 'progress: ' . $progress->getCurrent();
+            },
+        );
+
+        $underlying = $server->getServer();
+        $handlers = $underlying->getHandlers();
+
+        $params = new \stdClass();
+        $params->name = 'strict-progress';
+        $params->arguments = new \stdClass();
+        // No _meta — ProgressContext will be null
+
+        $result = $handlers['tools/call']($params);
+        $this->assertInstanceOf(CallToolResult::class, $result);
+        $this->assertTrue($result->isError);
+        $this->assertStringContainsString('non-nullable ProgressContext', $result->content[0]->text);
+    }
+
+    /**
+     * Test happy path: with an active session and _meta.progressToken, the
+     * callback receives a non-null ProgressContext carrying the correct token.
+     * Progress notifications are written to the transport.
+     */
+    public function testProgressContextInjectedWithSessionAndToken(): void {
+        $receivedToken = null;
+        $receivedContext = null;
+
+        $server = new McpServer('test');
+        $server->tool(
+            name: 'progress-tool',
+            description: 'Tool with progress',
+            callback: function (?ProgressContext $progress = null) use (&$receivedToken, &$receivedContext): string {
+                $receivedContext = $progress;
+                if ($progress !== null) {
+                    $receivedToken = $progress->getToken()->getValue();
+                    $progress->progress(50);
+                }
+                return 'done';
+            },
+        );
+
+        // Build a session-backed environment (same pattern as McpServerElicitationTest)
+        $transport = new ProgressTestTransport();
+        $inner = $server->getServer();
+        $initOpts = $inner->createInitializationOptions(new NotificationOptions());
+        $session = new HttpServerSession($transport, $initOpts, new NullLogger());
+
+        // Fast-forward to Initialized state
+        $ref = new \ReflectionClass($session);
+        $ref->getProperty('initializationState')
+            ->setValue($session, InitializationState::Initialized);
+        $ref->getProperty('negotiatedProtocolVersion')
+            ->setValue($session, '2025-11-25');
+        $ref->getProperty('clientParams')
+            ->setValue($session, new InitializeRequestParams(
+                protocolVersion: '2025-11-25',
+                capabilities: new ClientCapabilities(),
+                clientInfo: new Implementation('test-client', '1.0'),
+            ));
+
+        $inner->setSession($session);
+        $session->registerHandlers($inner->getHandlers());
+
+        // Fire a tools/call with _meta.progressToken through the session
+        $meta = new Meta();
+        $meta->progressToken = 'my-progress-token';
+
+        $clientRequest = new ClientRequest(
+            new CallToolRequest('progress-tool', null, null, $meta),
+        );
+        $responder = new RequestResponder(
+            new RequestId(1),
+            ['name' => 'progress-tool', 'arguments' => null, '_meta' => ['progressToken' => 'my-progress-token']],
+            $clientRequest,
+            $session,
+        );
+
+        $session->handleRequest($responder);
+
+        // Verify the callback received a non-null ProgressContext with the correct token
+        $this->assertNotNull($receivedContext, 'ProgressContext should be injected when session and token are available');
+        $this->assertEquals('my-progress-token', $receivedToken);
+        $this->assertEquals(50.0, $receivedContext->getCurrent());
+
+        // Verify progress notification was written to the transport
+        $this->assertGreaterThanOrEqual(2, count($transport->written)); // at least 1 notification + 1 response
+        $firstMessage = $transport->written[0]->message;
+        $this->assertInstanceOf(\Mcp\Types\JSONRPCNotification::class, $firstMessage);
+        $this->assertEquals('notifications/progress', $firstMessage->method);
+    }
+
+    /**
+     * Test that tools without ProgressContext continue to work unchanged.
+     */
+    public function testToolWithoutProgressContextUnaffected(): void {
+        $server = new McpServer('test');
+        $server->tool(
+            name: 'simple',
+            description: 'No progress',
+            callback: fn(string $x) => "echo: $x",
+        );
+
+        $underlying = $server->getServer();
+        $handlers = $underlying->getHandlers();
+
+        $params = new \stdClass();
+        $params->name = 'simple';
+        $params->arguments = (object) ['x' => 'hello'];
+        $meta = new Meta();
+        $meta->progressToken = 'unused-token';
+        $params->_meta = $meta;
+
+        $result = $handlers['tools/call']($params);
+        $this->assertInstanceOf(CallToolResult::class, $result);
+        $this->assertFalse($result->isError);
+        $this->assertEquals('echo: hello', $result->content[0]->text);
+    }
+
+    /**
      * Test prompt with title parameter.
      */
     public function testPromptWithTitle(): void {
@@ -306,5 +503,28 @@ final class McpServerNewFeaturesTest extends TestCase
         $serialized = json_decode(json_encode($caps->experimental), true);
         $this->assertEquals(['enabled' => true], $serialized['customFeature']);
         $this->assertEquals('value', $serialized['anotherCap']);
+    }
+}
+
+/**
+ * Minimal in-memory transport for session-backed tests.
+ */
+class ProgressTestTransport implements Transport
+{
+    /** @var JsonRpcMessage[] */
+    public array $written = [];
+
+    /** @var JsonRpcMessage[] */
+    private array $incoming = [];
+
+    public function start(): void {}
+    public function stop(): void {}
+    public function readMessage(): ?JsonRpcMessage
+    {
+        return array_shift($this->incoming);
+    }
+    public function writeMessage(JsonRpcMessage $message): void
+    {
+        $this->written[] = $message;
     }
 }

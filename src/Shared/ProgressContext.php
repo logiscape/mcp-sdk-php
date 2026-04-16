@@ -65,4 +65,8 @@ class ProgressContext {
     public function getTotal(): ?float {
         return $this->total;
     }
+
+    public function getToken(): ProgressToken {
+        return $this->progressToken;
+    }
 }
