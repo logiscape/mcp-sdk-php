@@ -76,6 +76,17 @@ class OAuthClient implements OAuthClientInterface
     private array $clientCredentialsCache = [];
 
     /**
+     * Set of authorization server URLs that were derived via the MCP 2025-03-26
+     * legacy fallback (base URL stripped from the MCP server URL). Only these
+     * URLs get relaxed issuer validation and legacy endpoint synthesis; AS URLs
+     * that came from PRM or from OAuthConfiguration::authorizationServerUrl are
+     * always validated strictly per RFC 8414.
+     *
+     * @var array<string, true>
+     */
+    private array $legacyDerivedAuthServers = [];
+
+    /**
      * @param OAuthConfiguration $config OAuth configuration
      * @param LoggerInterface|null $logger PSR-3 logger
      */
@@ -194,10 +205,7 @@ class OAuthClient implements OAuthClientInterface
         $this->logger->debug('Refreshing token', ['issuer' => $issuer]);
 
         // Get cached AS metadata
-        $authServerMetadata = $this->authServerMetadataCache[$issuer] ?? null;
-        if ($authServerMetadata === null) {
-            $authServerMetadata = $this->discoverAuthorizationServerMetadata($issuer);
-        }
+        $authServerMetadata = $this->discoverAuthorizationServerMetadataForRefresh($tokens);
 
         // Get client credentials
         $credentials = $this->getClientCredentials($issuer, $authServerMetadata);
@@ -488,6 +496,15 @@ class OAuthClient implements OAuthClientInterface
         try {
             $metadata = $this->discovery->discoverResourceMetadata($resourceUrl, $metadataUrl);
             $this->resourceMetadataCache[$cacheKey] = $metadata;
+            // Real PRM success supersedes any prior legacy derivation for the AS
+            // URLs it advertises. Drop stale legacy markers and cached metadata
+            // so subsequent AS discovery re-validates strictly per RFC 8414.
+            foreach ($metadata->authorizationServers as $asUrl) {
+                unset(
+                    $this->legacyDerivedAuthServers[$asUrl],
+                    $this->authServerMetadataCache[$asUrl]
+                );
+            }
             return $metadata;
         } catch (OAuthException $e) {
             if ($this->config->hasAuthorizationServer()) {
@@ -500,6 +517,26 @@ class OAuthClient implements OAuthClientInterface
                 return new ProtectedResourceMetadata(
                     resource: $resourceUrl,
                     authorizationServers: [$this->config->getAuthorizationServerUrl()],
+                );
+            }
+            // MCP 2025-03-26 fallback: derive AS base from the MCP server URL.
+            // The explicit authorizationServerUrl config above takes precedence.
+            // Mark the derived URL as legacy-derived so ONLY that URL gets
+            // relaxed issuer validation / endpoint synthesis downstream —
+            // PRM-sourced and config-sourced AS URLs still enforce RFC 8414.
+            if ($this->config->isLegacyOAuthFallbackEnabled()) {
+                $legacyAsUrl = $this->deriveLegacyAuthorizationServerBase($resourceUrl);
+                $this->legacyDerivedAuthServers[$legacyAsUrl] = true;
+                $this->logger->info(
+                    'Resource metadata discovery failed; using legacy 2025-03-26 fallback',
+                    [
+                        'resource' => $resourceUrl,
+                        'derivedAuthorizationServer' => $legacyAsUrl,
+                    ]
+                );
+                return new ProtectedResourceMetadata(
+                    resource: $resourceUrl,
+                    authorizationServers: [$legacyAsUrl],
                 );
             }
             throw $e;
@@ -550,10 +587,178 @@ class OAuthClient implements OAuthClientInterface
             return $this->authServerMetadataCache[$authServerUrl];
         }
 
-        $metadata = $this->discovery->discoverAuthorizationServerMetadata($authServerUrl);
+        // Only URLs that came from the MCP 2025-03-26 legacy derivation path
+        // get relaxed issuer validation and endpoint synthesis. URLs from PRM
+        // or from the configured authorizationServerUrl are always validated
+        // strictly per RFC 8414, even when enableLegacyOAuthFallback is set.
+        $isLegacyDerived = isset($this->legacyDerivedAuthServers[$authServerUrl]);
+        try {
+            $metadata = $isLegacyDerived
+                ? $this->discovery->discoverAuthorizationServerMetadataWithoutIssuerMatch($authServerUrl)
+                : $this->discovery->discoverAuthorizationServerMetadata($authServerUrl);
+        } catch (OAuthException $e) {
+            if (!$isLegacyDerived) {
+                throw $e;
+            }
+            if (!$e->isDiscoveryUnavailable()) {
+                throw $e;
+            }
+            $this->logger->info(
+                'Authorization server metadata discovery failed; using legacy 2025-03-26 default endpoints',
+                [
+                    'authorizationServer' => $authServerUrl,
+                    'error' => $e->getMessage(),
+                ]
+            );
+            $metadata = $this->synthesizeLegacyAuthorizationServerMetadata($authServerUrl);
+        }
+
+        // Cache under the URL we searched AND under the metadata's issuer.
+        // In the standard flow these are identical; in legacy mode they can
+        // differ and refreshToken() looks up by the token's issuer.
         $this->authServerMetadataCache[$authServerUrl] = $metadata;
+        $this->authServerMetadataCache[$metadata->issuer] = $metadata;
 
         return $metadata;
+    }
+
+    /**
+     * Resolve Authorization Server Metadata for refresh-token flows.
+     *
+     * A fresh OAuthClient may not have the in-memory marker saying an AS URL was
+     * derived through the MCP 2025-03-26 legacy path. Reconstruct it from the
+     * token's resource URL so persisted tokens can still refresh against legacy
+     * servers when the caller explicitly enabled the fallback.
+     */
+    private function discoverAuthorizationServerMetadataForRefresh(
+        TokenSet $tokens
+    ): AuthorizationServerMetadata {
+        $issuer = $tokens->issuer;
+        if ($issuer === null) {
+            throw OAuthException::tokenRefreshFailed('Token issuer unknown');
+        }
+
+        if (isset($this->authServerMetadataCache[$issuer])) {
+            return $this->authServerMetadataCache[$issuer];
+        }
+
+        if ($this->config->isLegacyOAuthFallbackEnabled()) {
+            $resourceUrl = $tokens->resourceUrl ?? $tokens->resource;
+            if ($resourceUrl !== null) {
+                $legacyAsUrl = $this->deriveLegacyAuthorizationServerBase($resourceUrl);
+
+                if ($this->isIssuerWithinLegacyBase($issuer, $legacyAsUrl)) {
+                    $this->legacyDerivedAuthServers[$legacyAsUrl] = true;
+                    $metadata = $this->discoverAuthorizationServerMetadata($legacyAsUrl);
+
+                    if ($this->urlsMatch($metadata->issuer, $issuer)) {
+                        return $metadata;
+                    }
+
+                    throw OAuthException::tokenRefreshFailed(
+                        "Legacy authorization server metadata issuer {$metadata->issuer} does not match token issuer {$issuer}"
+                    );
+                }
+            }
+        }
+
+        return $this->discoverAuthorizationServerMetadata($issuer);
+    }
+
+    /**
+     * Derive the legacy authorization server base URL from an MCP resource URL
+     * by discarding any existing path component.
+     *
+     * Per the MCP 2025-03-26 authorization spec: "The authorization base URL MUST
+     * be determined from the MCP server URL by discarding any existing path
+     * component." Callers must only reach this method when
+     * OAuthConfiguration::enableLegacyOAuthFallback is set; 2025-06-18+ servers
+     * are required to publish RFC 9728 PRM.
+     *
+     * @param string $resourceUrl The MCP server URL
+     * @return string The base URL with path stripped
+     */
+    private function deriveLegacyAuthorizationServerBase(string $resourceUrl): string
+    {
+        $parsed = parse_url($resourceUrl);
+        if ($parsed === false || !isset($parsed['host'])) {
+            throw new OAuthException(
+                "Cannot derive legacy authorization server base from resource URL: {$resourceUrl}"
+            );
+        }
+        $scheme = $parsed['scheme'] ?? 'https';
+        $host = $parsed['host'];
+        // Bracket bare IPv6 hosts so the reassembled URL is valid.
+        if (strpos($host, ':') !== false && $host[0] !== '[') {
+            $host = "[{$host}]";
+        }
+        $port = isset($parsed['port']) ? ":{$parsed['port']}" : '';
+
+        return "{$scheme}://{$host}{$port}";
+    }
+
+    private function isIssuerWithinLegacyBase(string $issuer, string $legacyAsUrl): bool
+    {
+        $normalizedIssuer = $this->normalizeUrlForComparison($issuer);
+        $normalizedBase = $this->normalizeUrlForComparison($legacyAsUrl);
+
+        return $normalizedIssuer === $normalizedBase
+            || str_starts_with($normalizedIssuer, "{$normalizedBase}/");
+    }
+
+    private function urlsMatch(string $left, string $right): bool
+    {
+        return $this->normalizeUrlForComparison($left) === $this->normalizeUrlForComparison($right);
+    }
+
+    private function normalizeUrlForComparison(string $url): string
+    {
+        $parsed = parse_url($url);
+        if ($parsed === false) {
+            return rtrim($url, '/');
+        }
+
+        $scheme = strtolower($parsed['scheme'] ?? 'https');
+        $host = strtolower($parsed['host'] ?? '');
+        $port = $parsed['port'] ?? null;
+        $path = $parsed['path'] ?? '';
+
+        if (($scheme === 'https' && $port === 443) || ($scheme === 'http' && $port === 80)) {
+            $port = null;
+        }
+
+        $normalized = "{$scheme}://{$host}";
+        if ($port !== null) {
+            $normalized .= ":{$port}";
+        }
+
+        return rtrim($normalized . $path, '/');
+    }
+
+    /**
+     * Synthesize an AuthorizationServerMetadata using the MCP 2025-03-26 default
+     * endpoints at the given base URL.
+     *
+     * S256 is included in code_challenge_methods_supported so the SDK's PKCE gate
+     * passes. client_id_metadata_document_supported is left at its default (false)
+     * so CIMD is not advertised by synthesized metadata.
+     *
+     * @param string $baseUrl The AS base URL (already stripped of any path)
+     */
+    private function synthesizeLegacyAuthorizationServerMetadata(
+        string $baseUrl
+    ): AuthorizationServerMetadata {
+        $base = rtrim($baseUrl, '/');
+
+        return new AuthorizationServerMetadata(
+            issuer: $base,
+            authorizationEndpoint: "{$base}/authorize",
+            tokenEndpoint: "{$base}/token",
+            registrationEndpoint: "{$base}/register",
+            codeChallengeMethodsSupported: ['S256'],
+            grantTypesSupported: ['authorization_code', 'refresh_token'],
+            tokenEndpointAuthMethodsSupported: ['none', 'client_secret_post', 'client_secret_basic'],
+        );
     }
 
     /**

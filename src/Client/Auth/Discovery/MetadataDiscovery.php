@@ -115,10 +115,44 @@ class MetadataDiscovery
      *
      * @param string $issuerUrl The authorization server issuer URL
      * @return AuthorizationServerMetadata The discovered metadata
-     * @throws OAuthException If discovery fails or PKCE is not supported
+     * @throws OAuthException If discovery fails, PKCE is not supported, or the
+     *         metadata's issuer does not match the requested issuer URL
      */
     public function discoverAuthorizationServerMetadata(
         string $issuerUrl
+    ): AuthorizationServerMetadata {
+        return $this->fetchAuthorizationServerMetadata($issuerUrl, true);
+    }
+
+    /**
+     * Discover Authorization Server Metadata without enforcing RFC 8414's
+     * issuer-match rule.
+     *
+     * This is a deliberate relaxation for MCP 2025-03-26 legacy discovery,
+     * where the client fetches metadata from the server root rather than from
+     * a URL constructed from the issuer — so the metadata's `issuer` field
+     * can legitimately differ from the URL we requested. Callers MUST only
+     * use this method when they have independent reason to trust the metadata
+     * location (e.g., the MCP 2025-03-26 spec-mandated server-root fallback).
+     *
+     * The PKCE-S256 requirement is still enforced.
+     *
+     * @param string $issuerUrl The URL to probe (typically the server root)
+     * @return AuthorizationServerMetadata The discovered metadata
+     * @throws OAuthException If discovery fails or PKCE is not supported
+     */
+    public function discoverAuthorizationServerMetadataWithoutIssuerMatch(
+        string $issuerUrl
+    ): AuthorizationServerMetadata {
+        return $this->fetchAuthorizationServerMetadata($issuerUrl, false);
+    }
+
+    /**
+     * Shared worker for both strict and relaxed AS metadata discovery.
+     */
+    private function fetchAuthorizationServerMetadata(
+        string $issuerUrl,
+        bool $requireIssuerMatch
     ): AuthorizationServerMetadata {
         $this->logger->debug("Discovering authorization server metadata for: {$issuerUrl}");
 
@@ -132,9 +166,9 @@ class MetadataDiscovery
 
                 if ($this->isValidAuthServerMetadata($data)) {
                     // Validate issuer matches per RFC 8414 Section 3
-                    if (!$this->validateIssuer($data['issuer'], $issuerUrl)) {
+                    if ($requireIssuerMatch && !$this->validateIssuer($data['issuer'], $issuerUrl)) {
                         $this->logger->warning("Issuer mismatch: expected {$issuerUrl}, got {$data['issuer']}");
-                        throw OAuthException::discoveryFailed($issuerUrl, 'Issuer mismatch in metadata');
+                        throw OAuthException::discoveryValidationFailed($issuerUrl, 'Issuer mismatch in metadata');
                     }
 
                     $metadata = AuthorizationServerMetadata::fromArray($data);

@@ -35,6 +35,10 @@ use RuntimeException;
  */
 class OAuthException extends RuntimeException
 {
+    public const REASON_DISCOVERY_UNAVAILABLE = 'discovery_unavailable';
+    public const REASON_DISCOVERY_VALIDATION_FAILED = 'discovery_validation_failed';
+    public const REASON_PKCE_NOT_SUPPORTED = 'pkce_not_supported';
+
     /**
      * OAuth error code (if available from the authorization server).
      */
@@ -51,6 +55,12 @@ class OAuthException extends RuntimeException
     private ?string $oauthErrorUri;
 
     /**
+     * SDK-specific reason code for branching on protocol failures without
+     * parsing human-readable exception messages.
+     */
+    private ?string $reasonCode;
+
+    /**
      * Create a new OAuthException.
      *
      * @param string $message The exception message
@@ -59,6 +69,7 @@ class OAuthException extends RuntimeException
      * @param string|null $oauthError OAuth error code
      * @param string|null $oauthErrorDescription OAuth error description
      * @param string|null $oauthErrorUri OAuth error URI
+     * @param string|null $reasonCode SDK-specific reason code
      */
     public function __construct(
         string $message,
@@ -66,12 +77,14 @@ class OAuthException extends RuntimeException
         ?\Throwable $previous = null,
         ?string $oauthError = null,
         ?string $oauthErrorDescription = null,
-        ?string $oauthErrorUri = null
+        ?string $oauthErrorUri = null,
+        ?string $reasonCode = null
     ) {
         parent::__construct($message, $code, $previous);
         $this->oauthError = $oauthError;
         $this->oauthErrorDescription = $oauthErrorDescription;
         $this->oauthErrorUri = $oauthErrorUri;
+        $this->reasonCode = $reasonCode;
     }
 
     /**
@@ -102,6 +115,22 @@ class OAuthException extends RuntimeException
     public function getOAuthErrorUri(): ?string
     {
         return $this->oauthErrorUri;
+    }
+
+    /**
+     * Get the SDK-specific reason code.
+     */
+    public function getReasonCode(): ?string
+    {
+        return $this->reasonCode;
+    }
+
+    /**
+     * Check whether this error means metadata could not be discovered.
+     */
+    public function isDiscoveryUnavailable(): bool
+    {
+        return $this->reasonCode === self::REASON_DISCOVERY_UNAVAILABLE;
     }
 
     /**
@@ -140,7 +169,25 @@ class OAuthException extends RuntimeException
      */
     public static function discoveryFailed(string $url, string $reason): self
     {
-        return new self("OAuth discovery failed for {$url}: {$reason}");
+        return new self(
+            "OAuth discovery failed for {$url}: {$reason}",
+            reasonCode: self::REASON_DISCOVERY_UNAVAILABLE
+        );
+    }
+
+    /**
+     * Create an exception for metadata that was found but failed validation.
+     *
+     * @param string $url The URL associated with the invalid metadata
+     * @param string $reason The validation failure reason
+     * @return self
+     */
+    public static function discoveryValidationFailed(string $url, string $reason): self
+    {
+        return new self(
+            "OAuth discovery validation failed for {$url}: {$reason}",
+            reasonCode: self::REASON_DISCOVERY_VALIDATION_FAILED
+        );
     }
 
     /**
@@ -151,7 +198,8 @@ class OAuthException extends RuntimeException
     public static function pkceNotSupported(): self
     {
         return new self(
-            'Authorization server does not support PKCE with S256, which is required by MCP'
+            'Authorization server does not support PKCE with S256, which is required by MCP',
+            reasonCode: self::REASON_PKCE_NOT_SUPPORTED
         );
     }
 

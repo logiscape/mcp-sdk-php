@@ -60,6 +60,13 @@ class OAuthConfiguration
      * @param string|null $authorizationServerUrl Pre-configured authorization server URL, used as
      *        fallback when RFC 9728 resource metadata discovery fails (e.g., for servers that don't
      *        publish protected resource metadata)
+     * @param bool $enableLegacyOAuthFallback Enable MCP 2025-03-26 OAuth backwards-compatibility
+     *        fallback. When true and resource metadata discovery fails, the AS base URL is derived
+     *        from the MCP server URL (path discarded). When true and AS metadata discovery also
+     *        fails, the client synthesizes an AS metadata document pointing at the legacy default
+     *        endpoints (/authorize, /token, /register) at the server root. Default false. MCP
+     *        2025-06-18+ requires RFC 9728 PRM, so this flag MUST remain false for 2025-06-18+
+     *        servers.
      */
     public function __construct(
         private ?ClientCredentials $clientCredentials = null,
@@ -75,6 +82,7 @@ class OAuthConfiguration
         private ?string $redirectUri = null,
         private bool $verifyTls = true,
         private ?string $authorizationServerUrl = null,
+        private bool $enableLegacyOAuthFallback = false,
     ) {
         if ($tokenStorage === null) {
             // Warn about MemoryTokenStorage in web contexts
@@ -219,5 +227,13 @@ class OAuthConfiguration
     public function hasAuthorizationServer(): bool
     {
         return $this->authorizationServerUrl !== null;
+    }
+
+    /**
+     * Check if the MCP 2025-03-26 legacy OAuth fallback is enabled.
+     */
+    public function isLegacyOAuthFallbackEnabled(): bool
+    {
+        return $this->enableLegacyOAuthFallback;
     }
 }

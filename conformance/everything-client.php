@@ -107,8 +107,11 @@ function connectToServer(string $serverUrl): ClientSession
 /**
  * @param array<string, mixed>|null $context
  */
-function connectToServerWithAuth(string $serverUrl, ?array $context = null): ClientSession
-{
+function connectToServerWithAuth(
+    string $serverUrl,
+    ?array $context = null,
+    bool $legacyOAuthFallback = false
+): ClientSession {
     $client = new Client();
 
     $callbackHandler = new HeadlessCallbackHandler(
@@ -140,6 +143,7 @@ function connectToServerWithAuth(string $serverUrl, ?array $context = null): Cli
         cimdUrl: CIMD_CLIENT_METADATA_URL,
         redirectUri: CONFORMANCE_REDIRECT_URI,
         verifyTls: false,
+        enableLegacyOAuthFallback: $legacyOAuthFallback,
     );
 
     $httpOptions = [
@@ -238,7 +242,14 @@ function scenarioAuth(string $scenario, string $serverUrl, ?array $context): voi
 {
     fwrite(STDERR, "Running auth scenario: {$scenario}\n");
 
-    $session = connectToServerWithAuth($serverUrl, $context);
+    // MCP 2025-03-26 spec scenarios exercise legacy OAuth fallback behavior
+    // (root-derived AS metadata + default /authorize, /token, /register).
+    $legacyOAuthFallback = str_starts_with($scenario, 'auth/2025-03-26-');
+    if ($legacyOAuthFallback) {
+        fwrite(STDERR, "Enabling MCP 2025-03-26 legacy OAuth fallback\n");
+    }
+
+    $session = connectToServerWithAuth($serverUrl, $context, $legacyOAuthFallback);
 
     $initResult = $session->getInitializeResult();
     fwrite(STDERR, "Protocol version: " . ($initResult->protocolVersion ?? 'unknown') . "\n");
