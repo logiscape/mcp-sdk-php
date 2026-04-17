@@ -99,6 +99,21 @@ class StreamableHttpTransport
     private const MAX_OAUTH_RETRIES = 2;
 
     /**
+     * Milliseconds deducted from the server-provided retry delay before
+     * reconnecting. A zero value preserves the exact server pacing.
+     */
+    private const RECONNECT_CONNECT_BUDGET_MS = 0;
+
+    /**
+     * Lower bound (ms) on how long any single reconnect GET is allowed to
+     * block. Used as a floor for the per-request timeout so very small
+     * `retry` values don't starve the read. The effective timeout is
+     * `max(RECONNECT_MIN_READ_TIMEOUT_MS, retry + 2000)`, further clamped to
+     * the remaining wall-clock budget.
+     */
+    private const RECONNECT_MIN_READ_TIMEOUT_MS = 5000;
+
+    /**
      * Creates a new StreamableHttpTransport.
      *
      * @param HttpConfiguration $config Configuration for the HTTP transport
@@ -398,7 +413,34 @@ class StreamableHttpTransport
         // Process SSE response if that's what we got
         if (strpos($contentType, 'text/event-stream') !== false) {
             $this->logger->info('Received SSE response to JSON-RPC message');
-            return $this->processSseResponse($responseBody, $responseHeaders, $statusCode);
+            $sseResult = $this->processSseResponse($responseBody, $responseHeaders, $statusCode, $message);
+
+            // If the POST SSE stream closed gracefully before the server sent
+            // the JSON-RPC response for our request, resume via GET with
+            // Last-Event-ID. Per SEP-1699 the server SHOULD send `retry` but
+            // is not required to — the event id is the signal that the stream
+            // is resumable, and the default retry interval from configuration
+            // is used when `retry` is absent.
+            $outboundRequestId = $this->extractOutboundRequestId($message);
+            if (
+                $outboundRequestId !== null
+                && $sseResult['gotResponseForRequest'] === false
+                && $sseResult['lastEventId'] !== null
+            ) {
+                $retryMs = $sseResult['lastRetryMs'];
+                return $this->awaitResponseViaReconnect(
+                    $outboundRequestId,
+                    $retryMs === null ? null : (int) $retryMs,
+                    (string) $sseResult['lastEventId']
+                );
+            }
+
+            return [
+                'statusCode' => $sseResult['statusCode'],
+                'headers' => $sseResult['headers'],
+                'body' => $sseResult['body'],
+                'isEventStream' => true,
+            ];
         }
 
         // Update session based on response
@@ -411,51 +453,12 @@ class StreamableHttpTransport
 
         // ENQUEUE the HTTP JSON-RPC response for the read loop
         $decoded = json_decode($responseBody, true);
-        if (json_last_error() === JSON_ERROR_NONE) {
+        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
             // Support both single and batch responses
             $batch = isset($decoded[0]) && is_array($decoded) ? $decoded : [$decoded];
             foreach ($batch as $item) {
-                // Success response?
-                if (isset($item['jsonrpc'], $item['id']) && array_key_exists('result', $item)) {
-                    $idObj = new RequestId($item['id']);
-
-                    $inner = new JSONRPCResponse(
-                        jsonrpc: $item['jsonrpc'],
-                        id: $idObj,
-                        result: $item['result']
-                    );
-                    $this->pendingMessages[] = new JsonRpcMessage($inner);
-
-                    // Error response?
-                } elseif (isset($item['jsonrpc'], $item['id'], $item['error'])) {
-                    $err = $item['error'];
-
-                    // Validate error structure
-                    if (!is_array($err)) {
-                        continue;
-                    }
-
-                    if (!isset($err['code']) || !isset($err['message'])) {
-                        continue;
-                    }
-
-                    // Ensure code is integer and message is string
-                    $errorCode = is_numeric($err['code']) ? (int) $err['code'] : 0;
-                    $errorMessage = is_string($err['message']) ? $err['message'] : 'Unknown error';
-                    $errorData = isset($err['data']) ? $err['data'] : null;
-
-                    $idObj = new RequestId($item['id']);
-
-                    $inner = new JSONRPCError(
-                        jsonrpc: $item['jsonrpc'],
-                        id: $idObj,
-                        error: new JsonRpcErrorObject(
-                            code: $errorCode,
-                            message: $errorMessage,
-                            data: $errorData
-                        )
-                    );
-                    $this->pendingMessages[] = new JsonRpcMessage($inner);
+                if (is_array($item)) {
+                    $this->enqueueJsonRpcPayload($item);
                 }
             }
         }
@@ -501,82 +504,65 @@ class StreamableHttpTransport
     /**
      * Process an SSE response to a JSON-RPC message.
      *
-     * @param string $initialBody Initial chunk of the SSE stream
+     * Parses every event in the response body (honoring id / event / data /
+     * retry fields per the WHATWG SSE spec), enqueues any JSON-RPC messages
+     * encoded in data payloads, and reports back whether the in-flight
+     * request's response was among them so the caller can decide whether a
+     * SEP-1699 post-close reconnect is required.
+     *
+     * @param string $initialBody Full body of the POST SSE response
      * @param array<string, string> $headers HTTP response headers
      * @param int $statusCode HTTP status code
-     * @return array{statusCode: int, headers: array<string, string>, body: string, isEventStream: bool} Processed response data
+     * @param JsonRpcMessage $outboundMessage The message we just POSTed
+     * @return array{
+     *     statusCode: int,
+     *     headers: array<string, string>,
+     *     body: string,
+     *     isEventStream: bool,
+     *     lastRetryMs: ?int,
+     *     lastEventId: ?string,
+     *     gotResponseForRequest: bool
+     * }
      */
-    private function processSseResponse(string $initialBody, array $headers, int $statusCode): array
-    {
-        // We need to determine if this is an initialization response by examining the SSE data
-        $jsonData = $this->extractJsonFromSse($initialBody);
-        $decoded = json_decode($jsonData, true);
-        $isInitialization = false;
-
-        // Check if this is a response to an initialize request
-        if (json_last_error() === JSON_ERROR_NONE && isset($decoded['id']) && $decoded['id'] === 0) {
-            // ID 0 is typically used for the initialize request
-            $isInitialization = true;
-        }
-
-        // Update session based on response headers
+    private function processSseResponse(
+        string $initialBody,
+        array $headers,
+        int $statusCode,
+        JsonRpcMessage $outboundMessage
+    ): array {
+        $isInitialization = $this->isInitializationMessage($outboundMessage);
         $sessionValid = $this->sessionManager->processResponseHeaders($headers, $statusCode, $isInitialization);
-
         if (!$sessionValid) {
             $this->logger->warning('Session invalidated during SSE response');
         }
 
-        // Extract JSON data from SSE format
-        $jsonData = $this->extractJsonFromSse($initialBody);
+        $outboundRequestId = $this->extractOutboundRequestId($outboundMessage);
 
-        // ENQUEUE the HTTP JSON-RPC response for the read loop (same as normal HTTP processing)
-        $decoded = json_decode($jsonData, true);
-        if (json_last_error() === JSON_ERROR_NONE) {
-            // Support both single and batch responses
-            $batch = isset($decoded[0]) && is_array($decoded) ? $decoded : [$decoded];
-            foreach ($batch as $item) {
-                // Success response?
-                if (isset($item['jsonrpc'], $item['id']) && array_key_exists('result', $item)) {
-                    $idObj = new RequestId($item['id']);
+        $lastRetryMs = null;
+        $lastEventId = null;
+        $gotResponseForRequest = false;
 
-                    $inner = new JSONRPCResponse(
-                        jsonrpc: $item['jsonrpc'],
-                        id: $idObj,
-                        result: $item['result']
-                    );
-                    $this->pendingMessages[] = new JsonRpcMessage($inner);
-
-                    // Error response?
-                } elseif (isset($item['jsonrpc'], $item['id'], $item['error'])) {
-                    $err = $item['error'];
-
-                    // Validate error structure
-                    if (!is_array($err)) {
-                        continue;
-                    }
-
-                    if (!isset($err['code']) || !isset($err['message'])) {
-                        continue;
-                    }
-
-                    // Ensure code is integer and message is string
-                    $errorCode = is_numeric($err['code']) ? (int) $err['code'] : 0;
-                    $errorMessage = is_string($err['message']) ? $err['message'] : 'Unknown error';
-                    $errorData = isset($err['data']) ? $err['data'] : null;
-
-                    $idObj = new RequestId($item['id']);
-
-                    $inner = new JSONRPCError(
-                        jsonrpc: $item['jsonrpc'],
-                        id: $idObj,
-                        error: new JsonRpcErrorObject(
-                            code: $errorCode,
-                            message: $errorMessage,
-                            data: $errorData
-                        )
-                    );
-                    $this->pendingMessages[] = new JsonRpcMessage($inner);
-                }
+        // Track the SSE event cursor locally rather than writing it into the
+        // shared session manager. Per the MCP spec, Last-Event-ID is only
+        // meaningful on a resumption GET for the stream that was disconnected
+        // — carrying it on unrelated POSTs / DELETEs could trick a server
+        // into replay behavior for a stream that isn't being resumed.
+        foreach (SseEventParser::parse($initialBody) as $event) {
+            if ($event['id'] !== null) {
+                $lastEventId = $event['id'];
+            }
+            if ($event['retry'] !== null) {
+                $lastRetryMs = $event['retry'];
+            }
+            if ($event['data'] === '') {
+                continue;
+            }
+            if ($event['event'] !== 'message') {
+                // Non-message event types (e.g. custom) are not JSON-RPC carriers.
+                continue;
+            }
+            if ($this->enqueueSseDataPayload($event['data'], $outboundRequestId)) {
+                $gotResponseForRequest = true;
             }
         }
 
@@ -584,29 +570,341 @@ class StreamableHttpTransport
             'statusCode' => $statusCode,
             'headers' => $headers,
             'body' => $initialBody,
-            'isEventStream' => true
+            'isEventStream' => true,
+            'lastRetryMs' => $lastRetryMs,
+            'lastEventId' => $lastEventId,
+            'gotResponseForRequest' => $gotResponseForRequest,
         ];
     }
 
     /**
-     * Extract JSON data from SSE format.
-     *
-     * @param string $sseData The raw SSE data
-     * @return string The extracted JSON data
+     * Decode a single SSE data payload and enqueue any JSON-RPC messages it
+     * contains. Returns true if one of the enqueued messages is the response
+     * to the in-flight request identified by $outboundRequestId.
      */
-    private function extractJsonFromSse(string $sseData): string
+    private function enqueueSseDataPayload(string $data, int|string|null $outboundRequestId): bool
     {
-        // Parse SSE format: look for "data: " lines
-        $lines = preg_split('/\r\n|\n|\r/', $sseData);
-        $jsonData = '';
-
-        foreach ($lines as $line) {
-            if (strpos($line, 'data: ') === 0) {
-                $jsonData .= substr($line, 6); // Remove "data: " prefix
-            }
+        $decoded = json_decode($data, true);
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded)) {
+            return false;
         }
 
-        return $jsonData;
+        $batch = isset($decoded[0]) && is_array($decoded) ? $decoded : [$decoded];
+        $matched = false;
+        foreach ($batch as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            if (!$this->enqueueJsonRpcPayload($item)) {
+                continue;
+            }
+            if ($outboundRequestId !== null && isset($item['id']) && $this->idsEqual($item['id'], $outboundRequestId)) {
+                $matched = true;
+            }
+        }
+        return $matched;
+    }
+
+    /**
+     * Enqueue a single decoded JSON-RPC payload (response or error) into the
+     * pending queue. Returns true if a message was enqueued, false if the
+     * payload was not a recognizable JSON-RPC response.
+     *
+     * @param array<mixed, mixed> $item
+     */
+    private function enqueueJsonRpcPayload(array $item): bool
+    {
+        if (!isset($item['jsonrpc'], $item['id'])) {
+            return false;
+        }
+
+        // Success response
+        if (array_key_exists('result', $item)) {
+            $idObj = new RequestId($item['id']);
+            $inner = new JSONRPCResponse(
+                jsonrpc: $item['jsonrpc'],
+                id: $idObj,
+                result: $item['result']
+            );
+            $this->pendingMessages[] = new JsonRpcMessage($inner);
+            return true;
+        }
+
+        // Error response
+        if (isset($item['error']) && is_array($item['error'])) {
+            $err = $item['error'];
+            if (!isset($err['code']) || !isset($err['message'])) {
+                return false;
+            }
+            $errorCode = is_numeric($err['code']) ? (int) $err['code'] : 0;
+            $errorMessage = is_string($err['message']) ? $err['message'] : 'Unknown error';
+            $errorData = $err['data'] ?? null;
+            $idObj = new RequestId($item['id']);
+            $inner = new JSONRPCError(
+                jsonrpc: $item['jsonrpc'],
+                id: $idObj,
+                error: new JsonRpcErrorObject(
+                    code: $errorCode,
+                    message: $errorMessage,
+                    data: $errorData
+                )
+            );
+            $this->pendingMessages[] = new JsonRpcMessage($inner);
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Extract the JSON-RPC id from an outbound message if — and only if — it
+     * is a request. Notifications and responses return null.
+     */
+    private function extractOutboundRequestId(JsonRpcMessage $message): int|string|null
+    {
+        $inner = $message->message;
+        if (!($inner instanceof \Mcp\Types\JSONRPCRequest)) {
+            return null;
+        }
+        return $inner->id->getValue();
+    }
+
+    /**
+     * Compare two JSON-RPC ids. Ids are int|string; JSON decode may yield an
+     * int while the outbound counter also uses int, so strict compare works
+     * for the common case. Fall back to string compare to tolerate servers
+     * that quote numeric ids.
+     */
+    private function idsEqual(mixed $a, mixed $b): bool
+    {
+        if ($a === $b) {
+            return true;
+        }
+        if ((is_int($a) || is_string($a)) && (is_int($b) || is_string($b))) {
+            return (string) $a === (string) $b;
+        }
+        return false;
+    }
+
+    /**
+     * Await the JSON-RPC response for an in-flight request via GET SSE
+     * resumption, as specified by the MCP Streamable HTTP transport and
+     * SEP-1699.
+     *
+     * Loops until one of the following is true:
+     *  - the response for $requestId is enqueued (success),
+     *  - the response for $requestId is not delivered before the wall-clock
+     *    budget is exhausted.
+     *
+     * Each GET includes `Last-Event-ID` set to the latest cursor from the
+     * in-flight stream. The cursor is tracked entirely in method-local state
+     * — it is never written into the shared session manager, because
+     * Last-Event-ID is only meaningful for the specific stream being resumed.
+     *
+     * @param int|string $requestId JSON-RPC id of the in-flight request
+     * @param ?int $retryMs Initial retry interval from the POST SSE priming
+     *                     event, or null if the server omitted `retry:`
+     * @param string $lastEventId Event id from the POST SSE priming event
+     * @return array{statusCode: int, headers: array<string, string>, body: string, isEventStream: bool}
+     */
+    private function awaitResponseViaReconnect(
+        int|string $requestId,
+        ?int $retryMs,
+        string $lastEventId
+    ): array {
+        $defaultRetryMs = (int) ($this->config->getSseDefaultRetryDelay() * 1000);
+        $budgetMs = (int) ($this->config->getSseReconnectBudget() * 1000);
+        $deadlineMs = $this->nowMs() + $budgetMs;
+
+        $effectiveRetry = $retryMs ?? $defaultRetryMs;
+        $cursor = $lastEventId;
+        $attempt = 0;
+
+        while (true) {
+            $attempt++;
+
+            $remainingMs = $deadlineMs - $this->nowMs();
+            if ($remainingMs <= 0) {
+                throw new RuntimeException(
+                    "SSE reconnect budget of {$budgetMs}ms exhausted after {$attempt} "
+                    . "attempt(s) for request id {$requestId}"
+                );
+            }
+
+            $sleepMs = min(
+                max(0, $effectiveRetry - self::RECONNECT_CONNECT_BUDGET_MS),
+                $remainingMs
+            );
+            if ($sleepMs > 0) {
+                $this->logger->info(
+                    "Waiting {$sleepMs}ms before SSE reconnect GET "
+                    . "(retry={$effectiveRetry}ms, attempt={$attempt})"
+                );
+                usleep($sleepMs * 1000);
+            }
+
+            $remainingAfterSleep = $deadlineMs - $this->nowMs();
+            if ($remainingAfterSleep <= 0) {
+                throw new RuntimeException(
+                    "SSE reconnect budget of {$budgetMs}ms exhausted during sleep "
+                    . "(attempt {$attempt}) for request id {$requestId}"
+                );
+            }
+
+            [$found, $newRetry, $newCursor] = $this->performReconnectGet(
+                $requestId,
+                $cursor,
+                $effectiveRetry,
+                $remainingAfterSleep
+            );
+
+            if ($found !== null) {
+                return $found;
+            }
+
+            // Per the MCP transport spec and SEP-1699, once the server has
+            // sent an event id the stream is resumable indefinitely — a
+            // resumed GET that closes or times out before the pending
+            // response arrives is a normal case, and the client must keep
+            // reconnecting with the existing Last-Event-ID and retry until
+            // the wall-clock budget is exhausted. If the server does send a
+            // fresh priming event (new cursor or updated retry), adopt it;
+            // otherwise keep using what we have.
+            if ($newRetry !== null) {
+                $effectiveRetry = $newRetry;
+            }
+            if ($newCursor !== null) {
+                $cursor = $newCursor;
+            }
+        }
+    }
+
+    /**
+     * Issue a single resumption GET SSE request and progressively parse events
+     * until either the target response is enqueued or the stream ends.
+     *
+     * The $cursor is sent as `Last-Event-ID` on this request only. Any new
+     * cursor and retry values observed on the GET stream are returned to the
+     * caller for use in subsequent iterations — they are NOT written into the
+     * shared session manager.
+     *
+     * @param int|string $requestId JSON-RPC id to match the in-flight request
+     * @param string $cursor Last-Event-ID to send on this specific GET
+     * @param int $retryMs Current retry interval (used to size the read timeout)
+     * @param int $remainingBudgetMs Wall-clock budget remaining for the whole loop
+     * @return array{0: ?array{statusCode: int, headers: array<string, string>, body: string, isEventStream: bool}, 1: ?int, 2: ?string}
+     */
+    protected function performReconnectGet(
+        int|string $requestId,
+        string $cursor,
+        int $retryMs,
+        int $remainingBudgetMs
+    ): array {
+        // Set Last-Event-ID explicitly (and only) on this request. The
+        // additionalHeaders merge in prepareRequestHeaders() ensures it
+        // overrides anything the session manager might carry.
+        $headers = $this->prepareRequestHeaders([
+            'Accept' => 'text/event-stream',
+            'Last-Event-ID' => $cursor,
+        ]);
+
+        $ch = curl_init($this->config->getEndpoint());
+        if ($ch === false) {
+            throw new RuntimeException('Failed to initialize cURL for SSE reconnect');
+        }
+
+        // Reuse the common cURL setup (TLS, config-level options) but override
+        // the read timeout with a tighter bound scaled to the retry interval,
+        // clamped to the remaining wall-clock budget.
+        $this->configureCurlHandle($ch, $headers);
+        curl_setopt($ch, CURLOPT_HTTPGET, true);
+        $timeoutMs = min(
+            max(self::RECONNECT_MIN_READ_TIMEOUT_MS, $retryMs + 2000),
+            $remainingBudgetMs
+        );
+        curl_setopt($ch, CURLOPT_TIMEOUT_MS, $timeoutMs);
+
+        $responseHeaders = [];
+        curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($ch, $header) use (&$responseHeaders) {
+            $length = strlen($header);
+            $parts = explode(':', $header, 2);
+            if (count($parts) === 2) {
+                $name = strtolower(trim($parts[0]));
+                $value = trim($parts[1]);
+                $responseHeaders[$name] = $value;
+            }
+            return $length;
+        });
+
+        $buffer = '';
+        $latestRetryMs = null;
+        $latestCursor = null;
+        $foundFlag = false;
+        curl_setopt(
+            $ch,
+            CURLOPT_WRITEFUNCTION,
+            function ($ch, $data) use (&$buffer, &$latestRetryMs, &$latestCursor, &$foundFlag, $requestId) {
+                $buffer .= $data;
+                foreach (SseEventParser::parseStreaming($buffer) as $event) {
+                    if ($event['id'] !== null) {
+                        $latestCursor = $event['id'];
+                    }
+                    if ($event['retry'] !== null) {
+                        $latestRetryMs = $event['retry'];
+                    }
+                    if ($event['data'] === '' || $event['event'] !== 'message') {
+                        continue;
+                    }
+                    if ($this->enqueueSseDataPayload($event['data'], $requestId)) {
+                        $foundFlag = true;
+                    }
+                }
+                if ($foundFlag) {
+                    // Short-write signals curl to abort. The calling code
+                    // treats CURLE_WRITE_ERROR (23) as success when $foundFlag
+                    // is set.
+                    return 0;
+                }
+                return strlen($data);
+            }
+        );
+
+        $result = curl_exec($ch);
+        $errno = curl_errno($ch);
+        $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if (!$foundFlag && $result === false && $errno !== 0 && $errno !== CURLE_OPERATION_TIMEDOUT) {
+            throw new RuntimeException("SSE reconnect GET failed: ({$errno}) {$curlError}");
+        }
+
+        if ($statusCode >= 400) {
+            throw new RuntimeException("SSE reconnect GET returned HTTP {$statusCode}");
+        }
+
+        if ($foundFlag) {
+            return [
+                [
+                    'statusCode' => $statusCode ?: 200,
+                    'headers' => $responseHeaders,
+                    'body' => '',
+                    'isEventStream' => true,
+                ],
+                $latestRetryMs,
+                $latestCursor,
+            ];
+        }
+
+        return [null, $latestRetryMs, $latestCursor];
+    }
+
+    /**
+     * Current monotonic-ish clock in whole milliseconds.
+     */
+    private function nowMs(): int
+    {
+        return (int) (microtime(true) * 1000);
     }
 
     /**

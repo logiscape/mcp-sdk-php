@@ -44,11 +44,6 @@
       * The MCP session ID header name
       */
      private const SESSION_HEADER = 'Mcp-Session-Id';
-     
-     /**
-      * The last event ID header name for resumable SSE connections
-      */
-     private const LAST_EVENT_HEADER = 'Last-Event-ID';
 
      /**
       * The MCP protocol version header name (required after initialization per 2025-11-25 spec)
@@ -88,21 +83,26 @@
      ) {}
  
      /**
-      * Get HTTP headers that should be included in all requests.
-      * 
+      * Get HTTP headers that should be included in every request made in the
+      * context of this session.
+      *
+      * Per the MCP Streamable HTTP transport spec, `Last-Event-ID` is a
+      * stream-specific cursor that belongs on a resumption GET only — it is
+      * NOT a session-wide header and MUST NOT be attached to unrelated POSTs
+      * or DELETEs. Callers that are opening a resumption GET must set
+      * `Last-Event-ID` explicitly on that specific request; the value tracked
+      * here (see updateLastEventId / getLastEventId) remains available for
+      * serialization across session restore but is deliberately excluded
+      * from the default request header set.
+      *
       * @return array<string, string> Key-value pairs of headers
       */
      public function getRequestHeaders(): array {
          $headers = [];
-         
+
          // Include session ID if available
          if ($this->sessionId !== null) {
              $headers[self::SESSION_HEADER] = $this->sessionId;
-         }
-         
-         // Include last event ID if available (for SSE resumption)
-         if ($this->lastEventId !== null) {
-             $headers[self::LAST_EVENT_HEADER] = $this->lastEventId;
          }
 
          // Include protocol version if set (required after initialization)

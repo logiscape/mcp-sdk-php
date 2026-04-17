@@ -51,6 +51,8 @@ class HttpConfiguration
      * @param string|null $caFile Custom CA certificate file path
      * @param array<int, mixed> $curlOptions Additional cURL options as key-value pairs
      * @param OAuthConfiguration|null $oauthConfig OAuth configuration for protected resources
+     * @param float $sseDefaultRetryDelay Default reconnect delay (seconds) used when a server closes an SSE stream without sending a `retry` field (SEP-1699 fallback)
+     * @param float $sseReconnectBudget Wall-clock budget (seconds) for the total post-close reconnect/resume loop for a single in-flight request
      */
     public function __construct(
         private string $endpoint,
@@ -64,7 +66,9 @@ class HttpConfiguration
         private bool $verifyTls = true,
         private ?string $caFile = null,
         private array $curlOptions = [],
-        private ?OAuthConfiguration $oauthConfig = null
+        private ?OAuthConfiguration $oauthConfig = null,
+        private float $sseDefaultRetryDelay = 1.0,
+        private float $sseReconnectBudget = 60.0
     ) {
         $this->validateEndpoint($endpoint);
         $this->normalizeHeaders();
@@ -172,6 +176,28 @@ class HttpConfiguration
     public function getRetryDelay(): float
     {
         return $this->retryDelay;
+    }
+
+    /**
+     * Get the default reconnect delay (seconds) used when a server closes an
+     * SSE stream without sending a `retry` field. SEP-1699 recommends servers
+     * SHOULD send retry to pace reconnections, but does not require it — this
+     * value keeps the client polling in a sensible cadence when the server
+     * omits it.
+     */
+    public function getSseDefaultRetryDelay(): float
+    {
+        return $this->sseDefaultRetryDelay;
+    }
+
+    /**
+     * Get the wall-clock budget (seconds) for the total post-close reconnect
+     * loop on a single in-flight request. The loop terminates once this is
+     * exhausted, even if the server is still emitting priming events.
+     */
+    public function getSseReconnectBudget(): float
+    {
+        return $this->sseReconnectBudget;
     }
 
     /**

@@ -11,7 +11,7 @@
 #   composer conformance-server     # Run server tests only
 #   composer conformance-client     # Run client tests only
 #
-# Last updated: 2026-04-16
+# Last updated: 2026-04-17
 # Conformance tool version: 0.1.16
 
 server:
@@ -44,9 +44,6 @@ client:
   # --- Not yet implemented in PHP client SDK ---
   - elicitation-sep1034-client-defaults
     # Requires client-side elicitation request handler support.
-
-  - sse-retry
-    # Requires SSE reconnection with retry field and Last-Event-ID (SEP-1699).
 
   # --- OAuth: not implemented ---
   - auth/client-credentials-jwt

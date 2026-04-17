@@ -66,7 +66,13 @@ final class HttpSessionManagerTest extends TestCase
      * Test that restored manager produces correct request headers.
      *
      * The Mcp-Session-Id header must be included in all requests after
-     * session initialization. This verifies the restored manager includes it.
+     * session initialization. Last-Event-ID, by contrast, is a per-stream
+     * resumption cursor and MUST NOT be emitted on session-wide request
+     * headers — per the MCP Streamable HTTP transport spec it only belongs
+     * on the specific GET that is resuming its originating stream. The
+     * restored lastEventId is still preserved on the manager for anyone
+     * who wants to read it via getLastEventId(), but it never leaks into
+     * getRequestHeaders().
      */
     public function testRestoredManagerReturnsCorrectRequestHeaders(): void
     {
@@ -82,8 +88,35 @@ final class HttpSessionManagerTest extends TestCase
 
         $this->assertArrayHasKey('Mcp-Session-Id', $headers);
         $this->assertSame('restored-session-456', $headers['Mcp-Session-Id']);
-        $this->assertArrayHasKey('Last-Event-ID', $headers);
-        $this->assertSame('evt-99', $headers['Last-Event-ID']);
+        $this->assertArrayNotHasKey(
+            'Last-Event-ID',
+            $headers,
+            'Last-Event-ID must not be emitted on session-wide request headers'
+        );
+        $this->assertSame('evt-99', $restored->getLastEventId(), 'cursor is still tracked, just not in headers');
+    }
+
+    /**
+     * Even after updateLastEventId() is called on a live manager, the cursor
+     * must not appear in getRequestHeaders(). The cursor API remains available
+     * for explicit SSE resume flows, but default request headers stay scoped to
+     * session-wide state.
+     */
+    public function testUpdateLastEventIdDoesNotLeakIntoRequestHeaders(): void
+    {
+        $manager = new HttpSessionManager();
+        $manager->processResponseHeaders(
+            ['mcp-session-id' => 'session-abc'],
+            200,
+            true
+        );
+
+        $manager->updateLastEventId('event-17');
+
+        $this->assertSame('event-17', $manager->getLastEventId());
+        $headers = $manager->getRequestHeaders();
+        $this->assertArrayNotHasKey('Last-Event-ID', $headers);
+        $this->assertArrayHasKey('Mcp-Session-Id', $headers);
     }
 
     /**

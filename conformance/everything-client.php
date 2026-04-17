@@ -93,6 +93,19 @@ function connectToServer(string $serverUrl): ClientSession
     return $client->connect($serverUrl);
 }
 
+/**
+ * Connect to the conformance server with SSE auto-probing disabled.
+ *
+ * The sse-retry scenario measures the reconnect GET for a specific
+ * request/response stream. Disabling the optional background SSE probe keeps
+ * that exchange isolated.
+ */
+function connectToServerNoSse(string $serverUrl): ClientSession
+{
+    $client = new Client();
+    return $client->connect($serverUrl, [], ['autoSse' => false]);
+}
+
 // ---------------------------------------------------------------------------
 // Helper: connect to the conformance test server with OAuth
 //
@@ -224,6 +237,55 @@ function scenarioToolsCall(string $serverUrl): void
 }
 
 // ---------------------------------------------------------------------------
+// Scenario: sse-retry (SEP-1699)
+//
+// The conformance server returns an SSE POST response with a priming event
+// (id + retry), then gracefully closes the stream before sending the tool
+// response. The client must honor the `retry` field, wait the specified ms,
+// and reconnect via GET with Last-Event-ID. The tool response is delivered
+// on the reconnected GET.
+// ---------------------------------------------------------------------------
+
+function scenarioSseRetry(string $serverUrl): void
+{
+    $session = connectToServerNoSse($serverUrl);
+
+    $toolsResult = $session->listTools();
+    $tools = $toolsResult->tools ?? [];
+    fwrite(STDERR, "Found " . count($tools) . " tools\n");
+
+    $found = false;
+    foreach ($tools as $tool) {
+        if ($tool->name === 'test_reconnection') {
+            $found = true;
+            break;
+        }
+    }
+    if (!$found) {
+        throw new \RuntimeException(
+            'Expected tool "test_reconnection" not found. Available: '
+            . implode(', ', array_map(fn($t) => $t->name, $tools))
+        );
+    }
+
+    $result = $session->callTool('test_reconnection', []);
+    $content = $result->content ?? [];
+    if (empty($content)) {
+        throw new \RuntimeException('test_reconnection returned empty content');
+    }
+
+    $first = $content[0];
+    $text = isset($first->text) ? $first->text : null;
+    if ($text !== 'Reconnection test completed successfully') {
+        throw new \RuntimeException(
+            'Unexpected test_reconnection content: ' . var_export($text, true)
+        );
+    }
+
+    fwrite(STDERR, "test_reconnection returned expected result\n");
+}
+
+// ---------------------------------------------------------------------------
 // Scenario: auth/* - OAuth authorization-code scenarios
 //
 // Matches reference runAuthClient: connect with OAuth, listTools, then
@@ -279,10 +341,7 @@ try {
             "Scenario 'elicitation-sep1034-client-defaults' requires elicitation request "
             . "handler support, which is not yet implemented in the PHP client SDK"
         ),
-        'sse-retry' => throw new \RuntimeException(
-            "Scenario 'sse-retry' requires SSE reconnection support (SEP-1699), "
-            . "which is not yet implemented in the PHP client SDK"
-        ),
+        'sse-retry' => scenarioSseRetry($serverUrl),
 
         // --- Client credentials grant type (not implemented) ---
         // These scenarios require grant_type=client_credentials which the SDK

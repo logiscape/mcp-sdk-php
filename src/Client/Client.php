@@ -125,7 +125,9 @@ class Client {
                     verifyTls: $httpOptions['verifyTls'] ?? true,
                     caFile: $httpOptions['caFile'] ?? null,
                     curlOptions: $httpOptions['curlOptions'] ?? [],
-                    oauthConfig: $oauthConfig
+                    oauthConfig: $oauthConfig,
+                    sseDefaultRetryDelay: $httpOptions['sseDefaultRetryDelay'] ?? 1.0,
+                    sseReconnectBudget: $httpOptions['sseReconnectBudget'] ?? 60.0
                 );
                 
                 // Create the HTTP transport
@@ -241,7 +243,9 @@ class Client {
                 verifyTls: $httpOptions['verifyTls'] ?? true,
                 caFile: $httpOptions['caFile'] ?? null,
                 curlOptions: $httpOptions['curlOptions'] ?? [],
-                oauthConfig: $oauthConfig
+                oauthConfig: $oauthConfig,
+                sseDefaultRetryDelay: $httpOptions['sseDefaultRetryDelay'] ?? 1.0,
+                sseReconnectBudget: $httpOptions['sseReconnectBudget'] ?? 60.0
             );
 
             // Set the negotiated protocol version on the session manager

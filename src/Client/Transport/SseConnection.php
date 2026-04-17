@@ -136,6 +136,11 @@ use Mcp\Types\Meta;
          $this->config = $config;
          $this->sessionManager = $sessionManager;
          $this->logger = $logger ?? new NullLogger();
+         // Seed the connection-local cursor from any restored session state
+         // so the first SSE GET can resume via Last-Event-ID. After this
+         // point the cursor is tracked locally and is not re-read from the
+         // shared session manager.
+         $this->lastEventId = $sessionManager->getLastEventId();
      }
      
      /**
@@ -464,7 +469,19 @@ use Mcp\Types\Meta;
              $event['data'] = rtrim($event['data'], "\n");
          }
          
-         // Update last event ID if present
+         // Update last event ID if present. The cursor is tracked both in
+         // this connection's local state (for the next SSE reconnect GET
+         // header) and in the shared session manager (so toArray() /
+         // fromArray() session restore can resume from the latest position).
+         // This does NOT leak onto unrelated POSTs or DELETEs because
+         // HttpSessionManager::getRequestHeaders() deliberately excludes
+         // Last-Event-ID from the session-wide header bag.
+         //
+         // Note: in background mode this update happens in the forked child
+         // process and does not propagate back to the parent's session
+         // manager. That is a pre-existing limitation of the background
+         // transport path — only foreground mode is fully compatible with
+         // toArray()-based session restore.
          if ($event['id'] !== null) {
              $this->lastEventId = $event['id'];
              $this->sessionManager->updateLastEventId($event['id']);
