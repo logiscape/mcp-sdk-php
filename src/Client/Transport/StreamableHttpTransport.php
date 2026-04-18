@@ -375,22 +375,37 @@ class StreamableHttpTransport
                 }
                 $sseRawBody .= $data;
                 $this->consumeSseChunk($data, $sseBuffer, $sseCursor, $outboundRequestId);
+                if ($sseCursor['gotResponseForRequest']) {
+                    // Once the in-flight response is parsed off the stream we
+                    // do not need to wait for the server to close — many
+                    // servers SHOULD per the spec but don't, and a slow close
+                    // would otherwise burn the read timeout. Short-write
+                    // aborts the transfer; the post-exec handling below treats
+                    // it as benign because gotResponseForRequest is true.
+                    // Mirrors the GET reconnect path in performReconnectGet().
+                    return 0;
+                }
                 return strlen($data);
             }
         );
 
         // Execute the request
         $result = curl_exec($ch);
-
-        if ($result === false) {
-            $error = curl_error($ch);
-            $errno = curl_errno($ch);
-            curl_close($ch);
-            throw new RuntimeException("HTTP request failed: ({$errno}) {$error}");
-        }
-
+        $errno = curl_errno($ch);
+        $error = curl_error($ch);
         $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+
+        // A failed cURL transfer on the POST SSE path is still useful when
+        // either (a) the in-flight response was already parsed off the stream,
+        // or (b) the stream is resumable per SEP-1699 (Last-Event-ID was seen
+        // and we have an outbound request id to wait for). The SSE completion
+        // block further down returns the queued response or triggers
+        // awaitResponseViaReconnect() as appropriate. Mirrors the tolerance in
+        // performReconnectGet().
+        if ($result === false && !$this->sseTransferIsSalvageable($sseActive, $sseCursor, $outboundRequestId)) {
+            throw new RuntimeException("HTTP request failed: ({$errno}) {$error}");
+        }
 
         // Handle OAuth-related responses
         if ($this->oauthClient !== null && $attempt < self::MAX_OAUTH_RETRIES) {
@@ -862,6 +877,34 @@ class StreamableHttpTransport
             return (string) $a === (string) $b;
         }
         return false;
+    }
+
+    /**
+     * Decide whether a cURL transfer that ended in error on the POST SSE path
+     * can still be treated as a successful response per the MCP Streamable
+     * HTTP spec (revision 2025-11-25, SEP-1699):
+     *
+     *  (a) the in-flight response was already parsed off the stream — the
+     *      server may keep the stream open after the response, or our own
+     *      WRITEFUNCTION may have short-written to abort the transfer; or
+     *  (b) the stream is resumable — a Last-Event-ID was observed and we
+     *      have an outbound request id whose response we can still pursue
+     *      via awaitResponseViaReconnect().
+     *
+     * @param array{lastEventId: ?string, lastRetryMs: ?int, gotResponseForRequest: bool} $cursor
+     */
+    private function sseTransferIsSalvageable(
+        bool $sseActive,
+        array $cursor,
+        int|string|null $outboundRequestId
+    ): bool {
+        if (!$sseActive) {
+            return false;
+        }
+        if ($cursor['gotResponseForRequest']) {
+            return true;
+        }
+        return $outboundRequestId !== null && $cursor['lastEventId'] !== null;
     }
 
     /**

@@ -468,6 +468,120 @@ final class StreamableHttpTransportSseTest extends TestCase
     }
 
     /**
+     * If the cURL transfer ended in error but the SSE WRITEFUNCTION already
+     * parsed the in-flight response off the stream, the POST send path must
+     * treat the error as benign — many servers keep the SSE stream open
+     * after the response (the spec says SHOULD close, not MUST), and the
+     * read timeout firing in that window must not throw away a response we
+     * have already received.
+     */
+    public function testSseTransferSalvageableWhenResponseAlreadyReceived(): void
+    {
+        $transport = new StreamableHttpTransport(
+            config: new HttpConfiguration(endpoint: 'http://localhost/mcp'),
+            autoSse: false
+        );
+
+        $cursor = [
+            'lastEventId' => null,
+            'lastRetryMs' => null,
+            'gotResponseForRequest' => true,
+        ];
+
+        $this->assertTrue(
+            $this->invokeSseTransferIsSalvageable($transport, true, $cursor, 7),
+            'a cURL error after the in-flight response was parsed must be treated as benign'
+        );
+    }
+
+    /**
+     * Per SEP-1699, once the server has emitted an event id the POST SSE
+     * stream is resumable indefinitely via Last-Event-ID. A cURL failure
+     * (timeout / disconnect) before the response arrives must not throw —
+     * the SSE completion block routes us into awaitResponseViaReconnect()
+     * to keep waiting for the response on a resumed GET.
+     */
+    public function testSseTransferSalvageableWhenResumableCursorPresent(): void
+    {
+        $transport = new StreamableHttpTransport(
+            config: new HttpConfiguration(endpoint: 'http://localhost/mcp'),
+            autoSse: false
+        );
+
+        $cursor = [
+            'lastEventId' => 'event-77',
+            'lastRetryMs' => 250,
+            'gotResponseForRequest' => false,
+        ];
+
+        $this->assertTrue(
+            $this->invokeSseTransferIsSalvageable($transport, true, $cursor, 'req-1'),
+            'a cURL error with a resumable cursor and outbound id must be salvageable'
+        );
+    }
+
+    /**
+     * A cURL failure with no response and no resumable cursor is a genuine
+     * transport failure and must surface as an exception. Likewise, the
+     * non-SSE branch (plain JSON response) has no recovery state and must
+     * never be salvaged.
+     */
+    public function testSseTransferNotSalvageableWithoutResponseOrCursor(): void
+    {
+        $transport = new StreamableHttpTransport(
+            config: new HttpConfiguration(endpoint: 'http://localhost/mcp'),
+            autoSse: false
+        );
+
+        $emptyCursor = [
+            'lastEventId' => null,
+            'lastRetryMs' => null,
+            'gotResponseForRequest' => false,
+        ];
+
+        $this->assertFalse(
+            $this->invokeSseTransferIsSalvageable($transport, true, $emptyCursor, 9),
+            'no response and no cursor is a real failure — must throw'
+        );
+
+        $this->assertFalse(
+            $this->invokeSseTransferIsSalvageable($transport, true, [
+                'lastEventId' => 'event-3',
+                'lastRetryMs' => null,
+                'gotResponseForRequest' => false,
+            ], null),
+            'a resumable cursor without an outbound request id is not actionable'
+        );
+
+        $primedCursor = [
+            'lastEventId' => 'event-3',
+            'lastRetryMs' => null,
+            'gotResponseForRequest' => true,
+        ];
+
+        $this->assertFalse(
+            $this->invokeSseTransferIsSalvageable($transport, false, $primedCursor, 9),
+            'non-SSE responses have no salvage path even when the cursor looks ready'
+        );
+    }
+
+    /**
+     * @param array{lastEventId: ?string, lastRetryMs: ?int, gotResponseForRequest: bool} $cursor
+     */
+    private function invokeSseTransferIsSalvageable(
+        StreamableHttpTransport $transport,
+        bool $sseActive,
+        array $cursor,
+        int|string|null $outboundRequestId
+    ): bool {
+        $method = new ReflectionMethod($transport, 'sseTransferIsSalvageable');
+        $method->setAccessible(true);
+        /** @var bool $result */
+        $result = $method->invoke($transport, $sseActive, $cursor, $outboundRequestId);
+        return $result;
+    }
+
+    /**
      * Build an anonymous subclass of StreamableHttpTransport that replaces
      * performReconnectGet() with a scripted stub, so the loop logic can be
      * tested without real HTTP I/O.
