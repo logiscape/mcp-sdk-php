@@ -8,7 +8,9 @@ use PHPUnit\Framework\TestCase;
 use Mcp\Client\Transport\HttpConfiguration;
 use Mcp\Client\Transport\StreamableHttpTransport;
 use Mcp\Types\JsonRpcMessage;
+use Mcp\Types\JSONRPCNotification;
 use Mcp\Types\JSONRPCRequest;
+use Mcp\Types\JSONRPCResponse;
 use Mcp\Types\RequestId;
 use ReflectionMethod;
 
@@ -96,6 +98,258 @@ final class StreamableHttpTransportSseTest extends TestCase
         $this->assertSame('event-a', $result['lastEventId']);
         $this->assertNull($result['lastRetryMs']);
         $this->assertFalse($result['gotResponseForRequest']);
+    }
+
+    /**
+     * Per the MCP Streamable HTTP spec (revision 2025-11-25), the server MAY
+     * send JSON-RPC notifications interleaved with — and before — the final
+     * response on the POST SSE stream. The transport must surface those
+     * notifications to the read loop, not silently discard them.
+     */
+    public function testProcessSseResponseEnqueuesNotificationBeforeResponse(): void
+    {
+        $transport = new StreamableHttpTransport(
+            config: new HttpConfiguration(endpoint: 'http://localhost/mcp'),
+            autoSse: false
+        );
+        $outbound = $this->buildRequestMessage(11);
+
+        $progress = json_encode([
+            'jsonrpc' => '2.0',
+            'method' => 'notifications/progress',
+            'params' => ['progressToken' => 'tok-1', 'progress' => 0.5],
+        ]);
+        $response = json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 11,
+            'result' => ['ok' => true],
+        ]);
+        $sseBody =
+            "event: message\nid: evt-a\ndata: {$progress}\n\n" .
+            "event: message\nid: evt-b\ndata: {$response}\n\n";
+
+        $result = $this->invokeProcessSseResponse($transport, $sseBody, $outbound);
+
+        $this->assertTrue($result['gotResponseForRequest']);
+
+        $first = $transport->receiveFromHttp();
+        $this->assertNotNull($first);
+        $this->assertInstanceOf(JSONRPCNotification::class, $first->message);
+        $this->assertSame('notifications/progress', $first->message->method);
+
+        $second = $transport->receiveFromHttp();
+        $this->assertNotNull($second);
+        $this->assertInstanceOf(JSONRPCResponse::class, $second->message);
+        $this->assertSame(11, $second->message->id->getValue());
+    }
+
+    /**
+     * The server MAY also send server-initiated requests (e.g.
+     * sampling/createMessage, elicitation/create, ping) on the POST SSE
+     * stream. They must be enqueued as JSONRPCRequest, and they MUST NOT
+     * trigger the in-flight-response signal because they are not the
+     * response to our outbound request.
+     */
+    public function testProcessSseResponseEnqueuesServerInitiatedRequest(): void
+    {
+        $transport = new StreamableHttpTransport(
+            config: new HttpConfiguration(endpoint: 'http://localhost/mcp'),
+            autoSse: false
+        );
+        $outbound = $this->buildRequestMessage(20);
+
+        $serverRequest = json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 'srv-1',
+            'method' => 'sampling/createMessage',
+            'params' => ['messages' => []],
+        ]);
+        $sseBody = "event: message\nid: evt-1\ndata: {$serverRequest}\n\n";
+
+        $result = $this->invokeProcessSseResponse($transport, $sseBody, $outbound);
+
+        $this->assertFalse($result['gotResponseForRequest']);
+        $this->assertSame('evt-1', $result['lastEventId']);
+
+        $msg = $transport->receiveFromHttp();
+        $this->assertNotNull($msg);
+        $this->assertInstanceOf(JSONRPCRequest::class, $msg->message);
+        $this->assertSame('sampling/createMessage', $msg->message->method);
+        $this->assertSame('srv-1', $msg->message->id->getValue());
+    }
+
+    /**
+     * If a server-initiated request happens to carry an id that numerically
+     * matches our outbound request id, the transport must NOT treat it as the
+     * response — otherwise the SEP-1699 reconnect loop would terminate
+     * prematurely and the real response would never be observed.
+     */
+    public function testServerRequestWithCollidingIdDoesNotCountAsResponse(): void
+    {
+        $transport = new StreamableHttpTransport(
+            config: new HttpConfiguration(endpoint: 'http://localhost/mcp'),
+            autoSse: false
+        );
+        $outbound = $this->buildRequestMessage(7);
+
+        // Server sends a request that happens to use id=7 too — same numeric
+        // value as our outbound id, but it is a request (has `method`), not
+        // a response (no `result` / `error`).
+        $serverRequest = json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 7,
+            'method' => 'ping',
+        ]);
+        $sseBody = "event: message\nid: evt-x\ndata: {$serverRequest}\n\n";
+
+        $result = $this->invokeProcessSseResponse($transport, $sseBody, $outbound);
+
+        $this->assertFalse(
+            $result['gotResponseForRequest'],
+            'a server-initiated request with a colliding id must not satisfy the in-flight wait'
+        );
+
+        $msg = $transport->receiveFromHttp();
+        $this->assertNotNull($msg);
+        $this->assertInstanceOf(JSONRPCRequest::class, $msg->message);
+        $this->assertSame('ping', $msg->message->method);
+    }
+
+    /**
+     * When a synchronous message dispatcher is registered, server-initiated
+     * requests parsed off the SSE stream MUST be dispatched immediately
+     * rather than queued for the read loop. Otherwise BaseSession would not
+     * be able to service a sampling/elicitation request that the server is
+     * holding the POST SSE stream open to wait for.
+     */
+    public function testRegisteredDispatcherReceivesServerInitiatedRequestImmediately(): void
+    {
+        $transport = new StreamableHttpTransport(
+            config: new HttpConfiguration(endpoint: 'http://localhost/mcp'),
+            autoSse: false
+        );
+
+        /** @var list<JsonRpcMessage> $dispatched */
+        $dispatched = [];
+        $transport->setMessageDispatcher(static function (JsonRpcMessage $msg) use (&$dispatched): void {
+            $dispatched[] = $msg;
+        });
+
+        $outbound = $this->buildRequestMessage(33);
+        $serverRequest = json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 'srv-9',
+            'method' => 'sampling/createMessage',
+            'params' => ['messages' => []],
+        ]);
+        $sseBody = "event: message\nid: evt-z\ndata: {$serverRequest}\n\n";
+
+        $this->invokeProcessSseResponse($transport, $sseBody, $outbound);
+
+        $this->assertCount(1, $dispatched, 'request must be dispatched, not queued');
+        $this->assertInstanceOf(JSONRPCRequest::class, $dispatched[0]->message);
+        $this->assertSame('sampling/createMessage', $dispatched[0]->message->method);
+        $this->assertNull(
+            $transport->receiveFromHttp(),
+            'dispatched request must not also land in the pending queue'
+        );
+    }
+
+    /**
+     * Notifications follow the same dispatch path as requests when a
+     * dispatcher is registered.
+     */
+    public function testRegisteredDispatcherReceivesNotificationImmediately(): void
+    {
+        $transport = new StreamableHttpTransport(
+            config: new HttpConfiguration(endpoint: 'http://localhost/mcp'),
+            autoSse: false
+        );
+
+        /** @var list<JsonRpcMessage> $dispatched */
+        $dispatched = [];
+        $transport->setMessageDispatcher(static function (JsonRpcMessage $msg) use (&$dispatched): void {
+            $dispatched[] = $msg;
+        });
+
+        $outbound = $this->buildRequestMessage(34);
+        $progress = json_encode([
+            'jsonrpc' => '2.0',
+            'method' => 'notifications/progress',
+            'params' => ['progressToken' => 't', 'progress' => 0.25],
+        ]);
+        $sseBody = "event: message\nid: evt-1\ndata: {$progress}\n\n";
+
+        $this->invokeProcessSseResponse($transport, $sseBody, $outbound);
+
+        $this->assertCount(1, $dispatched);
+        $this->assertInstanceOf(JSONRPCNotification::class, $dispatched[0]->message);
+        $this->assertSame('notifications/progress', $dispatched[0]->message->method);
+        $this->assertNull($transport->receiveFromHttp());
+    }
+
+    /**
+     * Responses to the in-flight request must continue to be queued for the
+     * BaseSession waitForResponse loop to consume — they are not delivered
+     * via the synchronous dispatch path because the response handler is
+     * already wired into the response-id table.
+     */
+    public function testDispatcherIsNotInvokedForResponses(): void
+    {
+        $transport = new StreamableHttpTransport(
+            config: new HttpConfiguration(endpoint: 'http://localhost/mcp'),
+            autoSse: false
+        );
+
+        $dispatched = 0;
+        $transport->setMessageDispatcher(static function (JsonRpcMessage $msg) use (&$dispatched): void {
+            $dispatched++;
+        });
+
+        $outbound = $this->buildRequestMessage(50);
+        $payload = json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 50,
+            'result' => ['ok' => true],
+        ]);
+        $sseBody = "event: message\nid: evt-r\ndata: {$payload}\n\n";
+
+        $this->invokeProcessSseResponse($transport, $sseBody, $outbound);
+
+        $this->assertSame(0, $dispatched, 'responses must NOT be sent through the synchronous dispatcher');
+        $msg = $transport->receiveFromHttp();
+        $this->assertNotNull($msg);
+        $this->assertInstanceOf(JSONRPCResponse::class, $msg->message);
+    }
+
+    /**
+     * If the dispatcher itself throws, the message must fall back to the
+     * pending queue rather than being lost. The error is logged.
+     */
+    public function testDispatcherFailureFallsBackToPendingQueue(): void
+    {
+        $transport = new StreamableHttpTransport(
+            config: new HttpConfiguration(endpoint: 'http://localhost/mcp'),
+            autoSse: false
+        );
+
+        $transport->setMessageDispatcher(static function (JsonRpcMessage $msg): void {
+            throw new \RuntimeException('handler exploded');
+        });
+
+        $outbound = $this->buildRequestMessage(60);
+        $progress = json_encode([
+            'jsonrpc' => '2.0',
+            'method' => 'notifications/progress',
+            'params' => ['progressToken' => 't', 'progress' => 1.0],
+        ]);
+        $sseBody = "event: message\nid: evt-q\ndata: {$progress}\n\n";
+
+        $this->invokeProcessSseResponse($transport, $sseBody, $outbound);
+
+        $msg = $transport->receiveFromHttp();
+        $this->assertNotNull($msg, 'message must not be lost when dispatcher throws');
+        $this->assertInstanceOf(JSONRPCNotification::class, $msg->message);
     }
 
     /**
@@ -300,19 +554,33 @@ final class StreamableHttpTransportSseTest extends TestCase
     }
 
     /**
-     * Invoke the private processSseResponse() via reflection.
+     * Drive the shared SSE chunk consumer with a fully-buffered SSE body, as
+     * if the entire response had landed in one cURL write callback. Returns
+     * the final cursor state so tests can assert on lastEventId / lastRetryMs
+     * / gotResponseForRequest.
      *
-     * @return array{statusCode: int, headers: array<string, string>, body: string, isEventStream: bool, lastRetryMs: ?int, lastEventId: ?string, gotResponseForRequest: bool}
+     * @return array{lastEventId: ?string, lastRetryMs: ?int, gotResponseForRequest: bool}
      */
     private function invokeProcessSseResponse(
         StreamableHttpTransport $transport,
         string $body,
         JsonRpcMessage $outbound
     ): array {
-        $method = new ReflectionMethod($transport, 'processSseResponse');
+        $method = new ReflectionMethod($transport, 'consumeSseChunk');
         $method->setAccessible(true);
-        /** @var array{statusCode: int, headers: array<string, string>, body: string, isEventStream: bool, lastRetryMs: ?int, lastEventId: ?string, gotResponseForRequest: bool} $result */
-        $result = $method->invoke($transport, $body, [], 200, $outbound);
-        return $result;
+        $extract = new ReflectionMethod($transport, 'extractOutboundRequestId');
+        $extract->setAccessible(true);
+        $outboundRequestId = $extract->invoke($transport, $outbound);
+
+        $buffer = '';
+        $cursor = [
+            'lastEventId' => null,
+            'lastRetryMs' => null,
+            'gotResponseForRequest' => false,
+        ];
+        $args = [$body, &$buffer, &$cursor, $outboundRequestId];
+        $method->invokeArgs($transport, $args);
+
+        return $cursor;
     }
 }

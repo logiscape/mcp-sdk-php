@@ -39,6 +39,7 @@ use Mcp\Client\Transport\HttpSessionManager;
 use Mcp\Client\ClientSession;
 use Mcp\Shared\MemoryStream;
 use Mcp\Types\InitializeResult;
+use Mcp\Types\JsonRpcMessage;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use RuntimeException;
@@ -156,6 +157,22 @@ class Client {
                 readTimeout: $readTimeout,
                 logger: $this->logger
             );
+
+            // Wire the HTTP transport to dispatch server-initiated requests
+            // and notifications through the session synchronously, so that a
+            // server interleaving sampling/createMessage or
+            // elicitation/create on a POST SSE response stream can be
+            // serviced before the server's own response arrives. Must be
+            // set BEFORE initialize() so any handshake-time interleaving is
+            // also handled.
+            if ($this->transport instanceof StreamableHttpTransport) {
+                $session = $this->session;
+                $this->transport->setMessageDispatcher(
+                    static function (JsonRpcMessage $msg) use ($session): void {
+                        $session->dispatchIncomingMessage($msg);
+                    }
+                );
+            }
 
             // Initialize the session (e.g., perform handshake if necessary)
             $this->session->initialize();
@@ -275,6 +292,15 @@ class Client {
                 nextRequestId: $nextRequestId,
                 readTimeout: $httpOptions['readTimeout'] ?? null,
                 logger: $this->logger
+            );
+
+            // Wire dispatch path so interleaved server-initiated messages on
+            // subsequent POST SSE responses are serviced synchronously.
+            $session = $this->session;
+            $transport->setMessageDispatcher(
+                static function (JsonRpcMessage $msg) use ($session): void {
+                    $session->dispatchIncomingMessage($msg);
+                }
             );
 
             $this->logger->info('HTTP session resumed successfully', [

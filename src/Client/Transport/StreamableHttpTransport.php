@@ -35,10 +35,15 @@ use Mcp\Client\Auth\Token\TokenSet;
 use Mcp\Client\Transport\HttpAuthenticationException;
 use Mcp\Shared\MemoryStream;
 use Mcp\Types\JsonRpcMessage;
+use Mcp\Types\JSONRPCRequest;
+use Mcp\Types\JSONRPCNotification;
 use Mcp\Types\JSONRPCResponse;
 use Mcp\Types\JSONRPCError;
 use Mcp\Types\JsonRpcErrorObject;
+use Mcp\Types\Meta;
+use Mcp\Types\NotificationParams;
 use Mcp\Types\RequestId;
+use Mcp\Types\RequestParams;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use RuntimeException;
@@ -87,6 +92,22 @@ class StreamableHttpTransport
      * @var array<int, JsonRpcMessage>
      */
     private array $pendingMessages = [];
+
+    /**
+     * Optional callback used to dispatch server-initiated requests and
+     * notifications synchronously while the transport is still inside a
+     * blocking send / SSE read. Without this, a server that interleaves a
+     * sampling/createMessage or elicitation/create request on a POST SSE
+     * response stream — and waits for the client's response before sending
+     * its own — would deadlock the client's BaseSession read loop.
+     *
+     * Set by Client::connect() / resumeHttpSession() to point at the
+     * session's dispatchIncomingMessage(). When unset, the transport falls
+     * back to enqueuing all messages for the read loop to drain later.
+     *
+     * @var \Closure|null Closure(JsonRpcMessage): void
+     */
+    private ?\Closure $messageDispatcher = null;
 
     /**
      * OAuth client for protected resources
@@ -295,15 +316,32 @@ class StreamableHttpTransport
         curl_setopt($ch, CURLOPT_POST, true);
         curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
 
-        // Set up response capture
+        // Stream-parse SSE responses inside the cURL write callback so that
+        // server-initiated requests/notifications interleaved on the POST SSE
+        // stream are dispatched to the session synchronously *while* cURL is
+        // still receiving the rest of the stream. Without this, a server
+        // that sends `sampling/createMessage` (or similar) and waits for the
+        // client's response before producing its own response will deadlock
+        // until the cURL read timeout fires.
+        // $responseBody captures the body for non-SSE (application/json)
+        // responses. For SSE responses, $sseRawBody captures the full raw
+        // stream for callers that read it from the public return shape;
+        // $sseBuffer is the parser's internal partial-event buffer (mutated
+        // by parseStreaming) and is NOT suitable for return because it
+        // ends up empty after every complete event is consumed.
         $responseBody = '';
-        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function ($ch, $data) use (&$responseBody) {
-            $responseBody .= $data;
-            return strlen($data);
-        });
+        $sseRawBody = '';
+        $sseBuffer = '';
+        $sseActive = false;
+        $sseCursor = [
+            'lastEventId' => null,
+            'lastRetryMs' => null,
+            'gotResponseForRequest' => false,
+        ];
+        $outboundRequestId = $this->extractOutboundRequestId($message);
 
         $responseHeaders = [];
-        curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($ch, $header) use (&$responseHeaders) {
+        curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($ch, $header) use (&$responseHeaders, &$sseActive) {
             $length = strlen($header);
 
             // Parse header line
@@ -312,10 +350,34 @@ class StreamableHttpTransport
                 $name = trim(strtolower($parts[0]));
                 $value = trim($parts[1]);
                 $responseHeaders[$name] = $value;
+                if ($name === 'content-type' && strpos($value, 'text/event-stream') !== false) {
+                    $sseActive = true;
+                }
             }
 
             return $length;
         });
+
+        curl_setopt(
+            $ch,
+            CURLOPT_WRITEFUNCTION,
+            function ($ch, $data) use (
+                &$responseBody,
+                &$sseRawBody,
+                &$sseBuffer,
+                &$sseActive,
+                &$sseCursor,
+                $outboundRequestId
+            ) {
+                if (!$sseActive) {
+                    $responseBody .= $data;
+                    return strlen($data);
+                }
+                $sseRawBody .= $data;
+                $this->consumeSseChunk($data, $sseBuffer, $sseCursor, $outboundRequestId);
+                return strlen($data);
+            }
+        );
 
         // Execute the request
         $result = curl_exec($ch);
@@ -410,10 +472,22 @@ class StreamableHttpTransport
         // Check if we should process the response differently based on content-type
         $contentType = $responseHeaders['content-type'] ?? '';
 
-        // Process SSE response if that's what we got
-        if (strpos($contentType, 'text/event-stream') !== false) {
+        // Process SSE response if that's what we got. Events have already been
+        // stream-parsed and dispatched (or queued) inside the cURL
+        // WRITEFUNCTION above — here we just (1) reconcile session headers
+        // and (2) decide whether the SEP-1699 reconnect loop is needed.
+        if ($sseActive) {
             $this->logger->info('Received SSE response to JSON-RPC message');
-            $sseResult = $this->processSseResponse($responseBody, $responseHeaders, $statusCode, $message);
+
+            $isInitialization = $this->isInitializationMessage($message);
+            $sessionValid = $this->sessionManager->processResponseHeaders(
+                $responseHeaders,
+                $statusCode,
+                $isInitialization
+            );
+            if (!$sessionValid) {
+                $this->logger->warning('Session invalidated during SSE response');
+            }
 
             // If the POST SSE stream closed gracefully before the server sent
             // the JSON-RPC response for our request, resume via GET with
@@ -421,24 +495,23 @@ class StreamableHttpTransport
             // is not required to — the event id is the signal that the stream
             // is resumable, and the default retry interval from configuration
             // is used when `retry` is absent.
-            $outboundRequestId = $this->extractOutboundRequestId($message);
             if (
                 $outboundRequestId !== null
-                && $sseResult['gotResponseForRequest'] === false
-                && $sseResult['lastEventId'] !== null
+                && $sseCursor['gotResponseForRequest'] === false
+                && $sseCursor['lastEventId'] !== null
             ) {
-                $retryMs = $sseResult['lastRetryMs'];
+                $retryMs = $sseCursor['lastRetryMs'];
                 return $this->awaitResponseViaReconnect(
                     $outboundRequestId,
                     $retryMs === null ? null : (int) $retryMs,
-                    (string) $sseResult['lastEventId']
+                    (string) $sseCursor['lastEventId']
                 );
             }
 
             return [
-                'statusCode' => $sseResult['statusCode'],
-                'headers' => $sseResult['headers'],
-                'body' => $sseResult['body'],
+                'statusCode' => $statusCode,
+                'headers' => $responseHeaders,
+                'body' => $sseRawBody,
                 'isEventStream' => true,
             ];
         }
@@ -502,79 +575,42 @@ class StreamableHttpTransport
     }
 
     /**
-     * Process an SSE response to a JSON-RPC message.
+     * Append a chunk of raw SSE data to the streaming buffer, parse out any
+     * complete events (per the WHATWG SSE framing), update the cursor state
+     * (last id / retry / response-arrived flag), and enqueue or dispatch the
+     * JSON-RPC payloads carried in `data:` fields. Shared between the POST
+     * SSE write callback and the reconnect GET write callback.
      *
-     * Parses every event in the response body (honoring id / event / data /
-     * retry fields per the WHATWG SSE spec), enqueues any JSON-RPC messages
-     * encoded in data payloads, and reports back whether the in-flight
-     * request's response was among them so the caller can decide whether a
-     * SEP-1699 post-close reconnect is required.
+     * Per the MCP spec, the SSE event id is only meaningful for resumption
+     * of THIS specific stream — never write it into the shared session
+     * manager, since that would emit Last-Event-ID on unrelated POSTs and
+     * DELETEs and trick a compliant server into replaying messages on the
+     * wrong stream.
      *
-     * @param string $initialBody Full body of the POST SSE response
-     * @param array<string, string> $headers HTTP response headers
-     * @param int $statusCode HTTP status code
-     * @param JsonRpcMessage $outboundMessage The message we just POSTed
-     * @return array{
-     *     statusCode: int,
-     *     headers: array<string, string>,
-     *     body: string,
-     *     isEventStream: bool,
-     *     lastRetryMs: ?int,
-     *     lastEventId: ?string,
-     *     gotResponseForRequest: bool
-     * }
+     * @param array{lastEventId: ?string, lastRetryMs: ?int, gotResponseForRequest: bool} $cursor
+     * @param-out array{lastEventId: ?string, lastRetryMs: ?int, gotResponseForRequest: bool} $cursor
      */
-    private function processSseResponse(
-        string $initialBody,
-        array $headers,
-        int $statusCode,
-        JsonRpcMessage $outboundMessage
-    ): array {
-        $isInitialization = $this->isInitializationMessage($outboundMessage);
-        $sessionValid = $this->sessionManager->processResponseHeaders($headers, $statusCode, $isInitialization);
-        if (!$sessionValid) {
-            $this->logger->warning('Session invalidated during SSE response');
-        }
-
-        $outboundRequestId = $this->extractOutboundRequestId($outboundMessage);
-
-        $lastRetryMs = null;
-        $lastEventId = null;
-        $gotResponseForRequest = false;
-
-        // Track the SSE event cursor locally rather than writing it into the
-        // shared session manager. Per the MCP spec, Last-Event-ID is only
-        // meaningful on a resumption GET for the stream that was disconnected
-        // — carrying it on unrelated POSTs / DELETEs could trick a server
-        // into replay behavior for a stream that isn't being resumed.
-        foreach (SseEventParser::parse($initialBody) as $event) {
+    protected function consumeSseChunk(
+        string $data,
+        string &$buffer,
+        array &$cursor,
+        int|string|null $outboundRequestId
+    ): void {
+        $buffer .= $data;
+        foreach (SseEventParser::parseStreaming($buffer) as $event) {
             if ($event['id'] !== null) {
-                $lastEventId = $event['id'];
+                $cursor['lastEventId'] = $event['id'];
             }
             if ($event['retry'] !== null) {
-                $lastRetryMs = $event['retry'];
+                $cursor['lastRetryMs'] = $event['retry'];
             }
-            if ($event['data'] === '') {
-                continue;
-            }
-            if ($event['event'] !== 'message') {
-                // Non-message event types (e.g. custom) are not JSON-RPC carriers.
+            if ($event['data'] === '' || $event['event'] !== 'message') {
                 continue;
             }
             if ($this->enqueueSseDataPayload($event['data'], $outboundRequestId)) {
-                $gotResponseForRequest = true;
+                $cursor['gotResponseForRequest'] = true;
             }
         }
-
-        return [
-            'statusCode' => $statusCode,
-            'headers' => $headers,
-            'body' => $initialBody,
-            'isEventStream' => true,
-            'lastRetryMs' => $lastRetryMs,
-            'lastEventId' => $lastEventId,
-            'gotResponseForRequest' => $gotResponseForRequest,
-        ];
     }
 
     /**
@@ -598,7 +634,18 @@ class StreamableHttpTransport
             if (!$this->enqueueJsonRpcPayload($item)) {
                 continue;
             }
-            if ($outboundRequestId !== null && isset($item['id']) && $this->idsEqual($item['id'], $outboundRequestId)) {
+            // Only count as the in-flight response when the payload is
+            // actually response-shaped. A server-initiated request can carry
+            // an `id` whose value happens to collide with our outbound
+            // counter; we must not let that short-circuit the SEP-1699
+            // reconnect loop.
+            $isResponseShaped = array_key_exists('result', $item) || isset($item['error']);
+            if (
+                $isResponseShaped
+                && $outboundRequestId !== null
+                && isset($item['id'])
+                && $this->idsEqual($item['id'], $outboundRequestId)
+            ) {
                 $matched = true;
             }
         }
@@ -606,24 +653,33 @@ class StreamableHttpTransport
     }
 
     /**
-     * Enqueue a single decoded JSON-RPC payload (response or error) into the
-     * pending queue. Returns true if a message was enqueued, false if the
-     * payload was not a recognizable JSON-RPC response.
+     * Enqueue a single decoded JSON-RPC payload into the pending queue.
+     *
+     * Per the MCP Streamable HTTP transport spec (revision 2025-11-25), a
+     * server MAY interleave JSON-RPC requests and notifications on the POST
+     * SSE response stream before delivering the response, and on the GET SSE
+     * stream (including resumption GETs). All four message types must be
+     * surfaced to the read loop so BaseSession can dispatch them — dropping
+     * notifications/requests would silently lose progress, logging,
+     * sampling, elicitation, ping, and roots/list traffic.
+     *
+     * Returns true if a message was enqueued, false if the payload was not a
+     * recognizable JSON-RPC message.
      *
      * @param array<mixed, mixed> $item
      */
     private function enqueueJsonRpcPayload(array $item): bool
     {
-        if (!isset($item['jsonrpc'], $item['id'])) {
+        if (!isset($item['jsonrpc']) || $item['jsonrpc'] !== '2.0') {
             return false;
         }
 
-        // Success response
-        if (array_key_exists('result', $item)) {
-            $idObj = new RequestId($item['id']);
+        // Success response: jsonrpc + id + result (id may be null per JSON-RPC,
+        // but a response always carries the `result` key).
+        if (array_key_exists('result', $item) && isset($item['id'])) {
             $inner = new JSONRPCResponse(
-                jsonrpc: $item['jsonrpc'],
-                id: $idObj,
+                jsonrpc: '2.0',
+                id: new RequestId($item['id']),
                 result: $item['result']
             );
             $this->pendingMessages[] = new JsonRpcMessage($inner);
@@ -631,7 +687,7 @@ class StreamableHttpTransport
         }
 
         // Error response
-        if (isset($item['error']) && is_array($item['error'])) {
+        if (isset($item['error'], $item['id']) && is_array($item['error'])) {
             $err = $item['error'];
             if (!isset($err['code']) || !isset($err['message'])) {
                 return false;
@@ -639,10 +695,9 @@ class StreamableHttpTransport
             $errorCode = is_numeric($err['code']) ? (int) $err['code'] : 0;
             $errorMessage = is_string($err['message']) ? $err['message'] : 'Unknown error';
             $errorData = $err['data'] ?? null;
-            $idObj = new RequestId($item['id']);
             $inner = new JSONRPCError(
-                jsonrpc: $item['jsonrpc'],
-                id: $idObj,
+                jsonrpc: '2.0',
+                id: new RequestId($item['id']),
                 error: new JsonRpcErrorObject(
                     code: $errorCode,
                     message: $errorMessage,
@@ -653,7 +708,130 @@ class StreamableHttpTransport
             return true;
         }
 
+        // Server-initiated request: jsonrpc + method + id (no result/error)
+        if (isset($item['method'], $item['id']) && is_string($item['method'])) {
+            $params = null;
+            if (isset($item['params']) && is_array($item['params'])) {
+                $params = $this->parseRequestParams($item['params']);
+            } elseif (isset($item['params'])) {
+                $params = $item['params'];
+            }
+            $inner = new JSONRPCRequest(
+                jsonrpc: '2.0',
+                id: new RequestId($item['id']),
+                params: $params,
+                method: $item['method']
+            );
+            $this->deliverServerInitiatedMessage(new JsonRpcMessage($inner));
+            return true;
+        }
+
+        // Notification: jsonrpc + method, no id
+        if (isset($item['method']) && is_string($item['method']) && !isset($item['id'])) {
+            $params = null;
+            if (isset($item['params']) && is_array($item['params'])) {
+                $params = $this->parseNotificationParams($item['params']);
+            } elseif (isset($item['params'])) {
+                $params = $item['params'];
+            }
+            $inner = new JSONRPCNotification(
+                jsonrpc: '2.0',
+                method: $item['method'],
+                params: $params
+            );
+            $this->deliverServerInitiatedMessage(new JsonRpcMessage($inner));
+            return true;
+        }
+
         return false;
+    }
+
+    /**
+     * Deliver a server-initiated request or notification. Dispatched
+     * synchronously through the registered messageDispatcher when one is
+     * set so the session can service the message *while* the outer cURL
+     * transfer is still in flight; this prevents the deadlock where a
+     * server holds the POST SSE stream open waiting for the client's
+     * response to a sampling/elicitation/ping request.
+     *
+     * Falls back to the pending-message queue when no dispatcher is
+     * registered (e.g. transport used outside of a Client wiring).
+     */
+    private function deliverServerInitiatedMessage(JsonRpcMessage $message): void
+    {
+        if ($this->messageDispatcher !== null) {
+            try {
+                ($this->messageDispatcher)($message);
+                return;
+            } catch (\Throwable $e) {
+                // A failed dispatch must not derail the SSE read loop. Log
+                // and queue so the message is not silently lost — the read
+                // loop can still surface it later if the session recovers.
+                $this->logger->error(
+                    'Synchronous dispatch of server-initiated message failed; '
+                    . 'falling back to pending queue: ' . $e->getMessage()
+                );
+            }
+        }
+        $this->pendingMessages[] = $message;
+    }
+
+    /**
+     * Build a typed RequestParams from the raw `params` map, extracting any
+     * `_meta` block. Mirrors SseConnection::parseRequestParams() so messages
+     * arriving on the POST SSE / reconnect GET path are structurally
+     * identical to those from the long-lived GET stream.
+     *
+     * @param array<string, mixed> $params
+     */
+    private function parseRequestParams(array $params): RequestParams
+    {
+        $meta = isset($params['_meta']) && is_array($params['_meta'])
+            ? $this->metaFromArray($params['_meta'])
+            : null;
+
+        $requestParams = new RequestParams($meta);
+        foreach ($params as $key => $value) {
+            if ($key !== '_meta') {
+                $requestParams->$key = $value;
+            }
+        }
+
+        return $requestParams;
+    }
+
+    /**
+     * Build a typed NotificationParams from the raw `params` map. Mirrors
+     * SseConnection::parseNotificationParams().
+     *
+     * @param array<string, mixed> $params
+     */
+    private function parseNotificationParams(array $params): NotificationParams
+    {
+        $meta = isset($params['_meta']) && is_array($params['_meta'])
+            ? $this->metaFromArray($params['_meta'])
+            : null;
+
+        $notificationParams = new NotificationParams($meta);
+        foreach ($params as $key => $value) {
+            if ($key !== '_meta') {
+                $notificationParams->$key = $value;
+            }
+        }
+
+        return $notificationParams;
+    }
+
+    /**
+     * @param array<string, mixed> $metaArr
+     */
+    private function metaFromArray(array $metaArr): Meta
+    {
+        $meta = new Meta();
+        foreach ($metaArr as $key => $value) {
+            $meta->$key = $value;
+        }
+        return $meta;
     }
 
     /**
@@ -837,32 +1015,20 @@ class StreamableHttpTransport
         });
 
         $buffer = '';
-        $latestRetryMs = null;
-        $latestCursor = null;
-        $foundFlag = false;
+        $cursor = [
+            'lastEventId' => null,
+            'lastRetryMs' => null,
+            'gotResponseForRequest' => false,
+        ];
         curl_setopt(
             $ch,
             CURLOPT_WRITEFUNCTION,
-            function ($ch, $data) use (&$buffer, &$latestRetryMs, &$latestCursor, &$foundFlag, $requestId) {
-                $buffer .= $data;
-                foreach (SseEventParser::parseStreaming($buffer) as $event) {
-                    if ($event['id'] !== null) {
-                        $latestCursor = $event['id'];
-                    }
-                    if ($event['retry'] !== null) {
-                        $latestRetryMs = $event['retry'];
-                    }
-                    if ($event['data'] === '' || $event['event'] !== 'message') {
-                        continue;
-                    }
-                    if ($this->enqueueSseDataPayload($event['data'], $requestId)) {
-                        $foundFlag = true;
-                    }
-                }
-                if ($foundFlag) {
+            function ($ch, $data) use (&$buffer, &$cursor, $requestId) {
+                $this->consumeSseChunk($data, $buffer, $cursor, $requestId);
+                if ($cursor['gotResponseForRequest']) {
                     // Short-write signals curl to abort. The calling code
-                    // treats CURLE_WRITE_ERROR (23) as success when $foundFlag
-                    // is set.
+                    // treats CURLE_WRITE_ERROR (23) as success when
+                    // gotResponseForRequest is true.
                     return 0;
                 }
                 return strlen($data);
@@ -875,7 +1041,7 @@ class StreamableHttpTransport
         $curlError = curl_error($ch);
         curl_close($ch);
 
-        if (!$foundFlag && $result === false && $errno !== 0 && $errno !== CURLE_OPERATION_TIMEDOUT) {
+        if (!$cursor['gotResponseForRequest'] && $result === false && $errno !== 0 && $errno !== CURLE_OPERATION_TIMEDOUT) {
             throw new RuntimeException("SSE reconnect GET failed: ({$errno}) {$curlError}");
         }
 
@@ -883,7 +1049,7 @@ class StreamableHttpTransport
             throw new RuntimeException("SSE reconnect GET returned HTTP {$statusCode}");
         }
 
-        if ($foundFlag) {
+        if ($cursor['gotResponseForRequest']) {
             return [
                 [
                     'statusCode' => $statusCode ?: 200,
@@ -891,12 +1057,12 @@ class StreamableHttpTransport
                     'body' => '',
                     'isEventStream' => true,
                 ],
-                $latestRetryMs,
-                $latestCursor,
+                $cursor['lastRetryMs'],
+                $cursor['lastEventId'],
             ];
         }
 
-        return [null, $latestRetryMs, $latestCursor];
+        return [null, $cursor['lastRetryMs'], $cursor['lastEventId']];
     }
 
     /**
@@ -1184,6 +1350,25 @@ class StreamableHttpTransport
     public function getOAuthClient(): ?OAuthClientInterface
     {
         return $this->oauthClient;
+    }
+
+    /**
+     * Register a synchronous dispatcher for server-initiated requests and
+     * notifications received on POST SSE / reconnect GET streams.
+     *
+     * The dispatcher is invoked from inside the cURL WRITEFUNCTION as soon
+     * as a server→client request or notification is parsed off the stream,
+     * so the session's request/notification handlers can run while the
+     * outer cURL transfer is still in progress. This is what allows a
+     * server-initiated `sampling/createMessage` or `elicitation/create`
+     * interleaved on the POST response stream to be serviced before the
+     * server's own response arrives.
+     *
+     * Pass null to clear (e.g. on session teardown).
+     */
+    public function setMessageDispatcher(?\Closure $dispatcher): void
+    {
+        $this->messageDispatcher = $dispatcher;
     }
 
     /**

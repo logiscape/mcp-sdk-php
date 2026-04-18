@@ -333,6 +333,28 @@ abstract class BaseSession {
     }
 
     /**
+     * Public entry point for dispatching an incoming JSON-RPC message into
+     * the session's request / notification / response handlers.
+     *
+     * Transports use this to service messages that arrive synchronously
+     * inside a blocking send (e.g. a server-initiated `sampling/createMessage`
+     * interleaved on a POST SSE response stream that the server is holding
+     * open while it waits for the client's response). Without an out-of-band
+     * dispatch path, BaseSession's normal read loop would not run until the
+     * outer send returns, and the two sides would deadlock.
+     *
+     * Dispatched handlers run on the current call stack; if a request
+     * handler issues a follow-up `sendResponse` / `sendRequest`, the
+     * resulting writeMessage call re-enters the transport with an
+     * independent HTTP request, which is safe.
+     *
+     * @param JsonRpcMessage $message The incoming message.
+     */
+    public function dispatchIncomingMessage(JsonRpcMessage $message): void {
+        $this->handleIncomingMessage($message);
+    }
+
+    /**
      * Handles an incoming message. Called by the subclass that implements message processing.
      * @param JsonRpcMessage $message The incoming message.
      */
