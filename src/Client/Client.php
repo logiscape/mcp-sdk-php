@@ -63,6 +63,12 @@ class Client {
     /** @var LoggerInterface */
     private LoggerInterface $logger;
 
+    /** @var callable|null Pending elicitation handler to register before initialize(). */
+    private $pendingElicitationHandler = null;
+
+    /** @var bool Whether the pending elicitation handler opted into applyDefaults. */
+    private bool $pendingElicitationApplyDefaults = false;
+
     /**
      * Client constructor.
      *
@@ -70,6 +76,24 @@ class Client {
      */
     public function __construct(?LoggerInterface $logger = null) {
         $this->logger = $logger ?? new NullLogger();
+    }
+
+    /**
+     * Register a handler for server-initiated `elicitation/create` requests.
+     *
+     * Must be called before {@see connect()} so the elicitation capability
+     * (and optional `applyDefaults` flag, per SEP-1034) is advertised in the
+     * initialization handshake. The handler is applied to the session that
+     * connect() creates.
+     *
+     * @param callable(\Mcp\Types\ElicitationCreateRequest): \Mcp\Types\ElicitationCreateResult $handler
+     */
+    public function onElicit(callable $handler, bool $applyDefaults = false): void {
+        if ($this->session !== null) {
+            throw new RuntimeException('onElicit() must be called before connect()');
+        }
+        $this->pendingElicitationHandler = $handler;
+        $this->pendingElicitationApplyDefaults = $applyDefaults;
     }
 
     /**
@@ -171,6 +195,16 @@ class Client {
                     static function (JsonRpcMessage $msg) use ($session): void {
                         $session->dispatchIncomingMessage($msg);
                     }
+                );
+            }
+
+            // Apply any elicitation handler registered via onElicit() before
+            // connect(). Must happen before initialize() so the elicitation
+            // capability is advertised in the handshake.
+            if ($this->pendingElicitationHandler !== null) {
+                $this->session->onElicit(
+                    $this->pendingElicitationHandler,
+                    $this->pendingElicitationApplyDefaults
                 );
             }
 
@@ -302,6 +336,18 @@ class Client {
                     $session->dispatchIncomingMessage($msg);
                 }
             );
+
+            // Apply any elicitation handler registered via onElicit() before
+            // resumeHttpSession(). The original session advertised the
+            // elicitation capability at its handshake, so the server may still
+            // send elicitation/create on the resumed connection; without this,
+            // those requests would arrive with no registered handler.
+            if ($this->pendingElicitationHandler !== null) {
+                $this->session->onElicit(
+                    $this->pendingElicitationHandler,
+                    $this->pendingElicitationApplyDefaults
+                );
+            }
 
             $this->logger->info('HTTP session resumed successfully', [
                 'sessionId' => $sessionManager->getSessionId(),

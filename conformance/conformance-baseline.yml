@@ -41,9 +41,21 @@ server:
     # Same root cause: requires server-to-client elicitation request.
 
 client:
-  # --- Not yet implemented in PHP client SDK ---
+  # --- SDK limitation: no standalone GET SSE stream ---
   - elicitation-sep1034-client-defaults
-    # Requires client-side elicitation request handler support.
+    # SEP-1034 capability + defaults-fill logic is implemented on ClientSession
+    # (see Client::onElicit, ElicitationCapability::applyDefaults) and fully
+    # covered by tests/Client/ClientSessionElicitationTest.php. This specific
+    # conformance test fails at the transport layer: the test server calls
+    # `Server.request({elicitation/create})` without a `relatedRequestId`, so
+    # the TS StreamableHTTPServerTransport routes the request onto the
+    # standalone GET SSE stream. The PHP transport probes for that stream in
+    # connect() *before* initialize (no session id yet → 400) and never re-
+    # opens it, and sendMessage() is single-handle curl_exec() with no way
+    # to pump another stream while it's blocking. Unblocking this test
+    # requires (a) re-opening the standalone GET SSE with the session id
+    # after initialize and (b) pumping it concurrently via curl_multi during
+    # blocking POSTs — a transport-level change that belongs in its own PR.
 
   # --- OAuth: not implemented ---
   - auth/client-credentials-jwt

@@ -30,10 +30,15 @@ declare(strict_types=1);
 namespace Mcp\Client;
 
 use Mcp\Shared\BaseSession;
+use Mcp\Shared\ErrorData;
+use Mcp\Shared\RequestResponder;
 use Mcp\Shared\Version;
 use Mcp\Shared\MemoryStream;
 use Mcp\Types\ClientRequest;
 use Mcp\Types\ClientNotification;
+use Mcp\Types\ElicitationCapability;
+use Mcp\Types\ElicitationCreateRequest;
+use Mcp\Types\ElicitationCreateResult;
 use Mcp\Types\ServerRequest;
 use Mcp\Types\ServerNotification;
 use Mcp\Types\InitializeRequest;
@@ -78,6 +83,9 @@ class ClientSession extends BaseSession {
     /** @var bool */
     private bool $initialized = false;
 
+    /** @var bool True when the session was rehydrated via createRestored() — capabilities were negotiated in a prior PHP request and cannot be re-advertised. */
+    private bool $isRestored = false;
+
     /** @var LoggerInterface */
     private LoggerInterface $logger;
 
@@ -92,6 +100,12 @@ class ClientSession extends BaseSession {
 
     /** @var string|null */
     private ?string $negotiatedProtocolVersion = null;
+
+    /** @var callable|null User-registered elicitation handler (one per session). */
+    private $elicitationHandler = null;
+
+    /** @var bool Whether to auto-fill schema defaults on accept responses. */
+    private bool $elicitationApplyDefaults = false;
 
     /**
      * ClientSession constructor.
@@ -149,6 +163,7 @@ class ClientSession extends BaseSession {
         $session->negotiatedProtocolVersion = $negotiatedProtocolVersion;
         $session->initialized = true;
         $session->isInitialized = true;
+        $session->isRestored = true;
         $session->setNextRequestId($nextRequestId);
         return $session;
     }
@@ -178,9 +193,7 @@ class ClientSession extends BaseSession {
         $initRequest = new InitializeRequest(
             new InitializeRequestParams(
                 protocolVersion: Version::LATEST_PROTOCOL_VERSION,
-                capabilities: new ClientCapabilities(
-                    //roots: new ClientRootsCapability(listChanged: true)
-                ),
+                capabilities: $this->buildClientCapabilities(),
                 clientInfo: new Implementation(
                     name: 'mcp-client',
                     version: '1.0.0'
@@ -253,6 +266,131 @@ class ClientSession extends BaseSession {
             return false;
         }
         return Version::supportsFeature($this->negotiatedProtocolVersion, $feature);
+    }
+
+    /**
+     * Register a handler for server-initiated `elicitation/create` requests.
+     *
+     * For a fresh session, this must be called before {@see initialize()} so
+     * the elicitation capability (and optional `applyDefaults` flag, per
+     * SEP-1034) is advertised in the initialization handshake.
+     *
+     * For a session rehydrated via {@see createRestored()}, registration is
+     * allowed post-init: capabilities were already negotiated in the original
+     * PHP request and cannot be re-advertised, but the server can still send
+     * elicitation/create based on that negotiated state, so the dispatch path
+     * must still be wired up.
+     *
+     * When $applyDefaults is true and the handler returns an `accept` result,
+     * missing fields in the returned content are populated from the schema's
+     * per-property `default` values before the response is sent back.
+     *
+     * @param callable(ElicitationCreateRequest): ElicitationCreateResult $handler
+     */
+    public function onElicit(callable $handler, bool $applyDefaults = false): void {
+        if ($this->initialized && !$this->isRestored) {
+            throw new RuntimeException('onElicit() must be called before initialize()');
+        }
+        if ($this->elicitationHandler !== null) {
+            throw new RuntimeException('Elicitation handler already registered');
+        }
+        $this->elicitationHandler = $handler;
+        $this->elicitationApplyDefaults = $applyDefaults;
+
+        $this->onRequest(function (RequestResponder $responder) use ($applyDefaults): void {
+            $wrapper = $responder->getRequest();
+            if (!($wrapper instanceof ServerRequest)) {
+                return;
+            }
+            $inner = $wrapper->getRequest();
+            if (!($inner instanceof ElicitationCreateRequest)) {
+                return;
+            }
+            try {
+                $result = ($this->elicitationHandler)($inner);
+                if (!($result instanceof ElicitationCreateResult)) {
+                    throw new RuntimeException(
+                        'Elicitation handler must return an ElicitationCreateResult'
+                    );
+                }
+                if ($applyDefaults) {
+                    $result = $this->applyElicitationDefaults($result, $inner->requestedSchema);
+                }
+                $responder->sendResponse($result);
+            } catch (\Throwable $e) {
+                $this->logger->error('Elicitation handler failed: ' . $e->getMessage());
+                $responder->sendResponse(new ErrorData(
+                    code: -32603,
+                    message: 'Elicitation handler failed: ' . $e->getMessage(),
+                ));
+            }
+        });
+    }
+
+    /**
+     * Build the ClientCapabilities advertised at initialization time.
+     *
+     * Advertises elicitation support only when a handler is registered;
+     * the `applyDefaults` flag is included only when the caller opted in.
+     */
+    private function buildClientCapabilities(): ClientCapabilities {
+        $elicitation = null;
+        if ($this->elicitationHandler !== null) {
+            $elicitation = new ElicitationCapability(
+                form: true,
+                applyDefaults: $this->elicitationApplyDefaults ? true : null,
+            );
+        }
+        return new ClientCapabilities(elicitation: $elicitation);
+    }
+
+    /**
+     * Fill missing `content` fields from per-property `default` values in
+     * the request's requestedSchema. Mirrors the reference TypeScript SDK
+     * behavior for SEP-1034: only runs on `accept`, never overwrites, and
+     * swallows errors.
+     *
+     * @param array<string, mixed>|null $requestedSchema
+     */
+    private function applyElicitationDefaults(
+        ElicitationCreateResult $result,
+        ?array $requestedSchema
+    ): ElicitationCreateResult {
+        if ($result->action !== 'accept' || $result->content === null) {
+            return $result;
+        }
+        if (
+            $requestedSchema === null
+            || !isset($requestedSchema['properties'])
+            || !is_array($requestedSchema['properties'])
+        ) {
+            return $result;
+        }
+
+        $content = $result->content;
+        try {
+            foreach ($requestedSchema['properties'] as $key => $propSchema) {
+                if (!is_string($key) || !is_array($propSchema)) {
+                    continue;
+                }
+                if (array_key_exists($key, $content)) {
+                    continue;
+                }
+                if (!array_key_exists('default', $propSchema)) {
+                    continue;
+                }
+                $content[$key] = $propSchema['default'];
+            }
+        } catch (\Throwable $e) {
+            $this->logger->warning('Failed applying elicitation defaults: ' . $e->getMessage());
+            return $result;
+        }
+
+        return new ElicitationCreateResult(
+            action: $result->action,
+            content: $content,
+            _meta: $result->_meta,
+        );
     }
 
     /**

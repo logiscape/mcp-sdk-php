@@ -34,6 +34,8 @@ use Mcp\Client\Auth\OAuthConfiguration;
 use Mcp\Client\Auth\Callback\HeadlessCallbackHandler;
 use Mcp\Client\Auth\Registration\ClientCredentials;
 use Mcp\Client\Auth\Token\MemoryTokenStorage;
+use Mcp\Types\ElicitationCreateRequest;
+use Mcp\Types\ElicitationCreateResult;
 
 /**
  * Redirect URI for conformance tests.
@@ -286,6 +288,38 @@ function scenarioSseRetry(string $serverUrl): void
 }
 
 // ---------------------------------------------------------------------------
+// Scenario: elicitation-sep1034-client-defaults
+//
+// The conformance server calls its test_client_elicitation_defaults tool,
+// which sends an elicitation/create request whose requestedSchema carries a
+// per-property `default` for string, integer, number, enum, and boolean
+// fields (SEP-1034). The client must advertise the elicitation capability
+// with applyDefaults=true, accept with an empty content object, and let the
+// SDK fill the defaults into the response — the server then verifies each
+// default value round-tripped correctly.
+// ---------------------------------------------------------------------------
+
+function scenarioElicitationClientDefaults(string $serverUrl): void
+{
+    $client = new Client();
+    $client->onElicit(
+        static function (ElicitationCreateRequest $request): ElicitationCreateResult {
+            fwrite(STDERR, "Received elicitation/create: {$request->message}\n");
+            return new ElicitationCreateResult(action: 'accept', content: []);
+        },
+        applyDefaults: true
+    );
+    $session = $client->connect($serverUrl);
+
+    $result = $session->callTool('test_client_elicitation_defaults', []);
+    $content = $result->content ?? [];
+    if (empty($content)) {
+        throw new \RuntimeException('test_client_elicitation_defaults returned empty content');
+    }
+    fwrite(STDERR, "test_client_elicitation_defaults returned " . count($content) . " content blocks\n");
+}
+
+// ---------------------------------------------------------------------------
 // Scenario: auth/* - OAuth authorization-code scenarios
 //
 // Matches reference runAuthClient: connect with OAuth, listTools, then
@@ -336,11 +370,7 @@ try {
         'initialize' => scenarioInitialize($serverUrl),
         'tools_call' => scenarioToolsCall($serverUrl),
 
-        // Scenarios not yet implemented — fail explicitly with clear message
-        'elicitation-sep1034-client-defaults' => throw new \RuntimeException(
-            "Scenario 'elicitation-sep1034-client-defaults' requires elicitation request "
-            . "handler support, which is not yet implemented in the PHP client SDK"
-        ),
+        'elicitation-sep1034-client-defaults' => scenarioElicitationClientDefaults($serverUrl),
         'sse-retry' => scenarioSseRetry($serverUrl),
 
         // --- Client credentials grant type (not implemented) ---
