@@ -901,7 +901,7 @@ class HttpServerTransport implements Transport
      *
      * Validation is active when the 'allowed_origins' config option is set to a
      * non-empty array of allowed hostnames (port-agnostic, e.g. ['localhost',
-     * '127.0.0.1', '[::1]']). McpServer auto-enables this for localhost servers.
+     * '127.0.0.1', '::1']). McpServer auto-enables this for localhost servers.
      *
      * @return HttpMessage|null A 403 response on rejection, or null to allow
      */
@@ -927,9 +927,16 @@ class HttpServerTransport implements Transport
         }
 
         // Normalize: strip IPv6 brackets (parse_url returns [::1], normalize to ::1)
+        // and lowercase. Apply the same transform to configured entries so users
+        // can pass '[::1]' or mixed-case hostnames without silent non-match.
         $hostname = strtolower(trim($host, '[]'));
 
-        if (!in_array($hostname, $allowedOrigins, true)) {
+        $allowedNormalized = array_map(
+            static fn ($entry): string => strtolower(trim((string)$entry, '[]')),
+            $allowedOrigins
+        );
+
+        if (!in_array($hostname, $allowedNormalized, true)) {
             return HttpMessage::createJsonResponse(
                 ['jsonrpc' => '2.0', 'error' => ['code' => -32000, 'message' => 'Forbidden: Origin not allowed']],
                 403

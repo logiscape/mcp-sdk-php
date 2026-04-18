@@ -120,6 +120,47 @@ final class HttpServerTransportDnsTest extends TestCase
     }
 
     /**
+     * Allowlist entries that include IPv6 brackets (e.g. '[::1]') must still match
+     * requests with Origin: http://[::1]:port. The request hostname is normalized
+     * by stripping brackets; configured entries must receive the same normalization
+     * so users who follow a bracketed example do not silently reject valid origins.
+     */
+    public function testAllowsBracketedIpv6InAllowlist(): void
+    {
+        $transport = new HttpServerTransport([
+            'allowed_origins' => ['[::1]'],
+        ]);
+
+        $request = $this->createRequest('POST', [
+            'origin' => 'http://[::1]:3000',
+            'content-type' => 'application/json',
+        ], $this->initBody());
+
+        $response = $transport->handleRequest($request);
+        $this->assertNotEquals(403, $response->getStatusCode());
+    }
+
+    /**
+     * Allowlist entries with uppercase or mixed-case hostnames must match requests
+     * whose Origin uses the same hostname in any case. Hostname matching is
+     * case-insensitive per RFC 3986, and the request side is already lowercased.
+     */
+    public function testAllowsUppercaseHostnameInAllowlist(): void
+    {
+        $transport = new HttpServerTransport([
+            'allowed_origins' => ['LOCALHOST'],
+        ]);
+
+        $request = $this->createRequest('POST', [
+            'origin' => 'http://localhost:9999',
+            'content-type' => 'application/json',
+        ], $this->initBody());
+
+        $response = $transport->handleRequest($request);
+        $this->assertNotEquals(403, $response->getStatusCode());
+    }
+
+    /**
      * Requests with no Origin header should pass even when protection is enabled.
      * Non-browser MCP clients typically don't send Origin headers.
      */
