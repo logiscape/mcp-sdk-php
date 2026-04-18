@@ -180,91 +180,119 @@ class StreamableHttpTransport
         $readStream = $this->createReadStream();
         $writeStream = $this->createWriteStream();
 
-        if ($this->autoSse) {
-            // Attempt to establish an SSE connection
-            $this->attemptSseConnection();
-        }
+        // Intentionally no SSE probe here. The MCP Streamable HTTP spec
+        // requires every non-initialize request to carry Mcp-Session-Id, and
+        // the session id only exists after the initialize handshake — so a
+        // pre-init GET SSE probe is guaranteed to be spec-non-compliant and
+        // was producing 400 responses from conformant servers. The post-init
+        // standalone GET stream is opened explicitly by the Client after
+        // initialize() succeeds, via {@see startStandaloneSseStream()}.
 
         return [$readStream, $writeStream];
     }
 
     /**
-     * Attempts to establish an SSE connection for receiving server messages.
+     * Open the standalone GET SSE stream described by the MCP Streamable
+     * HTTP spec: "The client MAY issue an HTTP GET to the MCP endpoint.
+     * This can be used to open an SSE stream, allowing the server to
+     * communicate to the client, without the client first sending data via
+     * HTTP POST." Server-initiated requests and notifications that do not
+     * correlate to any in-flight POST (no relatedRequestId) are delivered
+     * on this stream.
      *
-     * This is an optimization - if successful, we'll have a channel for the server
-     * to send us messages without us having to poll.
+     * Must be called after {@see connect()} and after the initialize
+     * handshake has produced a session id. Safe to call more than once —
+     * subsequent calls after the stream is already open are no-ops.
+     *
+     * The 405 case is handled gracefully: per the spec, the server MAY
+     * return 405 Method Not Allowed to decline the stream, in which case
+     * the client must continue without it. No exception is raised.
+     *
+     * @param string|null $lastEventId Optional SEP-1699 cursor from a
+     *        previous session to send as `Last-Event-ID` on the GET.
+     *        Defaults to the standalone cursor stored in the session
+     *        manager, so a resumed session picks up where it left off.
      */
-    private function attemptSseConnection(): void
+    public function startStandaloneSseStream(?string $lastEventId = null): void
     {
+        if ($this->sseConnection !== null && $this->sseConnection->isActive()) {
+            return;
+        }
+
+        if (!$this->autoSse) {
+            $this->logger->debug('Standalone SSE disabled by configuration');
+            return;
+        }
+
+        // Snapshot the dispatcher now so the SseConnection keeps working
+        // even if the transport's dispatcher reference is later cleared
+        // (e.g. during teardown).
+        $dispatcher = $this->messageDispatcher;
+        if ($dispatcher === null) {
+            $this->logger->warning(
+                'Skipping standalone SSE stream: no message dispatcher set. '
+                . 'Call setMessageDispatcher() before startStandaloneSseStream().'
+            );
+            return;
+        }
+
+        $extraHeaders = [];
+        // Seed from the caller or, failing that, the persisted standalone
+        // cursor. The SseConnection constructor would fall back to the
+        // session manager's standalone cursor on its own, but passing it
+        // explicitly here gives callers a way to inject an alternative
+        // (e.g. testing, manual resume).
+        $cursor = $lastEventId ?? $this->sessionManager->getStandaloneLastEventId();
+        if ($cursor !== null) {
+            $extraHeaders['Last-Event-ID'] = $cursor;
+        }
+
         try {
-            $headers = $this->prepareRequestHeaders([
-                'Accept' => 'text/event-stream'
-            ]);
+            $connection = new SseConnection(
+                config: $this->config,
+                sessionManager: $this->sessionManager,
+                logger: $this->logger,
+                extraHeaders: $extraHeaders,
+                messageDispatcher: $dispatcher,
+                cursorScope: 'standalone'
+            );
+            $connection->start();
+            $this->sseConnection = $connection;
+            $this->logger->info('Standalone GET SSE stream opened');
+        } catch (\Throwable $e) {
+            $this->logger->warning(
+                'Failed to open standalone SSE stream (continuing without it): '
+                . $e->getMessage()
+            );
+            $this->sseConnection = null;
+        }
+    }
 
-            $ch = curl_init($this->config->getEndpoint());
-            if ($ch === false) {
-                throw new RuntimeException('Failed to initialize cURL');
-            }
-
-            $this->configureCurlHandle($ch, $headers);
-            curl_setopt($ch, CURLOPT_HTTPGET, true);
-
-            // Set up write callback - we're going to check headers to see if this is an SSE stream
-            $responseHeaders = [];
-            $headerCallback = function ($ch, $header) use (&$responseHeaders) {
-                $length = strlen($header);
-
-                // Parse header line
-                $parts = explode(':', $header, 2);
-                if (count($parts) == 2) {
-                    $name = trim($parts[0]);
-                    $value = trim($parts[1]);
-                    $responseHeaders[strtolower($name)] = $value;
-                }
-
-                return $length;
-            };
-
-            curl_setopt($ch, CURLOPT_HEADERFUNCTION, $headerCallback);
-
-            // Set a small buffer to check if the server responds with SSE
-            $buffer = '';
-            $writeCallback = function ($ch, $data) use (&$buffer) {
-                $buffer .= $data;
-                // Only capture a little bit to check the response type
-                return strlen($data) > 0 && strlen($buffer) < 256 ? strlen($data) : 0;
-            };
-
-            curl_setopt($ch, CURLOPT_WRITEFUNCTION, $writeCallback);
-
-            // Execute the request
-            $result = curl_exec($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
-
-            // Check if the server supports SSE
-            if ($result !== false && $httpCode === 200) {
-                $contentType = $responseHeaders['content-type'] ?? '';
-                if (strpos($contentType, 'text/event-stream') !== false) {
-                    $this->logger->info('Server supports SSE, will establish streaming connection');
-
-                    // Create an actual SSE connection (reusing the configuration)
-                    $this->sseConnection = new SseConnection(
-                        $this->config,
-                        $this->sessionManager,
-                        $this->logger
-                    );
-
-                    // Start the connection (which runs in a separate thread/process)
-                    $this->sseConnection->start();
-                    return;
-                }
-            }
-
-            // If we get here, SSE is not supported or failed
-            $this->logger->info('Server does not support SSE or returned error, will use polling');
-        } catch (\Exception $e) {
-            $this->logger->warning("Failed to establish SSE connection: {$e->getMessage()}");
+    /**
+     * Drive one non-blocking tick on the standalone SSE stream, delivering
+     * any pending server-initiated messages through the registered
+     * dispatcher. Called from inside blocking POST callbacks so a server
+     * that fires an interleaved elicitation/create / sampling/createMessage
+     * on the standalone stream while holding the POST open can be
+     * serviced without deadlocking the read loop.
+     *
+     * If the stream has been declined (405) or errored out, tear it down
+     * so subsequent POSTs do not keep paying the tick cost.
+     */
+    private function pumpStandaloneSseStream(): void
+    {
+        if ($this->sseConnection === null) {
+            return;
+        }
+        $this->sseConnection->pumpOnce();
+        if ($this->sseConnection->wasDeclinedByServer() || !$this->sseConnection->isActive()) {
+            $this->logger->info(
+                'Standalone SSE stream declined or ended (status='
+                . ($this->sseConnection->getResponseStatus() ?? 'unknown')
+                . '); tearing down'
+            );
+            $this->sseConnection->stop();
+            $this->sseConnection = null;
         }
     }
 
@@ -369,6 +397,13 @@ class StreamableHttpTransport
                 &$sseCursor,
                 $outboundRequestId
             ) {
+                // Opportunistically drain the standalone GET SSE stream on
+                // every POST chunk so server-initiated requests on that
+                // stream (e.g. elicitation/create without relatedRequestId,
+                // per the MCP Streamable HTTP spec) are dispatched while
+                // this POST is still in flight.
+                $this->pumpStandaloneSseStream();
+
                 if (!$sseActive) {
                     $responseBody .= $data;
                     return strlen($data);
@@ -386,6 +421,24 @@ class StreamableHttpTransport
                     return 0;
                 }
                 return strlen($data);
+            }
+        );
+
+        // Pump the standalone stream from the xferinfo progress callback
+        // too. WRITEFUNCTION only fires when the POST itself is receiving
+        // data, but a server that has fired a server-initiated request on
+        // the standalone stream and is waiting for the client's response
+        // before producing the POST's response will keep this POST idle.
+        // libcurl invokes XFERINFOFUNCTION roughly once per second even
+        // when the transfer is idle, giving us a reliable heartbeat to
+        // drain the standalone stream and avoid deadlock.
+        curl_setopt($ch, CURLOPT_NOPROGRESS, false);
+        curl_setopt(
+            $ch,
+            CURLOPT_XFERINFOFUNCTION,
+            function ($ch, $dlTotal, $dlNow, $ulTotal, $ulNow): int {
+                $this->pumpStandaloneSseStream();
+                return 0;
             }
         );
 

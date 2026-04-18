@@ -174,6 +174,59 @@ final class HttpSessionManagerTest extends TestCase
     }
 
     /**
+     * Standalone GET stream cursor is tracked independently from the POST
+     * stream cursor. Both must round-trip through toArray / fromArray so a
+     * resumed session can resume both streams from their correct positions
+     * without aliasing event ids that live in separate server-side
+     * namespaces.
+     */
+    public function testStandaloneCursorRoundTrip(): void
+    {
+        $manager = new HttpSessionManager();
+        $manager->processResponseHeaders(
+            ['mcp-session-id' => 'session-xyz'],
+            200,
+            true
+        );
+        $manager->updateLastEventId('post-evt-3');
+        $manager->updateStandaloneLastEventId('standalone-evt-9');
+
+        $this->assertSame('post-evt-3', $manager->getLastEventId());
+        $this->assertSame('standalone-evt-9', $manager->getStandaloneLastEventId());
+
+        $snapshot = $manager->toArray();
+        $this->assertSame('standalone-evt-9', $snapshot['standaloneLastEventId']);
+        $this->assertSame('post-evt-3', $snapshot['lastEventId']);
+
+        $restored = HttpSessionManager::fromArray($snapshot);
+        $this->assertSame('post-evt-3', $restored->getLastEventId());
+        $this->assertSame('standalone-evt-9', $restored->getStandaloneLastEventId());
+
+        // Neither cursor leaks onto default request headers — both belong
+        // only on an explicit resumption GET for their originating stream.
+        $headers = $restored->getRequestHeaders();
+        $this->assertArrayNotHasKey('Last-Event-ID', $headers);
+    }
+
+    /**
+     * fromArray on a payload that predates the standalone cursor field
+     * (e.g. persisted before this change landed) must default the cursor
+     * to null rather than error, so older persisted sessions continue to
+     * resume cleanly.
+     */
+    public function testFromArrayHandlesMissingStandaloneCursor(): void
+    {
+        $restored = HttpSessionManager::fromArray([
+            'sessionId' => 'legacy-session',
+            'lastEventId' => 'post-evt-1',
+            'initialized' => true,
+            'invalidated' => false,
+        ]);
+
+        $this->assertNull($restored->getStandaloneLastEventId());
+    }
+
+    /**
      * Test that invalidated state is preserved through serialization.
      */
     public function testInvalidatedStatePreserved(): void

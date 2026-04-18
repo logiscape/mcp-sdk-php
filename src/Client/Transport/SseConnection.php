@@ -120,27 +120,104 @@ use Mcp\Types\Meta;
       * Path to the IPC file
       */
      private ?string $ipcPath = null;
-     
+
+     /**
+      * Extra HTTP headers to include on the SSE GET request (e.g.
+      * Mcp-Session-Id, MCP-Protocol-Version). Merged *after* the default
+      * header bag so callers can override Accept or other defaults if
+      * absolutely necessary.
+      *
+      * @var array<string, string>
+      */
+     private array $extraHeaders = [];
+
+     /**
+      * Optional synchronous dispatcher for parsed JsonRpcMessages.
+      *
+      * When set, messages arriving on this connection are handed directly
+      * to the dispatcher instead of being enqueued in {@see $messageQueue}.
+      * This is how the standalone GET SSE stream delivers server-initiated
+      * requests/notifications into the session without waiting for the
+      * next readStream drain — critical for interleaved request/response
+      * patterns (e.g. a server-initiated elicitation/create fired while a
+      * client POST is in flight).
+      *
+      * Only applied in foreground mode (dispatcher lives in the parent
+      * process). The forked child in background mode continues to queue
+      * and serialize over IPC; the parent's pumpOnce() reads the IPC and
+      * dispatches from there.
+      *
+      * @var \Closure|null Closure(JsonRpcMessage): void
+      */
+     private ?\Closure $messageDispatcher = null;
+
+     /**
+      * Cursor-update strategy for incoming event ids.
+      *
+      * - 'post'  — update the POST-stream cursor on the shared session
+      *             manager (legacy behaviour for pre-init probe).
+      * - 'standalone' — update the standalone-GET cursor only. Used by the
+      *             post-init standalone stream so the POST cursor does not
+      *             collide with the standalone one; the two streams have
+      *             independent event-id namespaces per the MCP spec.
+      */
+     private string $cursorScope = 'post';
+
+     /**
+      * Whether the server returned a non-SSE response (e.g. 405 Method Not
+      * Allowed). When true, the stream is permanently unavailable — callers
+      * should stop attempting to use it and fall back to per-request SSE
+      * only.
+      */
+     private bool $serverDeclinedStream = false;
+
+     /**
+      * HTTP status captured from the GET response headers. Used for 405 /
+      * 2xx discrimination in foreground mode.
+      */
+     private ?int $responseStatus = null;
+
+     /**
+      * Content-Type captured from the GET response headers. Only an
+      * `text/event-stream` response is treated as a live SSE stream.
+      */
+     private ?string $responseContentType = null;
+
      /**
       * Creates a new SSE connection manager.
       *
       * @param HttpConfiguration $config Configuration for the HTTP connection
       * @param HttpSessionManager $sessionManager Session manager for tracking state
       * @param LoggerInterface|null $logger PSR-3 compatible logger
+      * @param array<string, string> $extraHeaders Additional request headers
+      *        (e.g. Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID) to
+      *        send on the GET. Required for the post-init standalone stream.
+      * @param \Closure|null $messageDispatcher When provided, messages parsed
+      *        in the parent process are dispatched immediately via this
+      *        callable instead of being enqueued. See {@see $messageDispatcher}.
+      * @param string $cursorScope 'post' (default, legacy) or 'standalone'.
       */
      public function __construct(
          HttpConfiguration $config,
          HttpSessionManager $sessionManager,
-         ?LoggerInterface $logger = null
+         ?LoggerInterface $logger = null,
+         array $extraHeaders = [],
+         ?\Closure $messageDispatcher = null,
+         string $cursorScope = 'post'
      ) {
          $this->config = $config;
          $this->sessionManager = $sessionManager;
          $this->logger = $logger ?? new NullLogger();
+         $this->extraHeaders = $extraHeaders;
+         $this->messageDispatcher = $messageDispatcher;
+         $this->cursorScope = $cursorScope === 'standalone' ? 'standalone' : 'post';
          // Seed the connection-local cursor from any restored session state
          // so the first SSE GET can resume via Last-Event-ID. After this
          // point the cursor is tracked locally and is not re-read from the
          // shared session manager.
-         $this->lastEventId = $sessionManager->getLastEventId();
+         $this->lastEventId = $this->cursorScope === 'standalone'
+             ? $sessionManager->getStandaloneLastEventId()
+             : $sessionManager->getLastEventId();
      }
      
      /**
@@ -242,24 +319,141 @@ use Mcp\Types\Meta;
       */
      private function startForegroundConnection(): void {
          $this->logger->info("Starting SSE connection in foreground (no background process available)");
-         
+
          $this->curlHandle = $this->createCurlHandle();
-         
+
          // Configure cURL for non-blocking operation
          curl_setopt($this->curlHandle, CURLOPT_WRITEFUNCTION, function($ch, $data) {
+             // If we've already seen a non-SSE response, short-write so curl
+             // aborts quickly instead of buffering a body we do not care
+             // about (e.g. an HTML 405 body).
+             if ($this->serverDeclinedStream) {
+                 return 0;
+             }
+             // If status/content-type headers have been seen and declined
+             // the stream, mark it and stop consuming.
+             if ($this->responseStatus !== null && !$this->responseStatusIndicatesLiveStream()) {
+                 $this->serverDeclinedStream = true;
+                 return 0;
+             }
              return $this->processSseData($data);
          });
-         
+
          // Start the connection (but don't wait for it to complete)
          $mh = curl_multi_init();
          curl_multi_add_handle($mh, $this->curlHandle);
-         
+
          // Execute once to start the request
          curl_multi_exec($mh, $running);
-         
+
          // Don't remove the handle - we'll use curl_multi_exec in receiveMessage
          $this->multiHandle = $mh;
          $this->active = true;
+     }
+
+     /**
+      * Was the response status + content-type consistent with a live SSE
+      * stream? Anything else (most commonly 405 Method Not Allowed for the
+      * standalone GET) signals the server does not offer the stream and the
+      * caller should stop trying to use it.
+      */
+     private function responseStatusIndicatesLiveStream(): bool
+     {
+         if ($this->responseStatus === null) {
+             // Headers not yet parsed; give the transfer the benefit of the
+             // doubt and let the WRITEFUNCTION decide on the next chunk.
+             return true;
+         }
+         if ($this->responseStatus < 200 || $this->responseStatus >= 300) {
+             return false;
+         }
+         if ($this->responseContentType === null) {
+             return true; // 2xx with no Content-Type — treat as live, parser will decide
+         }
+         return stripos($this->responseContentType, 'text/event-stream') !== false;
+     }
+
+     /**
+      * Drive one tick of I/O on this connection non-blockingly.
+      *
+      * Called by the transport from inside blocking send paths (POST
+      * WRITEFUNCTION / XFERINFOFUNCTION) so server-initiated messages on
+      * the standalone stream are dispatched concurrently with the POST —
+      * the scenario the MCP Streamable HTTP spec exercises when it says
+      * the server MAY send server→client requests on a GET SSE stream
+      * "unrelated to any concurrently-running JSON-RPC request from the
+      * client".
+      *
+      * In foreground mode this runs one curl_multi_exec tick; any parsed
+      * messages are dispatched synchronously inside that call via the
+      * WRITEFUNCTION chain (see {@see processMessageData()}).
+      *
+      * In background mode this drains any complete messages already
+      * serialized to IPC by the forked child and dispatches them.
+      */
+     public function pumpOnce(): void
+     {
+         if (!$this->active) {
+             return;
+         }
+
+         if ($this->serverDeclinedStream) {
+             $this->active = false;
+             return;
+         }
+
+         if ($this->usingBackground) {
+             // Drain all available messages from IPC in one go so we do not
+             // leave server-initiated requests sitting in the pipe while the
+             // outer POST is still blocked. receiveMessageFromBackground()
+             // already returns null when no complete message is ready.
+             while (($msg = $this->receiveMessageFromBackground()) !== null) {
+                 if ($this->messageDispatcher !== null) {
+                     try {
+                         ($this->messageDispatcher)($msg);
+                         continue;
+                     } catch (\Throwable $e) {
+                         $this->logger->error(
+                             'Standalone SSE dispatch failed, falling back to queue: '
+                             . $e->getMessage()
+                         );
+                     }
+                 }
+                 $this->messageQueue[] = $msg;
+             }
+             return;
+         }
+
+         if ($this->multiHandle !== null && $this->curlHandle !== null) {
+             curl_multi_exec($this->multiHandle, $running);
+             // If the transfer completed with a non-SSE status, surface it
+             // so the transport can tear the stream down.
+             $info = curl_multi_info_read($this->multiHandle);
+             if ($info !== false && $info['handle'] === $this->curlHandle) {
+                 if (!$this->responseStatusIndicatesLiveStream()) {
+                     $this->serverDeclinedStream = true;
+                     $this->active = false;
+                 }
+             }
+         }
+     }
+
+     /**
+      * Did the server decline to open a standalone stream? True when the
+      * GET response was something other than 2xx + text/event-stream (most
+      * commonly a 405 Method Not Allowed).
+      */
+     public function wasDeclinedByServer(): bool
+     {
+         return $this->serverDeclinedStream;
+     }
+
+     /**
+      * Return the captured HTTP response status (null until headers arrive).
+      */
+     public function getResponseStatus(): ?int
+     {
+         return $this->responseStatus;
      }
      
      /**
@@ -306,12 +500,34 @@ use Mcp\Types\Meta;
      private function createCurlHandle(): \CurlHandle {
          $endpoint = $this->config->getEndpoint();
          $headers = $this->prepareRequestHeaders();
-         
+
          $ch = curl_init($endpoint);
          if ($ch === false) {
              throw new RuntimeException('Failed to initialize cURL for SSE connection');
          }
-         
+
+         // Capture response status and content-type so the caller can tell a
+         // live SSE stream from a 405 Method Not Allowed / 4xx error. The MCP
+         // spec specifically allows the server to return 405 to decline a
+         // standalone GET stream.
+         curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($ch, $header) {
+             $length = strlen($header);
+             // First "header" line is the status line (e.g. "HTTP/1.1 200 OK").
+             if (preg_match('#^HTTP/[0-9.]+\s+(\d{3})#', $header, $m) === 1) {
+                 $this->responseStatus = (int) $m[1];
+                 return $length;
+             }
+             $parts = explode(':', $header, 2);
+             if (count($parts) === 2) {
+                 $name = strtolower(trim($parts[0]));
+                 $value = trim($parts[1]);
+                 if ($name === 'content-type') {
+                     $this->responseContentType = $value;
+                 }
+             }
+             return $length;
+         });
+
          // Configure the cURL handle for SSE
          curl_setopt($ch, CURLOPT_HTTPGET, true);
          curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -350,26 +566,32 @@ use Mcp\Types\Meta;
      private function prepareRequestHeaders(): array {
          // Start with headers from configuration
          $headers = $this->config->getHeaders();
-         
+
          // Add SSE-specific headers
          $headers['Accept'] = 'text/event-stream';
-         
+
          // Add session headers if available
          if ($this->sessionManager->isInitialized()) {
              $headers = array_merge($headers, $this->sessionManager->getRequestHeaders());
          }
-         
+
          // Add Last-Event-ID if available for reconnection
          if ($this->lastEventId !== null) {
              $headers['Last-Event-ID'] = $this->lastEventId;
          }
-         
+
+         // Merge caller-supplied extras last so they can set Mcp-Session-Id
+         // or MCP-Protocol-Version explicitly at stream-open time (useful when
+         // the shared session manager is not yet marked initialized but the
+         // caller knows the ids from a different context).
+         $headers = array_merge($headers, $this->extraHeaders);
+
          // Convert to cURL format (array of "Name: Value" strings)
          $curlHeaders = [];
          foreach ($headers as $name => $value) {
              $curlHeaders[] = "{$name}: {$value}";
          }
-         
+
          return $curlHeaders;
      }
      
@@ -484,7 +706,11 @@ use Mcp\Types\Meta;
          // toArray()-based session restore.
          if ($event['id'] !== null) {
              $this->lastEventId = $event['id'];
-             $this->sessionManager->updateLastEventId($event['id']);
+             if ($this->cursorScope === 'standalone') {
+                 $this->sessionManager->updateStandaloneLastEventId($event['id']);
+             } else {
+                 $this->sessionManager->updateLastEventId($event['id']);
+             }
          }
          
          // Only process data events
@@ -503,14 +729,41 @@ use Mcp\Types\Meta;
          try {
              // Decode the JSON data
              $jsonData = json_decode($data, true, 512, JSON_THROW_ON_ERROR);
-             
+
              // Convert to JsonRpcMessage
              $message = $this->convertToJsonRpcMessage($jsonData);
-             
+
              if ($message !== null) {
+                 // In foreground mode with a dispatcher, deliver directly to
+                 // the session so server-initiated requests can be serviced
+                 // synchronously (e.g. elicitation/create arriving on the
+                 // standalone stream while a POST is in flight). Without
+                 // dispatch, the message would only be picked up by the
+                 // session's read loop on the next idle tick, which may
+                 // never come if the read loop is blocked on a POST that is
+                 // itself waiting for the server to consume this request's
+                 // response.
+                 //
+                 // In background mode the dispatcher is unset in the forked
+                 // child (it was a closure captured by value in the parent),
+                 // so we always queue-then-serialize here; the parent's
+                 // pumpOnce() drains IPC and dispatches from the parent
+                 // process side.
+                 if (!$isBackground && $this->messageDispatcher !== null) {
+                     try {
+                         ($this->messageDispatcher)($message);
+                         return;
+                     } catch (\Throwable $e) {
+                         $this->logger->error(
+                             'SSE synchronous dispatch failed, falling back to queue: '
+                             . $e->getMessage()
+                         );
+                     }
+                 }
+
                  // Add to the message queue
                  $this->messageQueue[] = $message;
-                 
+
                  if (!$isBackground) {
                      $this->logger->debug('Parsed JsonRpcMessage from SSE event');
                  }

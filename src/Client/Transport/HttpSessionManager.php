@@ -56,9 +56,24 @@
      private ?string $sessionId = null;
      
      /**
-      * The ID of the last SSE event received
+      * The ID of the last SSE event received on a POST response stream.
+      *
+      * Tracked separately from the standalone GET stream cursor because per
+      * the MCP Streamable HTTP spec each stream has its own event-id namespace
+      * and `Last-Event-ID` on a resumption GET must address the specific
+      * stream being resumed. Mixing the two would cause a compliant server
+      * to replay messages on the wrong stream.
       */
      private ?string $lastEventId = null;
+
+     /**
+      * The ID of the last SSE event received on the standalone GET stream
+      * that the client opens after initialization to field server-initiated
+      * requests/notifications with no `relatedRequestId`. Persisted across
+      * session restore so a resumed client can pick up where it left off by
+      * sending `Last-Event-ID` on the re-opened standalone GET.
+      */
+     private ?string $standaloneLastEventId = null;
 
      /**
       * The negotiated protocol version (set after initialization)
@@ -174,6 +189,33 @@
      public function clearLastEventId(): void {
          $this->lastEventId = null;
      }
+
+     /**
+      * Update the standalone-stream last event ID.
+      *
+      * The standalone GET stream (opened after initialization to receive
+      * server-initiated requests with no relatedRequestId) has its own
+      * event-id namespace. Callers must NOT feed POST-stream event ids
+      * here, nor vice-versa.
+      */
+     public function updateStandaloneLastEventId(string $eventId): void {
+         $this->standaloneLastEventId = $eventId;
+         $this->logger->debug("Updated standalone stream last event ID: {$eventId}");
+     }
+
+     /**
+      * Get the last event ID observed on the standalone GET stream.
+      */
+     public function getStandaloneLastEventId(): ?string {
+         return $this->standaloneLastEventId;
+     }
+
+     /**
+      * Clear the standalone-stream last event ID.
+      */
+     public function clearStandaloneLastEventId(): void {
+         $this->standaloneLastEventId = null;
+     }
  
      /**
       * Invalidate the current session.
@@ -267,6 +309,7 @@
      public function reset(): void {
          $this->sessionId = null;
          $this->lastEventId = null;
+         $this->standaloneLastEventId = null;
          $this->protocolVersion = null;
          $this->initialized = false;
          $this->invalidated = false;
@@ -282,6 +325,7 @@
          return [
              'sessionId' => $this->sessionId,
              'lastEventId' => $this->lastEventId,
+             'standaloneLastEventId' => $this->standaloneLastEventId,
              'protocolVersion' => $this->protocolVersion,
              'initialized' => $this->initialized,
              'invalidated' => $this->invalidated,
@@ -299,6 +343,7 @@
          $manager = new self($logger ?? new NullLogger());
          $manager->sessionId = $data['sessionId'] ?? null;
          $manager->lastEventId = $data['lastEventId'] ?? null;
+         $manager->standaloneLastEventId = $data['standaloneLastEventId'] ?? null;
          $manager->protocolVersion = $data['protocolVersion'] ?? null;
          $manager->initialized = $data['initialized'] ?? false;
          $manager->invalidated = $data['invalidated'] ?? false;

@@ -148,4 +148,152 @@ final class SseConnectionResumeTest extends TestCase
         $headers = $manager->getRequestHeaders();
         $this->assertArrayNotHasKey('Last-Event-ID', $headers);
     }
+
+    /**
+     * Cursor scope 'standalone' seeds from the standalone cursor and writes
+     * back to the standalone slot only. The POST stream's cursor must remain
+     * untouched — each stream has its own server-side event-id namespace, so
+     * aliasing the two would cause a compliant server to replay events on
+     * the wrong stream on resume.
+     */
+    public function testStandaloneCursorScopeIsolatesFromPostCursor(): void
+    {
+        $manager = HttpSessionManager::fromArray([
+            'sessionId' => 'sess-1',
+            'lastEventId' => 'post-evt-1',
+            'standaloneLastEventId' => 'standalone-evt-1',
+            'initialized' => true,
+            'invalidated' => false,
+        ]);
+
+        $connection = new SseConnection(
+            config: new HttpConfiguration(endpoint: 'http://localhost/mcp'),
+            sessionManager: $manager,
+            cursorScope: 'standalone'
+        );
+
+        // Seeded from the standalone slot, not the POST slot.
+        $this->assertSame('standalone-evt-1', $connection->getLastEventId());
+
+        // Simulate an incoming event on the standalone stream.
+        $processEvent = new ReflectionMethod($connection, 'processEvent');
+        $processEvent->setAccessible(true);
+        $payload = json_encode([
+            'jsonrpc' => '2.0',
+            'method' => 'notifications/message',
+            'params' => [],
+        ]);
+        $processEvent->invoke($connection, "id: standalone-evt-2\nevent: message\ndata: {$payload}", false);
+
+        $this->assertSame('standalone-evt-2', $manager->getStandaloneLastEventId());
+        // POST cursor is untouched.
+        $this->assertSame('post-evt-1', $manager->getLastEventId());
+    }
+
+    /**
+     * With a message dispatcher configured, server-initiated requests on
+     * the stream are handed to the dispatcher synchronously. This is the
+     * path the standalone GET stream uses so an elicitation/create fired
+     * by the server while a POST is in flight reaches the session without
+     * waiting for the read loop's next idle tick.
+     */
+    public function testForegroundMessageDispatcherReceivesParsedMessage(): void
+    {
+        $manager = new HttpSessionManager();
+        $received = [];
+        $dispatcher = static function ($message) use (&$received): void {
+            $received[] = $message;
+        };
+
+        $connection = new SseConnection(
+            config: new HttpConfiguration(endpoint: 'http://localhost/mcp'),
+            sessionManager: $manager,
+            messageDispatcher: $dispatcher,
+            cursorScope: 'standalone'
+        );
+
+        $processEvent = new ReflectionMethod($connection, 'processEvent');
+        $processEvent->setAccessible(true);
+        $payload = json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 42,
+            'method' => 'elicitation/create',
+            'params' => [
+                'message' => 'test',
+                'requestedSchema' => ['type' => 'object', 'properties' => []],
+            ],
+        ]);
+        $processEvent->invoke($connection, "id: evt-1\nevent: message\ndata: {$payload}", false);
+
+        $this->assertCount(1, $received, 'dispatcher should be called exactly once');
+        $this->assertInstanceOf(\Mcp\Types\JsonRpcMessage::class, $received[0]);
+    }
+
+    /**
+     * The standalone stream constructor surfaces the Mcp-Session-Id +
+     * MCP-Protocol-Version headers via extraHeaders so the GET carries
+     * enough session context to pass the spec's post-init request
+     * requirements.
+     */
+    public function testStandaloneStreamMergesExtraSessionHeaders(): void
+    {
+        $manager = new HttpSessionManager();
+        $manager->processResponseHeaders(
+            ['mcp-session-id' => 'session-xyz'],
+            200,
+            true
+        );
+        $manager->setProtocolVersion('2025-11-25');
+
+        $connection = new SseConnection(
+            config: new HttpConfiguration(endpoint: 'http://localhost/mcp'),
+            sessionManager: $manager,
+            extraHeaders: ['Last-Event-ID' => 'resume-evt'],
+            cursorScope: 'standalone'
+        );
+
+        $prepare = new ReflectionMethod($connection, 'prepareRequestHeaders');
+        $prepare->setAccessible(true);
+        /** @var list<string> $headers */
+        $headers = $prepare->invoke($connection);
+
+        $this->assertContains('Mcp-Session-Id: session-xyz', $headers);
+        $this->assertContains('MCP-Protocol-Version: 2025-11-25', $headers);
+        $this->assertContains('Last-Event-ID: resume-evt', $headers);
+        $this->assertContains('Accept: text/event-stream', $headers);
+    }
+
+    /**
+     * When the server declines the standalone stream (e.g. 405 Method Not
+     * Allowed, the spec-sanctioned way to say "I don't offer this"),
+     * responseStatusIndicatesLiveStream must surface it so the connection
+     * marks itself declined and the transport can tear it down instead of
+     * spinning.
+     */
+    public function testResponseStatusIndicatesLiveStreamRejectsNon2xx(): void
+    {
+        $connection = new SseConnection(
+            config: new HttpConfiguration(endpoint: 'http://localhost/mcp'),
+            sessionManager: new HttpSessionManager(),
+            cursorScope: 'standalone'
+        );
+
+        $status = new \ReflectionProperty($connection, 'responseStatus');
+        $status->setAccessible(true);
+        $ct = new \ReflectionProperty($connection, 'responseContentType');
+        $ct->setAccessible(true);
+        $indicates = new ReflectionMethod($connection, 'responseStatusIndicatesLiveStream');
+        $indicates->setAccessible(true);
+
+        $status->setValue($connection, 405);
+        $this->assertFalse($indicates->invoke($connection));
+
+        $status->setValue($connection, 200);
+        $ct->setValue($connection, 'application/json');
+        $this->assertFalse($indicates->invoke($connection), '200 with wrong content-type is not a live stream');
+
+        $status->setValue($connection, 200);
+        $ct->setValue($connection, 'text/event-stream; charset=utf-8');
+        $this->assertTrue($indicates->invoke($connection));
+    }
 }

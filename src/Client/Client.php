@@ -218,6 +218,14 @@ class Client {
                 $this->transport->getSessionManager()->setProtocolVersion(
                     $this->session->getNegotiatedProtocolVersion()
                 );
+
+                // Open the standalone GET SSE stream described by the MCP
+                // Streamable HTTP spec. Must happen after setProtocolVersion
+                // so the GET carries the negotiated MCP-Protocol-Version
+                // header alongside Mcp-Session-Id. The transport handles
+                // the 405 case gracefully, so servers that decline the
+                // stream do not cause connect() to fail.
+                $this->transport->startStandaloneSseStream();
             }
 
             return $this->session;
@@ -348,6 +356,13 @@ class Client {
                     $this->pendingElicitationApplyDefaults
                 );
             }
+
+            // Re-open the standalone GET SSE stream for the resumed session.
+            // The persisted standaloneLastEventId (restored by
+            // HttpSessionManager::fromArray) is sent as Last-Event-ID so the
+            // server can replay anything that would have been delivered to
+            // the previous process after it detached.
+            $transport->startStandaloneSseStream();
 
             $this->logger->info('HTTP session resumed successfully', [
                 'sessionId' => $sessionManager->getSessionId(),
