@@ -58,7 +58,21 @@ final class SseEventParser
      */
     public static function parseStreaming(string &$buffer): array
     {
-        $buffer = self::normalize($buffer);
+        // Defer normalization of a trailing CR so a CRLF split across chunks
+        // pairs correctly when the next chunk arrives starting with LF.
+        // EXCEPTION: if the prefix already ends in a line terminator (\n
+        // post-normalization), the trailing CR is unambiguously a second
+        // consecutive terminator (blank line). Both "\n\r" and "\n\r\n"
+        // dispatch the same event per spec, so emit now to avoid stranding
+        // legitimate lone-CR-terminated events when the stream pauses or ends.
+        if ($buffer !== '' && $buffer[strlen($buffer) - 1] === "\r") {
+            $head = self::normalize(substr($buffer, 0, -1));
+            $buffer = $head . (
+                $head !== '' && $head[strlen($head) - 1] === "\n" ? "\n" : "\r"
+            );
+        } else {
+            $buffer = self::normalize($buffer);
+        }
         return self::extractEvents($buffer);
     }
 

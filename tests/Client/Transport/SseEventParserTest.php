@@ -171,6 +171,132 @@ final class SseEventParserTest extends TestCase
     }
 
     /**
+     * Regression: when a CRLF line terminator is split across cURL chunks
+     * (chunk ends with \r, next chunk starts with \n), the parser must treat
+     * the sequence as a single line terminator rather than two — otherwise
+     * id/retry fields get torn off the event they belong to.
+     */
+    public function testStreamingCrlfSplitAcrossChunks(): void
+    {
+        $buffer = "data: x\r";
+        $events = SseEventParser::parseStreaming($buffer);
+
+        $this->assertSame([], $events);
+        $this->assertSame("data: x\r", $buffer);
+
+        $buffer .= "\nid: 1\r\n\r\n";
+        $events = SseEventParser::parseStreaming($buffer);
+
+        $this->assertCount(1, $events);
+        $this->assertSame('x', $events[0]['data']);
+        $this->assertSame('1', $events[0]['id']);
+        $this->assertSame('', $buffer);
+    }
+
+    /**
+     * Regression: a CRLF split across chunks must not strand the retry field
+     * into a separate empty event, which would corrupt the reconnect delay.
+     */
+    public function testStreamingCrlfSplitPreservesRetryField(): void
+    {
+        $buffer = "data: x\r";
+        SseEventParser::parseStreaming($buffer);
+        $buffer .= "\nretry: 500\r\n\r\n";
+        $events = SseEventParser::parseStreaming($buffer);
+
+        $this->assertCount(1, $events);
+        $this->assertSame('x', $events[0]['data']);
+        $this->assertSame(500, $events[0]['retry']);
+    }
+
+    /**
+     * A held-back CR must still act as a line terminator once a non-LF byte
+     * follows it in the next chunk (lone-CR legacy line ending).
+     */
+    public function testStreamingLoneCrAtChunkBoundaryStillTerminates(): void
+    {
+        $buffer = "data: x\r";
+        SseEventParser::parseStreaming($buffer);
+        $buffer .= "data: y\r\n\r\n";
+        $events = SseEventParser::parseStreaming($buffer);
+
+        $this->assertCount(1, $events);
+        $this->assertSame("x\ny", $events[0]['data']);
+    }
+
+    /**
+     * Regression: a JSON-RPC payload delivered as a single SSE event must not
+     * be split when the chunk boundary falls between \r and \n of the trailing
+     * CRLF. The reassembled data string must match the original payload byte
+     * for byte.
+     */
+    public function testStreamingDataSplitMidJsonPayload(): void
+    {
+        $payload = '{"jsonrpc":"2.0","id":7,"result":{"ok":true}}';
+        $buffer = "id: evt-7\r\ndata: {$payload}\r";
+        $events = SseEventParser::parseStreaming($buffer);
+        $this->assertSame([], $events);
+
+        $buffer .= "\n\r\n";
+        $events = SseEventParser::parseStreaming($buffer);
+
+        $this->assertCount(1, $events);
+        $this->assertSame('evt-7', $events[0]['id']);
+        $this->assertSame($payload, $events[0]['data']);
+        $this->assertSame('', $buffer);
+    }
+
+    /**
+     * A complete lone-CR-terminated event (data: x\r\r) inside a single
+     * streaming chunk must be emitted immediately. Previously a naive trailing
+     * CR holdback would defer the second CR forever, stranding the event if
+     * the stream ended or paused.
+     */
+    public function testStreamingCompleteLoneCrEventEmitsImmediately(): void
+    {
+        $buffer = "data: x\r\r";
+        $events = SseEventParser::parseStreaming($buffer);
+
+        $this->assertCount(1, $events);
+        $this->assertSame('x', $events[0]['data']);
+        $this->assertSame('', $buffer);
+    }
+
+    /**
+     * A buffer ending in \n\r is two consecutive line terminators (LF + CR =
+     * blank line). The trailing CR must not be deferred when the prefix
+     * already ends in a line terminator — both \n\r and \n\r\n dispatch the
+     * same event per spec.
+     */
+    public function testStreamingMixedLfCrTerminatorEmitsImmediately(): void
+    {
+        $buffer = "data: x\n\r";
+        $events = SseEventParser::parseStreaming($buffer);
+
+        $this->assertCount(1, $events);
+        $this->assertSame('x', $events[0]['data']);
+    }
+
+    /**
+     * Lone-CR event split across chunks: "data: x\r" arriving alone must
+     * defer (the CR could still be the start of CRLF), but a follow-up "\r"
+     * completes the blank-line terminator and the event must dispatch.
+     */
+    public function testStreamingLoneCrEventCompletedByLaterCr(): void
+    {
+        $buffer = "data: x\r";
+        $events = SseEventParser::parseStreaming($buffer);
+        $this->assertSame([], $events);
+
+        $buffer .= "\r";
+        $events = SseEventParser::parseStreaming($buffer);
+
+        $this->assertCount(1, $events);
+        $this->assertSame('x', $events[0]['data']);
+        $this->assertSame('', $buffer);
+    }
+
+    /**
      * An empty input must yield no events and must not throw.
      */
     public function testEmptyInput(): void
