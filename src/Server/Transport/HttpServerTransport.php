@@ -41,6 +41,11 @@ use Mcp\Server\Transport\Http\HttpSession;
 use Mcp\Server\Transport\Http\InMemorySessionStore;
 use Mcp\Server\Transport\Http\MessageQueue;
 use Mcp\Server\Transport\Http\SessionStoreInterface;
+use Mcp\Server\Transport\Http\Sse\SseEmitter;
+use Mcp\Server\Transport\Http\Sse\SseFrame;
+use Mcp\Server\Transport\Http\Sse\SseSessionState;
+use Mcp\Server\Transport\Http\Sse\StreamId;
+use Mcp\Server\Transport\Http\Sse\StreamRegistry;
 use Mcp\Server\Auth\TokenValidatorInterface;
 
 /**
@@ -118,6 +123,27 @@ class HttpServerTransport implements Transport
      * Token validator for OAuth access tokens.
      */
     private ?TokenValidatorInterface $validator = null;
+
+    /**
+     * Response mode selected for the current request. When set to 'sse' the
+     * runner should call emitSseResponse() instead of createJsonResponse().
+     * Reset at the start of every handleRequest() call.
+     */
+    private ?string $lastResponseMode = null;
+
+    /**
+     * Stream id minted for the current SSE-mode POST. Null in non-SSE mode.
+     */
+    private ?string $currentStreamId = null;
+
+    /**
+     * JSON-RPC id of the client request that this stream responds to. Used
+     * by emitSseResponse() to recognise the final response event and mark
+     * the stream completed.
+     *
+     * @var string|int|null
+     */
+    private string|int|null $currentOriginatingRequestId = null;
     
     /**
      * Constructor.
@@ -233,6 +259,12 @@ class HttpServerTransport implements Transport
      */
     public function handleRequest(HttpMessage $request): HttpMessage
     {
+        // Reset per-request SSE state so a value from a previous request can't
+        // leak into this one when the transport is reused across calls.
+        $this->lastResponseMode = null;
+        $this->currentStreamId = null;
+        $this->currentOriginatingRequestId = null;
+
         // DNS rebinding protection: validate Origin header (MCP spec MUST requirement)
         if ($rejection = $this->validateOrigin($request)) {
             return $rejection;
@@ -352,20 +384,23 @@ class HttpServerTransport implements Transport
             
             // Check preferred response format
             $acceptHeader = $request->getHeader('Accept');
-            $prefersSse = $acceptHeader !== null && 
+            $prefersSse = $acceptHeader !== null &&
                          stripos($acceptHeader, 'text/event-stream') !== false &&
                          $this->config->isSseEnabled();
-            
+
             if ($prefersSse && Environment::canSupportSse()) {
-                // SSE support is enabled and client prefers it
-                // This is a placeholder for future SSE implementation
-                // For now, fall back to JSON response
-                return $this->createJsonResponse($session);
-            } else {
-                // Just return a temporary response for now.
-                // The real JSON RPC output will be built AFTER the session processes the queue.
-                return HttpMessage::createEmptyResponse(200);
+                // SSE mode: mint a stream id, remember the originating request
+                // so emitSseResponse() can recognise its final response event,
+                // and tell the runner (via lastResponseMode) to call
+                // emitSseResponse() instead of createJsonResponse().
+                $this->lastResponseMode = 'sse';
+                $this->currentStreamId = StreamId::mint();
+                $this->currentOriginatingRequestId = $this->extractFirstRequestId($jsonData);
             }
+
+            // Return a 200 shell; the runner builds the real body after the
+            // server session processes the incoming queue.
+            return HttpMessage::createEmptyResponse(200);
         } catch (\JsonException $e) {
             // JSON parse error
             return HttpMessage::createJsonResponse(
@@ -402,24 +437,27 @@ class HttpServerTransport implements Transport
         $acceptHeader = $request->getHeader('Accept');
         $wantsSse = $acceptHeader !== null &&
                    stripos($acceptHeader, 'text/event-stream') !== false;
-        
-        if ($wantsSse && $this->config->isSseEnabled() && Environment::canSupportSse()) {
-            // SSE support is enabled and client wants it
-            // This is a placeholder for future SSE implementation
-            // For now, return 405 Method Not Allowed
-            return HttpMessage::createJsonResponse(
-                ['error' => 'SSE not implemented yet'],
-                405
-            );
-        } else {
-            // SSE not supported or not requested
+
+        if (!$wantsSse || !$this->config->isSseEnabled() || !Environment::canSupportSse()) {
             return HttpMessage::createJsonResponse(
                 ['error' => 'Method not allowed'],
                 405
-            );
+            )->setHeader('Allow', 'POST, DELETE');
         }
+
+        $lastEventId = $request->getHeader('Last-Event-ID');
+        if ($lastEventId !== null && $lastEventId !== '') {
+            return $this->emitSseReplay($session, $lastEventId);
+        }
+
+        // No Last-Event-ID: standalone GET stream. On PHP-FPM there is no
+        // background worker to push idle server-initiated messages, so by
+        // default this emits priming + retry and closes immediately.
+        // Clients that need mid-operation progress can still POST the
+        // originating request and reconnect here with Last-Event-ID.
+        return $this->emitStandaloneGetSse($session);
     }
-    
+
     /**
      * Handle a DELETE request.
      *
@@ -669,6 +707,325 @@ class HttpServerTransport implements Transport
         return $notificationParams;
     }
     
+    /**
+     * Response mode chosen for the current request, if any.
+     *
+     * Returns 'sse' when handlePostRequest selected SSE streaming; null
+     * otherwise. The runner uses this to decide between createJsonResponse()
+     * and emitSseResponse().
+     */
+    public function lastResponseMode(): ?string
+    {
+        return $this->lastResponseMode;
+    }
+
+    /**
+     * Stream id minted for the current SSE-mode POST, or null.
+     */
+    public function currentStreamId(): ?string
+    {
+        return $this->currentStreamId;
+    }
+
+    /**
+     * Build a resumable SSE response for the current POST stream.
+     *
+     * Emits a priming event (id=<streamId>:0, empty data, retry field),
+     * then one event per queued outgoing JSON-RPC message with incrementing
+     * seq. When an event carries the final JSON-RPC response for the
+     * originating request, the stream is marked completed in the registry;
+     * otherwise it stays open so the client can reconnect via GET with
+     * Last-Event-ID to pick up subsequent events.
+     *
+     * Every emitted frame is appended to the session's event log so future
+     * replay is possible.
+     *
+     * Progress-streaming trade-off: this implementation builds the full SSE
+     * body once the server session has drained its incoming queue (i.e.
+     * after the tool handler has returned). The wire format is spec-correct
+     * and every progress notification appears in the body with its own
+     * event id, but the client cannot observe progress *while* the handler
+     * is executing — the body is shipped in one HTTP response at the end.
+     * Real-time mid-execution streaming would require holding a long-lived
+     * request open and flushing per-event, which standard PHP hosting
+     * (cPanel/FPM) cannot reliably do. The resumable design is the
+     * substitute: a client that expects a long-running tool can issue the
+     * POST, and if the connection drops before the final response, reconnect
+     * via GET + Last-Event-ID to pick up events the server already logged.
+     */
+    public function emitSseResponse(HttpSession $session): HttpMessage
+    {
+        $streamId = $this->currentStreamId;
+        if ($streamId === null) {
+            // Defensive: should not happen when caller honors lastResponseMode.
+            return $this->createJsonResponse($session);
+        }
+
+        $state = SseSessionState::loadFrom($session, $this->config->getSseEventLogCapacity());
+        $registry = $state->getRegistry();
+        $log = $state->getLog();
+
+        $registry->open($streamId, StreamRegistry::KIND_POST, $this->currentOriginatingRequestId);
+
+        $body = '';
+        $emitter = new SseEmitter(
+            function (string $s) use (&$body): void {
+                $body .= $s;
+            },
+            static fn (): bool => false,
+        );
+
+        // Priming event: spec SHOULD send an event with an id + empty data to
+        // prime the client's Last-Event-ID before any real payload.
+        $primingFrame = new SseFrame(
+            id: StreamId::formatEventId($streamId, 0),
+            event: null,
+            retryMs: $this->config->getSseRetryMs(),
+            data: '',
+        );
+        $emitter->emit($primingFrame);
+        $log->append($streamId, 0, $primingFrame);
+
+        $seq = 0;
+        $completed = false;
+        foreach ($this->messageQueue->flushOutgoing($session->getId()) as $msg) {
+            $seq++;
+            try {
+                $payload = \json_encode($msg->message, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_SLASHES);
+            } catch (\JsonException) {
+                continue;
+            }
+
+            $frame = new SseFrame(
+                id: StreamId::formatEventId($streamId, $seq),
+                event: null,
+                retryMs: null,
+                data: (string) $payload,
+            );
+            $emitter->emit($frame);
+            $log->append($streamId, $seq, $frame);
+
+            if ($this->isFinalResponseFor($msg, $this->currentOriginatingRequestId)) {
+                $registry->markCompleted($streamId);
+                $completed = true;
+                // Spec: SHOULD terminate the SSE stream after the JSON-RPC
+                // response has been sent. We stop appending further events
+                // for this stream in this response.
+                break;
+            }
+        }
+
+        $registry->setLastSeq($streamId, $seq);
+        $state->saveTo($session);
+
+        $response = new HttpMessage($body);
+        $response->setStatusCode(200);
+        $response->setHeader('Content-Type', 'text/event-stream');
+        $response->setHeader('Cache-Control', 'no-cache, no-transform');
+        $response->setHeader('X-Accel-Buffering', 'no');
+        return $response;
+    }
+
+    /**
+     * Replay previously-emitted SSE frames for a disconnected stream.
+     *
+     * Per the 2025-11-25 Streamable HTTP spec, clients resume via GET with
+     * a Last-Event-ID header. The server MAY replay messages that would
+     * have been sent on THAT stream, and MUST NOT leak events from other
+     * streams. Both invariants are enforced by StreamEventLog::replaySince,
+     * which filters strictly by streamId.
+     */
+    private function emitSseReplay(HttpSession $session, string $lastEventId): HttpMessage
+    {
+        $parsed = StreamId::parse($lastEventId);
+        if ($parsed === null) {
+            return HttpMessage::createJsonResponse(
+                ['error' => 'Invalid Last-Event-ID'],
+                400
+            );
+        }
+
+        $streamId = $parsed['streamId'];
+        $cursor = $parsed['seq'];
+
+        $state = SseSessionState::loadFrom($session, $this->config->getSseEventLogCapacity());
+        $record = $state->getRegistry()->find($streamId);
+        if ($record === null) {
+            // Unknown stream (or from a different session): tell the client
+            // the session is effectively gone so it can re-initialize.
+            return HttpMessage::createJsonResponse(
+                ['error' => 'Stream not found'],
+                404
+            );
+        }
+
+        $body = '';
+        $emitter = new SseEmitter(
+            function (string $s) use (&$body): void {
+                $body .= $s;
+            },
+            static fn (): bool => false,
+        );
+
+        foreach ($state->getLog()->replaySince($streamId, $cursor) as $entry) {
+            $emitter->emit($entry['frame']);
+        }
+
+        $response = new HttpMessage($body);
+        $response->setStatusCode(200);
+        $response->setHeader('Content-Type', 'text/event-stream');
+        $response->setHeader('Cache-Control', 'no-cache, no-transform');
+        $response->setHeader('X-Accel-Buffering', 'no');
+        return $response;
+    }
+
+    /**
+     * Open a standalone GET SSE stream with no Last-Event-ID.
+     *
+     * The priming event + retry hint are always emitted. When
+     * `sse_standalone_get_idle_ms` is 0 (the default on PHP-FPM, which has no
+     * background worker), the response closes right after priming. When the
+     * option is > 0, the handler holds the request open for that window and
+     * drains any server-initiated messages queued for this session into the
+     * SSE body, appending them to the event log so a later GET reconnect
+     * with Last-Event-ID can replay them. The window is capped against
+     * `max_execution_time` so shared-hosting processes are not killed mid-wait.
+     */
+    private function emitStandaloneGetSse(HttpSession $session): HttpMessage
+    {
+        $streamId = StreamId::mint();
+
+        $state = SseSessionState::loadFrom($session, $this->config->getSseEventLogCapacity());
+        $state->getRegistry()->open($streamId, StreamRegistry::KIND_GET, null);
+
+        $body = '';
+        $emitter = new SseEmitter(
+            function (string $s) use (&$body): void {
+                $body .= $s;
+            },
+            static fn (): bool => false,
+        );
+
+        $primingFrame = new SseFrame(
+            id: StreamId::formatEventId($streamId, 0),
+            event: null,
+            retryMs: $this->config->getSseRetryMs(),
+            data: '',
+        );
+        $emitter->emit($primingFrame);
+        $state->getLog()->append($streamId, 0, $primingFrame);
+
+        $seq = 0;
+        $idleMs = $this->config->getSseStandaloneGetIdleMs();
+        if ($idleMs > 0) {
+            // Cap the idle window against max_execution_time so the worker
+            // isn't killed mid-wait on shared hosts with short limits.
+            $maxExec = Environment::detectMaxExecutionTime();
+            if ($maxExec > 0) {
+                $idleMs = (int) \min($idleMs, (int) ($maxExec * 1000 * 0.75));
+            }
+
+            $deadlineNs = \hrtime(true) + ($idleMs * 1_000_000);
+            $tickUs = 200_000;
+            while (\hrtime(true) < $deadlineNs) {
+                // Best-effort abort check. In buffered mode this rarely fires
+                // before the response is flushed, but costs nothing to probe.
+                if (\connection_aborted()) {
+                    break;
+                }
+                $remainingUs = (int) (($deadlineNs - \hrtime(true)) / 1000);
+                if ($remainingUs <= 0) {
+                    break;
+                }
+                \usleep((int) \min($tickUs, $remainingUs));
+
+                foreach ($this->messageQueue->flushOutgoing($session->getId()) as $msg) {
+                    $seq++;
+                    try {
+                        $payload = \json_encode($msg->message, \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_SLASHES);
+                    } catch (\JsonException) {
+                        continue;
+                    }
+
+                    $frame = new SseFrame(
+                        id: StreamId::formatEventId($streamId, $seq),
+                        event: null,
+                        retryMs: null,
+                        data: (string) $payload,
+                    );
+                    $emitter->emit($frame);
+                    $state->getLog()->append($streamId, $seq, $frame);
+                }
+            }
+            $state->getRegistry()->setLastSeq($streamId, $seq);
+        }
+
+        $state->saveTo($session);
+        $this->sessionStore->save($session);
+
+        $response = new HttpMessage($body);
+        $response->setStatusCode(200);
+        $response->setHeader('Content-Type', 'text/event-stream');
+        $response->setHeader('Cache-Control', 'no-cache, no-transform');
+        $response->setHeader('X-Accel-Buffering', 'no');
+        return $response;
+    }
+
+    /**
+     * Pick the JSON-RPC request id from a decoded POST body.
+     *
+     * Only requests (method + id) count — notifications and responses have
+     * no id to report. For JSON-RPC batches, the first request's id is
+     * used; SSE response emission for batches degrades gracefully because
+     * no single originating id can capture "final response" semantics.
+     *
+     * @return string|int|null
+     */
+    private function extractFirstRequestId(mixed $jsonData): string|int|null
+    {
+        if (\is_array($jsonData) && \array_is_list($jsonData)) {
+            foreach ($jsonData as $item) {
+                $id = $this->extractFirstRequestId($item);
+                if ($id !== null) {
+                    return $id;
+                }
+            }
+            return null;
+        }
+
+        if (\is_array($jsonData)
+            && isset($jsonData['method'])
+            && \array_key_exists('id', $jsonData)
+            && $jsonData['id'] !== null
+        ) {
+            $id = $jsonData['id'];
+            if (\is_string($id) || \is_int($id)) {
+                return $id;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * True when a queued outgoing message is the JSON-RPC response (or error)
+     * for the stream's originating client request.
+     */
+    private function isFinalResponseFor(JsonRpcMessage $msg, string|int|null $originatingId): bool
+    {
+        if ($originatingId === null) {
+            return false;
+        }
+
+        $inner = $msg->message;
+        if (!($inner instanceof JSONRPCResponse) && !($inner instanceof JSONRPCError)) {
+            return false;
+        }
+
+        $idValue = $inner->id->getValue();
+        return $idValue === $originatingId;
+    }
+
     /**
      * Create a JSON response from pending messages.
      *

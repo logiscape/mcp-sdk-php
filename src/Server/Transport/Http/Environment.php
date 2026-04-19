@@ -99,46 +99,30 @@ class Environment
     /**
      * Check if the environment can support Server-Sent Events (SSE).
      *
+     * The SDK's SSE implementation is *resumable*: each POST produces a
+     * bounded SSE response body and may close early, with the client
+     * reconnecting via GET + Last-Event-ID. Because responses do not
+     * require a long-lived connection, the gate is permissive — it fails
+     * only when the runtime would actively mangle the SSE wire format
+     * (output compression) or cannot flush output at all.
+     *
      * @return bool True if SSE can be supported
      */
     public static function canSupportSse(): bool
     {
-        // SSE requires:
-        // 1. Long execution time
-        // 2. Ability to flush output buffers
-        // 3. No shared hosting limitations
-        
-        // If it's shared hosting, generally cannot support SSE
-        if (self::isSharedHosting()) {
-            return false;
-        }
-        
-        // Need sufficient execution time for long-running connections
-        $maxExecution = self::detectMaxExecutionTime();
-        if ($maxExecution > 0 && $maxExecution < 60) {
-            return false;
-        }
-        
-        // Check if output buffering can be controlled
-        if (ob_get_level() > 0 && !function_exists('ob_end_flush')) {
-            return false;
-        }
-        
-        // Check for presence of output compression
+        // Output compression would chunk/gzip the response body and break
+        // SSE event framing as parsed by clients.
         if (ini_get('zlib.output_compression') == '1') {
             return false;
         }
-        
-        // Check for important functions that might be disabled
-        $disabledFunctions = explode(',', ini_get('disable_functions') ?: '');
-        $requiredFunctions = ['set_time_limit', 'ignore_user_abort', 'flush'];
-        
-        foreach ($requiredFunctions as $function) {
-            if (in_array($function, $disabledFunctions)) {
-                return false;
-            }
+
+        // If an output buffer is active we need to be able to flush it
+        // before writing SSE headers. ob_end_flush is near-universal; this
+        // check exists purely for exotic SAPIs that disable it.
+        if (ob_get_level() > 0 && !function_exists('ob_end_flush')) {
+            return false;
         }
-        
+
         return true;
     }
     
@@ -158,24 +142,21 @@ class Environment
         // Adjust for CLI mode (development)
         if (self::isCliMode()) {
             $config['session_timeout'] = 86400; // 24 hours for development
-            
-            // CLI mode can potentially support SSE
-            if (self::canSupportSse()) {
-                $config['enable_sse'] = true;
-            }
         }
-        
+
         // Adjust for production environments
-        if (!self::isCliMode()) {
-            // Shared hosting needs more conservative settings
-            if (self::isSharedHosting()) {
-                $config['session_timeout'] = 1800; // 30 minutes
-                $config['max_queue_size'] = 500;  // Smaller queue
-            } else {
-                // Non-shared hosting could potentially support SSE if environment checks pass
-                $config['enable_sse'] = self::canSupportSse();
-            }
+        if (!self::isCliMode() && self::isSharedHosting()) {
+            $config['session_timeout'] = 1800; // 30 minutes
+            $config['max_queue_size'] = 500;  // Smaller queue
         }
+
+        // Note: `enable_sse` is intentionally NOT auto-toggled here. Flipping
+        // it silently in CLI or non-shared-hosting environments would change
+        // the wire `Content-Type` of POST responses (JSON → text/event-stream)
+        // for any spec-compliant MCP client (2025-11-25 requires clients to
+        // list both media types in Accept), contradicting the documented
+        // default and surprising users. Callers must opt in explicitly via
+        // ['enable_sse' => true].
         
         // Determine maximum execution time and adjust accordingly
         $maxExecution = self::detectMaxExecutionTime();

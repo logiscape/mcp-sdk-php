@@ -57,6 +57,12 @@ const TEST_WAV_BASE64 = 'UklGRiYAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQI
 
 $server = new McpServer('conformance-test-server');
 
+// Enable the resumable SSE substrate for HTTP mode so the conformance suite
+// exercises spec-aligned streaming of progress notifications and server-to-
+// client requests. Gracefully disabled at runtime when Environment checks
+// fail, so shared-hosting deployments that mirror this config stay safe.
+$server->httpOptions(['enable_sse' => true]);
+
 // ---------------------------------------------------------------------------
 // Tools — all registered through McpServer's public API
 // ---------------------------------------------------------------------------

@@ -15,14 +15,6 @@
 # Conformance tool version: 0.1.16
 
 server:
-  # --- SDK limitation: HTTP transport returns batched JSON, not SSE streams ---
-  - tools-call-with-progress
-    # _meta.progressToken is now passed to tool callbacks via ProgressContext,
-    # and progress notifications are correctly batched in the JSON response.
-    # However, the conformance test client expects notifications via SSE streaming
-    # (onprogress callback), which requires the server to stream events during
-    # the request rather than batching them in the response body.
-
   # --- SDK limitation: HTTP transport is stateless (no server-to-client requests) ---
   - tools-call-sampling
     # sampling/createMessage requires the server to send a request to the

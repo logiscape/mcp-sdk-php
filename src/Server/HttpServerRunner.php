@@ -91,11 +91,19 @@ class HttpServerRunner extends ServerRunner
         // If transport returned an error response OR a direct response (like metadata), return it immediately
         $statusCode = $transportResponse->getStatusCode();
         $responseBody = $transportResponse->getBody();
+        $transportContentType = $transportResponse->getHeader('Content-Type') ?? '';
+        $isDirectSseResponse = $statusCode === 200
+            && \stripos($transportContentType, 'text/event-stream') !== false;
 
-        // If we got a response with content (like metadata) or an error, return it
-        if (($statusCode === 200 && $responseBody !== null && $responseBody !== '') || 
-            ($statusCode !== 200 && $statusCode !== 202 && $statusCode !== 204)) {
-            // Transport returned a direct response (metadata, error, etc) - return it as-is
+        // If we got a response with content (like metadata), an error, or a
+        // fully-built SSE response (e.g. a GET replay whose log had no events
+        // past the cursor yields a valid empty SSE body), return it as-is
+        // rather than falling through to the per-session JSON path.
+        if (
+            $isDirectSseResponse
+            || ($statusCode === 200 && $responseBody !== null && $responseBody !== '')
+            || ($statusCode !== 200 && $statusCode !== 202 && $statusCode !== 204)
+        ) {
             return $transportResponse;
         }
 
@@ -134,8 +142,14 @@ class HttpServerRunner extends ServerRunner
                 $this->serverSession->start();
             }
 
-            // 5) Build the final HTTP response
-            $response = $this->transport->createJsonResponse($httpSession);
+            // 5) Build the final HTTP response. When the transport selected
+            // SSE mode for this POST, drain the outgoing queue through the
+            // resumable SSE emitter; otherwise use the batched JSON path.
+            if ($this->transport->lastResponseMode() === 'sse') {
+                $response = $this->transport->emitSseResponse($httpSession);
+            } else {
+                $response = $this->transport->createJsonResponse($httpSession);
+            }
             $response->setHeader('Mcp-Session-Id', $httpSession->getId());
 
             // 6) Store the session
@@ -160,15 +174,53 @@ class HttpServerRunner extends ServerRunner
     {
         // Send headers
         http_response_code($response->getStatusCode());
-        
+
         foreach ($response->getHeaders() as $name => $value) {
             header("$name: $value");
         }
-        
+
+        // For SSE responses, make the payload visible to the client as
+        // promptly as possible: drain any active output buffers and force a
+        // flush after writing. Each helper is guarded with function_exists()
+        // because hardened shared-hosting environments may remove these from
+        // the function table via disable_functions; error suppression (`@`)
+        // would not prevent a fatal on a missing/disabled function.
+        $contentType = $response->getHeader('Content-Type') ?? '';
+        $isSse = \stripos($contentType, 'text/event-stream') !== false;
+        if ($isSse) {
+            if (\function_exists('ob_end_flush')) {
+                // Drain active buffers so SSE frames reach the client
+                // promptly. A buffer can be non-removable (framework- or
+                // SAPI-owned) in which case ob_end_flush() returns false
+                // without changing ob_get_level — looping would spin
+                // forever. Guard with the REMOVABLE flag and break on a
+                // false return so response delivery never hangs.
+                while (\ob_get_level() > 0) {
+                    $status = \ob_get_status();
+                    if (!\is_array($status)
+                        || !isset($status['flags'])
+                        || (((int) $status['flags']) & \PHP_OUTPUT_HANDLER_REMOVABLE) === 0
+                    ) {
+                        break;
+                    }
+                    if (!\ob_end_flush()) {
+                        break;
+                    }
+                }
+            }
+            if (\function_exists('ignore_user_abort')) {
+                \ignore_user_abort(true);
+            }
+        }
+
         // Send body
         $body = $response->getBody();
         if ($body !== null) {
             echo $body;
+        }
+
+        if ($isSse && \function_exists('flush')) {
+            \flush();
         }
     }
     

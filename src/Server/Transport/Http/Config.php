@@ -57,6 +57,9 @@ class Config
         'resource_metadata_path' => '/.well-known/oauth-protected-resource',
         'token_validator' => null,        // Instance of TokenValidatorInterface
         'allowed_origins' => null,        // Allowed hostnames for Origin validation (null = disabled, auto-set by McpServer for localhost)
+        'sse_retry_ms' => 1500,           // Reconnect hint emitted on SSE streams (WHATWG `retry` field)
+        'sse_event_log_capacity' => 64,   // Max events retained per session for resumable replay
+        'sse_standalone_get_idle_ms' => 0,// How long an idle standalone-GET SSE stream stays open (0 = close immediately)
     ];
     
     /**
@@ -200,6 +203,39 @@ class Config
     public function isSseEnabled(): bool
     {
         return (bool)$this->options['enable_sse'];
+    }
+
+    /**
+     * Reconnect hint (in milliseconds) emitted on SSE streams via the WHATWG
+     * `retry` field. The client waits this long before attempting to resume
+     * via GET + Last-Event-ID after a disconnect.
+     */
+    public function getSseRetryMs(): int
+    {
+        return (int)($this->options['sse_retry_ms'] ?? 1500);
+    }
+
+    /**
+     * Maximum number of events retained in the per-session event log. Bounds
+     * the JSON size of serialized session metadata in FileSessionStore; tune
+     * down on shared hosts with tight disk quotas.
+     */
+    public function getSseEventLogCapacity(): int
+    {
+        $n = (int)($this->options['sse_event_log_capacity'] ?? 64);
+        return $n < 1 ? 1 : $n;
+    }
+
+    /**
+     * How long (ms) a standalone GET SSE stream with no Last-Event-ID stays
+     * open before the server emits retry + closes. 0 means close immediately
+     * after priming — the default on PHP-FPM since there is no background
+     * worker to push idle server-initiated messages.
+     */
+    public function getSseStandaloneGetIdleMs(): int
+    {
+        $n = (int)($this->options['sse_standalone_get_idle_ms'] ?? 0);
+        return $n < 0 ? 0 : $n;
     }
     
     /**
