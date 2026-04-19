@@ -289,6 +289,20 @@ class HttpServerSession extends ServerSession
         // Tag with elicitation results so McpServer can build the context
         $params->_elicitationResults = $allResults;
 
+        // Tell the HTTP transport that the handler we're about to call is
+        // a RESUMED handler for `originalRequestId`. While the context is
+        // set, all outgoing messages (progress notifications, chained
+        // server→client requests, and the final response) append to the
+        // same open stream that carried the original tools/call — matching
+        // spec §5.6.5's "messages SHOULD relate to the originating client
+        // request" and ensuring Last-Event-ID resume can deliver the full
+        // tail of the operation.
+        $transport = $this->transport;
+        $setContext = $transport instanceof \Mcp\Server\Transport\HttpServerTransport
+            ? static fn (string|int|null $id) => $transport->setResumeContext($id)
+            : static fn (string|int|null $id) => null;
+
+        $setContext($pending->originalRequestId);
         try {
             $result = $handler($params);
             $this->sendResponse($originalRequestId, $result);
@@ -325,6 +339,8 @@ class HttpServerSession extends ServerSession
                 code: -32603,
                 message: $e->getMessage()
             ));
+        } finally {
+            $setContext(null);
         }
     }
 

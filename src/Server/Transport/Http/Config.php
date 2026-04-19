@@ -60,6 +60,7 @@ class Config
         'sse_retry_ms' => 1500,           // Reconnect hint emitted on SSE streams (WHATWG `retry` field)
         'sse_event_log_capacity' => 64,   // Max events retained per session for resumable replay
         'sse_standalone_get_idle_ms' => 0,// How long an idle standalone-GET SSE stream stays open (0 = close immediately)
+        'sse_mode' => 'auto',             // SSE emission mode: 'auto' | 'streaming' | 'buffered'
     ];
     
     /**
@@ -236,6 +237,103 @@ class Config
     {
         $n = (int)($this->options['sse_standalone_get_idle_ms'] ?? 0);
         return $n < 0 ? 0 : $n;
+    }
+
+    /**
+     * Configured SSE emission mode:
+     *  - `auto` (default): prefer streaming when the runtime supports it AND
+     *    the POST carries a `progressToken` _meta — otherwise buffer.
+     *  - `streaming`: force streaming whenever `Environment::canStreamSse()`
+     *    is true. If the runtime cannot stream, the request falls back to
+     *    buffered so the response is still delivered.
+     *  - `buffered`: force the legacy buffered-body path regardless of
+     *    runtime capability — useful for deployments that want the spec-
+     *    compliant wire format without the flush-per-frame risk.
+     */
+    public function getSseMode(): string
+    {
+        $mode = strtolower((string)($this->options['sse_mode'] ?? 'auto'));
+        return in_array($mode, ['auto', 'streaming', 'buffered'], true) ? $mode : 'auto';
+    }
+
+    /**
+     * Decide whether the given POST should use the streaming-SSE path.
+     *
+     * The runner calls this after the transport has selected SSE response
+     * mode. `buffered` mode short-circuits to the legacy emitter. The other
+     * modes additionally require `Environment::canStreamSse()` — if the
+     * runtime cannot reliably flush, streaming silently downgrades to
+     * buffered so no request ever hangs on a misdetected environment.
+     *
+     * `auto` is additionally gated on the presence of a `progressToken`
+     * in the client's request `_meta`: most JSON-RPC roundtrips (e.g.
+     * resources/list) emit a single response frame and get no benefit
+     * from header-flush overhead, so they stay on the buffered path.
+     */
+    public function shouldStream(?string $rawJsonBody): bool
+    {
+        $mode = $this->getSseMode();
+        if ($mode === 'buffered') {
+            return false;
+        }
+
+        if (!Environment::canStreamSse()) {
+            return false;
+        }
+
+        if ($mode === 'streaming') {
+            return true;
+        }
+
+        // mode === 'auto': stream only when the request declares a
+        // progressToken, so short round-trips keep the simpler buffered path.
+        if ($rawJsonBody === null || $rawJsonBody === '') {
+            return false;
+        }
+
+        // Cheap substring probe avoids a full JSON decode on every hit; the
+        // token key is distinctive enough that false positives are rare and
+        // harmless (a spurious stream still completes correctly).
+        if (stripos($rawJsonBody, 'progressToken') === false) {
+            return false;
+        }
+
+        try {
+            $data = json_decode($rawJsonBody, true, 32, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return false;
+        }
+
+        return self::hasProgressToken($data);
+    }
+
+    /**
+     * Walk a decoded JSON-RPC request (or batch) looking for a `_meta.progressToken`.
+     *
+     * @param mixed $data
+     */
+    private static function hasProgressToken($data): bool
+    {
+        if (!is_array($data)) {
+            return false;
+        }
+        if (array_is_list($data)) {
+            foreach ($data as $item) {
+                if (self::hasProgressToken($item)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        $params = $data['params'] ?? null;
+        if (!is_array($params)) {
+            return false;
+        }
+        $meta = $params['_meta'] ?? null;
+        if (!is_array($meta)) {
+            return false;
+        }
+        return array_key_exists('progressToken', $meta);
     }
     
     /**

@@ -137,18 +137,43 @@ class HttpServerRunner extends ServerRunner
             $this->serverSession->registerHandlers($this->server->getHandlers());
             $this->serverSession->registerNotificationHandlers($this->server->getNotificationHandlers());
 
-            // 4) Now run the session to process whatever got enqueued
-            if (!$this->serverSession->isInitialized()) {
-                $this->serverSession->start();
+            // 4) Decide whether this POST should stream SSE frames as the
+            // handler runs. Streaming requires the transport to have chosen
+            // SSE mode (i.e. the client advertised text/event-stream AND
+            // server config has enable_sse=true) AND the request to be a
+            // good candidate per Config::shouldStream. Anything else falls
+            // through to the existing buffered/JSON paths.
+            $streaming = false;
+            if ($this->transport->lastResponseMode() === 'sse') {
+                $streaming = $this->transport->getConfig()->shouldStream(
+                    $request?->getBody()
+                );
             }
 
-            // 5) Build the final HTTP response. When the transport selected
-            // SSE mode for this POST, drain the outgoing queue through the
-            // resumable SSE emitter; otherwise use the batched JSON path.
-            if ($this->transport->lastResponseMode() === 'sse') {
-                $response = $this->transport->emitSseResponse($httpSession);
+            if ($streaming) {
+                // Streaming path: begin the SSE response (headers + priming
+                // frame flushed to the wire) BEFORE the handler runs. Each
+                // writeMessage() during handler execution emits a frame
+                // directly, so progress notifications arrive live rather
+                // than after the handler returns.
+                $this->transport->beginStreamingSseOutput($httpSession);
+                if (!$this->serverSession->isInitialized()) {
+                    $this->serverSession->start();
+                }
+                $response = $this->transport->finalizeStreamingSse($httpSession);
             } else {
-                $response = $this->transport->createJsonResponse($httpSession);
+                if (!$this->serverSession->isInitialized()) {
+                    $this->serverSession->start();
+                }
+
+                // 5) Build the final HTTP response. When the transport selected
+                // SSE mode for this POST, drain the outgoing queue through the
+                // resumable SSE emitter; otherwise use the batched JSON path.
+                if ($this->transport->lastResponseMode() === 'sse') {
+                    $response = $this->transport->emitSseResponse($httpSession);
+                } else {
+                    $response = $this->transport->createJsonResponse($httpSession);
+                }
             }
             $response->setHeader('Mcp-Session-Id', $httpSession->getId());
 
@@ -172,6 +197,16 @@ class HttpServerRunner extends ServerRunner
      */
     public function sendResponse(HttpMessage $response): void
     {
+        // Streaming SSE path: the transport already wrote headers + priming
+        // + progress frames + final response directly to the SAPI during
+        // handler execution. sendResponse() is called at the tail of the
+        // runner loop just to keep a single exit point; for an already-
+        // emitted response we have nothing to add to the wire. Skip the
+        // body path entirely and let the request end.
+        if ($response->getHeader('X-Mcp-Already-Emitted') === '1') {
+            return;
+        }
+
         // Send headers
         http_response_code($response->getStatusCode());
 

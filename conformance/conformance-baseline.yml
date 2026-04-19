@@ -11,26 +11,24 @@
 #   composer conformance-server     # Run server tests only
 #   composer conformance-client     # Run client tests only
 #
-# Last updated: 2026-04-18
+# Last updated: 2026-04-19
 # Conformance tool version: 0.1.16
 
 server:
-  # --- SDK limitation: HTTP transport is stateless (no server-to-client requests) ---
+  # --- SDK limitation: sampling over HTTP still needs the resume pattern ---
   - tools-call-sampling
     # sampling/createMessage requires the server to send a request to the
-    # client and wait for a response. The PHP HTTP transport is stateless
-    # per-request, so BaseSession::sendRequest() cannot block for a client
-    # response. This works in stdio mode but not HTTP mode.
-
-  - tools-call-elicitation
-    # Same root cause as tools-call-sampling: elicitation/create is a
-    # server-to-client request that requires bidirectional communication.
-
-  - elicitation-sep1034-defaults
-    # Same root cause: requires server-to-client elicitation request.
+    # client and wait for a response. The elicitation suspend/resume pattern
+    # (ElicitationSuspendException + PendingElicitation + request-id-keyed
+    # stream routing) works for elicitation over HTTP as of the streamable
+    # HTTP rework; generalising it to sampling requires a shared
+    # ClientRequestSuspendException path and a sampling-specific responder.
 
   - elicitation-sep1330-enums
-    # Same root cause: requires server-to-client elicitation request.
+    # Enum support in elicitation schemas: partially implemented but the
+    # conformance tool's fixture exercises edge cases the SDK's elicitation
+    # schema handling does not yet cover. Tracked separately from the
+    # transport-layer fixes.
 
 client:
   # --- OAuth: not implemented ---

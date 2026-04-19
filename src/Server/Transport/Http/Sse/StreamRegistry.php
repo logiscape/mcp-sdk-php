@@ -87,6 +87,30 @@ final class StreamRegistry
         return $this->records[$streamId] ?? null;
     }
 
+    /**
+     * Find the OPEN stream whose originating request matches the given id,
+     * if any. Used by the transport to route a resumed-handler response
+     * back to the stream the original request arrived on so a Last-Event-ID
+     * reconnect can deliver it.
+     *
+     * Only `STATUS_OPEN` streams are considered — a stream that was already
+     * terminated should not accept further frames.
+     *
+     * @return array{streamId: string, kind: string, originatingRequestId: string|int|null, status: string, lastSeq: int, createdAt: float}|null
+     */
+    public function findOpenByOriginatingRequestId(string|int $requestId): ?array
+    {
+        foreach ($this->records as $record) {
+            if ($record['status'] !== self::STATUS_OPEN) {
+                continue;
+            }
+            if ($record['originatingRequestId'] === $requestId) {
+                return $record;
+            }
+        }
+        return null;
+    }
+
     public function has(string $streamId): bool
     {
         return isset($this->records[$streamId]);

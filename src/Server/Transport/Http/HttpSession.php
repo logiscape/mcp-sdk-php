@@ -213,6 +213,25 @@ class HttpSession
     {
         return $this->state === 'active';
     }
+
+    /**
+     * Whether the MCP session has completed the `initialize` handshake.
+     *
+     * Derives the answer from the serialized `mcp_server_session` metadata
+     * the runner persists after each request — that array's
+     * `initializationState` key is the `InitializationState` enum value
+     * (3 === Initialized). Treating this as the single source of truth
+     * avoids duplicating protocol state on the transport-level session.
+     */
+    public function isInitialized(): bool
+    {
+        $state = $this->metadata['mcp_server_session'] ?? null;
+        if (!is_array($state)) {
+            return false;
+        }
+        $init = $state['initializationState'] ?? null;
+        return $init === 3;
+    }
     
     /**
      * Generate a secure random session ID.

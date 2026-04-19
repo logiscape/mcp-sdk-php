@@ -144,6 +144,46 @@ class HttpServerTransport implements Transport
      * @var string|int|null
      */
     private string|int|null $currentOriginatingRequestId = null;
+
+    /**
+     * Streaming SSE emission state. When active, writeMessage() flushes each
+     * JSON-RPC message to php://output as its own SSE frame instead of
+     * queuing it for the buffered emitter. The fields are only meaningful
+     * between beginStreamingSseOutput() and finalizeStreamingSse().
+     */
+    private bool $streamingActive = false;
+
+    private ?SseEmitter $streamingEmitter = null;
+
+    private ?SseSessionState $streamingState = null;
+
+    private ?HttpSession $streamingSession = null;
+
+    private int $streamingSeq = 0;
+
+    private bool $streamingFinalEmitted = false;
+
+    /**
+     * Set when a server-to-client JSONRPCRequest (sampling, elicitation)
+     * is flushed on the current stream. Presence of such a request means
+     * the handler legitimately suspended and the final response will
+     * arrive on a later POST — finalizeStreamingSse() must not synthesize
+     * an error frame or mark the stream completed in this case.
+     */
+    private bool $streamingSuspensionDetected = false;
+
+    private bool $streamingShutdownGuarded = false;
+
+    /**
+     * Originating request id of the handler currently being RESUMED after a
+     * suspend (e.g., inside HttpServerSession::handleElicitationResponse).
+     * While set, every outgoing message — response, notification, nested
+     * server→client request — is appended to the stream that originally
+     * carried that request, so related frames stay on the originating
+     * stream per spec §5.6.5 ("messages SHOULD relate to the originating
+     * client request"). Cleared when the resumed handler returns.
+     */
+    private string|int|null $resumeContextOriginatingId = null;
     
     /**
      * Constructor.
@@ -231,16 +271,53 @@ class HttpServerTransport implements Transport
         if (!$this->isStarted) {
             throw new \RuntimeException('Transport not started');
         }
-        
+
+        // Streaming SSE short-circuit: push the frame straight to the wire
+        // (and the event log) before the handler returns. Bypassing the
+        // outgoing queue is what lets clients observe progress notifications
+        // mid-execution, as the spec intends.
+        if ($this->streamingActive) {
+            $this->emitStreamingFrame($message);
+            return;
+        }
+
+        // Resume-context short-circuit. When HttpServerSession is re-invoking
+        // a suspended handler (typically inside handleElicitationResponse),
+        // it sets resumeContextOriginatingId to the original tools/call id
+        // for the duration of the call. While that context is active, ALL
+        // outputs — responses, progress notifications, and any chained
+        // server→client requests — are appended to the stream that carried
+        // the original request, matching spec §5.6.5's "SHOULD relate to
+        // the originating client request" on that stream. Without this
+        // routing, notifications + chained requests would strand in the
+        // outgoing queue and either drop on the 202 path or leak onto the
+        // wrong HTTP response.
+        if ($this->resumeContextOriginatingId !== null) {
+            if ($this->appendToResumeStream($message, $this->resumeContextOriginatingId)) {
+                return;
+            }
+        }
+
+        // Response-only fallback. Even without an explicit resume context,
+        // a response whose id matches an open stream belongs on that stream
+        // — guards paths where the session writes a response outside the
+        // documented handleElicitationResponse flow.
+        $inner = $message->message;
+        if ($inner instanceof JSONRPCResponse || $inner instanceof JSONRPCError) {
+            if ($this->appendResponseToOpenStream($message, $inner)) {
+                return;
+            }
+        }
+
         // If we have a current session, use that
         if ($this->currentSessionId !== null) {
             $this->messageQueue->queueOutgoing($message, $this->currentSessionId);
             return;
         }
-        
+
         // Otherwise, try to determine the target session based on message type
         $innerMessage = $message->message;
-        
+
         if ($innerMessage instanceof JSONRPCResponse || $innerMessage instanceof JSONRPCError) {
             // For responses, route to the session that made the request
             $this->messageQueue->queueResponse($message);
@@ -278,18 +355,28 @@ class HttpServerTransport implements Transport
         // Extract session ID from request headers
         $sessionId = $request->getHeader('Mcp-Session-Id');
         $session = null;
-        
+        $method = strtoupper($request->getMethod() ?? '');
+        $isInitializePost = $method === 'POST' && $this->isInitializeRequest($request);
+        // Spec §5.8.2: servers that require a session id SHOULD respond to
+        // non-initialization requests lacking Mcp-Session-Id with 400. The
+        // strict path engages when SSE is enabled (the only mode in which an
+        // anonymous GET could otherwise open an orphan event stream) — this
+        // keeps byte-identical behavior for deployments that never opted in.
+        $strictSessionEnforcement = $this->config->isSseEnabled();
+
         // Find or create session
         if ($sessionId !== null) {
             $session = $this->getSession($sessionId);
-            
+
             // If session not found or expired, create a new one
             if ($session === null || $session->isExpired($this->config->get('session_timeout'))) {
-                if ($request->getMethod() !== 'POST' || $this->isInitializeRequest($request)) {
-                    // For non-POST or initialize requests, create a new session
+                if ($isInitializePost) {
+                    // Initialize requests re-establish the session fresh.
                     $session = $this->createSession();
                 } else {
-                    // For other requests with invalid session, return 404
+                    // For any other request with an unknown/expired session,
+                    // 404 signals the client MUST start a new session via
+                    // InitializeRequest without a session id (spec §5.8.4).
                     return HttpMessage::createJsonResponse(
                         ['error' => 'Session not found or expired'],
                         404
@@ -298,16 +385,47 @@ class HttpServerTransport implements Transport
             }
         } else {
             // No session ID provided
-            if ($request->getMethod() !== 'POST' || $this->isInitializeRequest($request)) {
-                // For non-POST or initialize requests, create a new session
+            if ($isInitializePost) {
+                // Initialize is the only request allowed to create a session.
                 $session = $this->createSession();
-            } else {
-                // For other requests without session ID, return 400
+            } elseif ($method === 'POST') {
+                // Non-initialize POST without a session id — existing behavior.
                 return HttpMessage::createJsonResponse(
                     ['error' => 'Session ID required'],
                     400
                 );
+            } elseif ($strictSessionEnforcement) {
+                // GET/DELETE without a session id when SSE is enabled: reject
+                // per spec rather than auto-creating an orphan session that
+                // would accept anonymous GET-SSE streams on an uninitialized
+                // context.
+                return HttpMessage::createJsonResponse(
+                    ['error' => 'Session ID required'],
+                    400
+                );
+            } else {
+                // SSE disabled: preserve legacy lenient behavior (GET falls
+                // through to the 405 path in handleGetRequest, DELETE expires
+                // a freshly-created session).
+                $session = $this->createSession();
             }
+        }
+
+        // GET/DELETE on a known-but-uninitialized session: the handshake is
+        // a prerequisite for server-to-client channels. Returning 400 here
+        // matches the TypeScript reference and makes it obvious the client
+        // skipped `initialize`. Gated on strict enforcement so legacy
+        // non-SSE deployments don't see behavior changes.
+        if (
+            $strictSessionEnforcement
+            && ($method === 'GET' || $method === 'DELETE')
+            && $session !== null
+            && !$session->isInitialized()
+        ) {
+            return HttpMessage::createJsonResponse(
+                ['error' => 'Session not initialized'],
+                400
+            );
         }
         
         // Set current session for this request
@@ -824,6 +942,510 @@ class HttpServerTransport implements Transport
         $response->setHeader('Cache-Control', 'no-cache, no-transform');
         $response->setHeader('X-Accel-Buffering', 'no');
         return $response;
+    }
+
+    /**
+     * Begin the streaming-SSE path for a POST that should flush frames as
+     * the tool handler runs.
+     *
+     * Spec §5.6.1 says the server SHOULD immediately send a priming event
+     * (event id + empty data) so the client has a Last-Event-ID in hand
+     * before any real payload. `beginStreamingSseOutput()` commits to the
+     * SSE response by writing status + headers + the priming frame BEFORE
+     * the handler is invoked; from this point on writeMessage() flushes
+     * each frame straight to php://output.
+     *
+     * Headers are sent via `header()` rather than returned on an HttpMessage
+     * because the runner needs to hand control back to the server session
+     * while the HTTP response is mid-body. The runner later sees a sentinel
+     * HttpMessage from finalizeStreamingSse() (with a X-Mcp-Already-Emitted
+     * marker) and skips its body-emission path so we don't double-echo.
+     *
+     * On any runtime that can't reliably flush (see Environment::canStreamSse),
+     * callers should not invoke this method — they should fall back to
+     * emitSseResponse() which buffers the body and sends it at the end.
+     */
+    public function beginStreamingSseOutput(HttpSession $session, ?object $ioSink = null): void
+    {
+        $streamId = $this->currentStreamId;
+        if ($streamId === null) {
+            throw new \RuntimeException(
+                'Cannot begin streaming SSE without a minted stream id'
+            );
+        }
+
+        $state = SseSessionState::loadFrom($session, $this->config->getSseEventLogCapacity());
+        $state->getRegistry()->open(
+            $streamId,
+            StreamRegistry::KIND_POST,
+            $this->currentOriginatingRequestId
+        );
+
+        // Set up the output sink. In production the sink echoes to the SAPI
+        // output buffer and flushes; tests inject a captured sink so the
+        // exact bytes produced are observable without touching php://output.
+        $sink = $ioSink;
+        if ($sink === null) {
+            $capabilities = $this->detectStreamingRuntime();
+            $this->sendStreamingHeaders($session, $capabilities);
+            $write = static function (string $s): void {
+                echo $s;
+                if (\function_exists('flush')) {
+                    \flush();
+                }
+            };
+            $aborted = static function (): bool {
+                return \function_exists('connection_aborted')
+                    ? (bool) \connection_aborted()
+                    : false;
+            };
+        } else {
+            // Test injection: $ioSink->write(string), $ioSink->aborted(): bool
+            $sinkObj = $ioSink;
+            $write = static function (string $s) use ($sinkObj): void {
+                $sinkObj->write($s);
+            };
+            $aborted = static function () use ($sinkObj): bool {
+                return method_exists($sinkObj, 'aborted') ? (bool) $sinkObj->aborted() : false;
+            };
+        }
+
+        $emitter = new SseEmitter($write, $aborted);
+
+        $primingFrame = new SseFrame(
+            id: StreamId::formatEventId($streamId, 0),
+            event: null,
+            retryMs: $this->config->getSseRetryMs(),
+            data: '',
+        );
+        $emitter->emit($primingFrame);
+        $state->getLog()->append($streamId, 0, $primingFrame);
+        $state->saveTo($session);
+        $this->sessionStore->save($session);
+
+        $this->streamingActive = true;
+        $this->streamingEmitter = $emitter;
+        $this->streamingState = $state;
+        $this->streamingSession = $session;
+        $this->streamingSeq = 0;
+        $this->streamingFinalEmitted = false;
+        $this->streamingSuspensionDetected = false;
+
+        $this->registerStreamingShutdownGuard();
+    }
+
+    /**
+     * Flush a single outgoing JSON-RPC message as an SSE frame while the
+     * streaming path is active.
+     *
+     * The frame is appended to the event log and the session state is
+     * persisted per-frame. That cost buys two spec-level properties:
+     *   (a) a client reconnecting via GET + Last-Event-ID mid-handler can
+     *       see frames that were emitted before the reconnect, provided the
+     *       session store is shared across processes (e.g. FileSessionStore);
+     *   (b) a fatal mid-handler still leaves a coherent log so the shutdown
+     *       safety net can replay events that already reached the wire.
+     */
+    private function emitStreamingFrame(JsonRpcMessage $message): void
+    {
+        if (!$this->streamingActive
+            || $this->streamingEmitter === null
+            || $this->streamingState === null
+            || $this->streamingSession === null
+            || $this->currentStreamId === null
+        ) {
+            // Defensive: should not happen because writeMessage() only
+            // routes here when streamingActive is true.
+            return;
+        }
+
+        try {
+            $payload = \json_encode(
+                $message->message,
+                \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_SLASHES
+            );
+        } catch (\JsonException) {
+            return;
+        }
+
+        $this->streamingSeq++;
+        $frame = new SseFrame(
+            id: StreamId::formatEventId($this->currentStreamId, $this->streamingSeq),
+            event: null,
+            retryMs: null,
+            data: (string) $payload,
+        );
+        $this->streamingEmitter->emit($frame);
+        $this->streamingState->getLog()->append(
+            $this->currentStreamId,
+            $this->streamingSeq,
+            $frame
+        );
+        $this->streamingState->getRegistry()->setLastSeq(
+            $this->currentStreamId,
+            $this->streamingSeq
+        );
+
+        if ($this->isFinalResponseFor($message, $this->currentOriginatingRequestId)) {
+            $this->streamingState->getRegistry()->markCompleted($this->currentStreamId);
+            $this->streamingFinalEmitted = true;
+        } elseif ($message->message instanceof JSONRPCRequest) {
+            // Server→client request on this stream (elicitation/create or
+            // sampling/createMessage). The handler has legitimately suspended
+            // waiting for the client's response, which will arrive on a later
+            // POST. finalizeStreamingSse() must not treat the missing final
+            // response as an error in this case.
+            $this->streamingSuspensionDetected = true;
+        }
+
+        // Persist after each frame. For in-memory session stores this is a
+        // cheap map assignment; for FileSessionStore it's the cost that makes
+        // mid-handler Last-Event-ID resume possible.
+        $this->streamingState->saveTo($this->streamingSession);
+        $this->sessionStore->save($this->streamingSession);
+    }
+
+    /**
+     * Close out the streaming-SSE response after the server session has
+     * drained its incoming queue. Returns a sentinel HttpMessage the runner
+     * uses to skip its body-emission path without losing the session-id
+     * header it still needs to set.
+     *
+     * Three cases are distinguished:
+     *  1. The handler emitted a final JSON-RPC response for the originating
+     *     request — mark the stream completed and return.
+     *  2. The handler emitted a server→client request (elicitation/create,
+     *     sampling/createMessage) and suspended — leave the stream open and
+     *     do not synthesize a response, because the real response will be
+     *     emitted on a later POST after the client replies. Completing the
+     *     stream here would break the documented suspend/resume flow and
+     *     work against the remaining server conformance items.
+     *  3. Neither of the above — treat as a handler that failed without a
+     *     response and synthesize a JSON-RPC -32603 so clients don't hang.
+     */
+    public function finalizeStreamingSse(HttpSession $session): HttpMessage
+    {
+        if (!$this->streamingActive
+            || $this->streamingState === null
+            || $this->streamingSession === null
+            || $this->currentStreamId === null
+        ) {
+            // Defensive fallback: behave like a non-streaming 200.
+            return $this->sentinelAlreadyEmittedResponse();
+        }
+
+        if ($this->streamingFinalEmitted) {
+            // Case 1: handler completed. The final-response frame in
+            // emitStreamingFrame already marked the stream completed.
+        } elseif ($this->streamingSuspensionDetected) {
+            // Case 2: handler is suspended (elicitation/sampling). Persist
+            // the log updates but leave the registry entry as-is so the
+            // follow-up POST can continue appending to this same stream.
+            $this->streamingState->saveTo($this->streamingSession);
+            $this->sessionStore->save($this->streamingSession);
+        } else {
+            // Case 3: genuine failure — synthesize an error frame and
+            // mark the stream completed so clients stop waiting.
+            if ($this->currentOriginatingRequestId !== null) {
+                $errorMessage = new JsonRpcMessage(new JSONRPCError(
+                    jsonrpc: '2.0',
+                    id: new RequestId($this->currentOriginatingRequestId),
+                    error: new JsonRpcErrorObject(
+                        code: -32603,
+                        message: 'Internal error: handler terminated without a response',
+                        data: null,
+                    ),
+                ));
+                $this->emitStreamingFrame($errorMessage);
+            }
+            $this->streamingState->getRegistry()->markCompleted($this->currentStreamId);
+            $this->streamingState->saveTo($this->streamingSession);
+            $this->sessionStore->save($this->streamingSession);
+        }
+
+        $this->streamingActive = false;
+        $this->streamingEmitter = null;
+        $this->streamingState = null;
+        $this->streamingSession = null;
+
+        return $this->sentinelAlreadyEmittedResponse();
+    }
+
+    /**
+     * Declare that the transport is currently re-invoking a previously
+     * suspended handler for the given original request id. While the
+     * context is set, all outgoing messages in writeMessage() route to
+     * the open stream that matches the id (see appendToResumeStream).
+     *
+     * HttpServerSession wraps its resumed handler call with a pair of
+     * setResumeContext($id) / setResumeContext(null) invocations — a
+     * finally block ensures the context is cleared even when the handler
+     * throws ElicitationSuspendException (chained elicitation) or any
+     * other exception.
+     */
+    public function setResumeContext(string|int|null $originatingRequestId): void
+    {
+        $this->resumeContextOriginatingId = $originatingRequestId;
+    }
+
+    /**
+     * Resume-path routing for ANY outgoing message during a resumed
+     * handler run (responses, progress notifications, chained server→client
+     * requests). Appends the message as a frame to the stream that
+     * originally carried the request; marks the stream completed only
+     * when the frame is the final JSON-RPC response for that request.
+     */
+    private function appendToResumeStream(
+        JsonRpcMessage $message,
+        string|int $originatingId,
+    ): bool {
+        $session = $this->lastUsedSession;
+        if ($session === null) {
+            return false;
+        }
+
+        $state = SseSessionState::loadFrom($session, $this->config->getSseEventLogCapacity());
+        $record = $state->getRegistry()->findOpenByOriginatingRequestId($originatingId);
+        if ($record === null) {
+            // No matching stream — typically a JSON-mode flow that never
+            // opened one. Caller falls back to the outgoing queue.
+            return false;
+        }
+
+        $inner = $message->message;
+        try {
+            $payload = \json_encode(
+                $inner,
+                \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_SLASHES
+            );
+        } catch (\JsonException) {
+            return false;
+        }
+
+        $streamId = $record['streamId'];
+        $nextSeq = $record['lastSeq'] + 1;
+        $frame = new SseFrame(
+            id: StreamId::formatEventId($streamId, $nextSeq),
+            event: null,
+            retryMs: null,
+            data: (string) $payload,
+        );
+        $state->getLog()->append($streamId, $nextSeq, $frame);
+        $state->getRegistry()->setLastSeq($streamId, $nextSeq);
+
+        // Only a final JSON-RPC response for the originating request
+        // terminates the stream. Progress notifications and chained
+        // server→client requests leave it OPEN so subsequent frames
+        // (including the eventual final response) keep appending.
+        if (($inner instanceof JSONRPCResponse || $inner instanceof JSONRPCError)
+            && $inner->id->getValue() === $originatingId
+        ) {
+            $state->getRegistry()->markCompleted($streamId);
+        }
+
+        $state->saveTo($session);
+        $this->sessionStore->save($session);
+        return true;
+    }
+
+    /**
+     * Response-only fallback routing used when no explicit resume context
+     * is active but an outgoing response happens to match an open stream's
+     * originatingRequestId. Kept as a safety net — the primary path is
+     * appendToResumeStream invoked through setResumeContext.
+     *
+     * Returns true when the message was routed to a stream log; callers
+     * then skip the ordinary outgoing queue. Returns false when no open
+     * stream matches — e.g. pure JSON-mode flows that never opened a
+     * stream, or tools/call flows whose stream already completed.
+     */
+    private function appendResponseToOpenStream(
+        JsonRpcMessage $message,
+        JSONRPCResponse|JSONRPCError $inner,
+    ): bool {
+        $session = $this->lastUsedSession;
+        if ($session === null) {
+            return false;
+        }
+
+        $idValue = $inner->id->getValue();
+
+        $state = SseSessionState::loadFrom($session, $this->config->getSseEventLogCapacity());
+        $record = $state->getRegistry()->findOpenByOriginatingRequestId($idValue);
+        if ($record === null) {
+            return false;
+        }
+
+        try {
+            $payload = \json_encode(
+                $inner,
+                \JSON_THROW_ON_ERROR | \JSON_UNESCAPED_SLASHES
+            );
+        } catch (\JsonException) {
+            return false;
+        }
+
+        $streamId = $record['streamId'];
+        $nextSeq = $record['lastSeq'] + 1;
+        $frame = new SseFrame(
+            id: StreamId::formatEventId($streamId, $nextSeq),
+            event: null,
+            retryMs: null,
+            data: (string) $payload,
+        );
+        $state->getLog()->append($streamId, $nextSeq, $frame);
+        $state->getRegistry()->setLastSeq($streamId, $nextSeq);
+        $state->getRegistry()->markCompleted($streamId);
+        $state->saveTo($session);
+        $this->sessionStore->save($session);
+
+        return true;
+    }
+
+    /**
+     * Build the zero-body sentinel the runner uses to signal "response was
+     * already emitted directly to the wire — don't echo the body again".
+     */
+    private function sentinelAlreadyEmittedResponse(): HttpMessage
+    {
+        $response = new HttpMessage('');
+        $response->setStatusCode(200);
+        $response->setHeader('Content-Type', 'text/event-stream');
+        $response->setHeader('Cache-Control', 'no-cache, no-transform');
+        $response->setHeader('X-Accel-Buffering', 'no');
+        $response->setHeader('X-Mcp-Already-Emitted', '1');
+        return $response;
+    }
+
+    /**
+     * Walk active output buffers, push status + headers to the SAPI, and
+     * disable user-abort short-circuits so a mid-handler disconnect does
+     * not silently kill the PHP process before it persists final state.
+     *
+     * Only invoked from the production path (no-$ioSink branch) of
+     * beginStreamingSseOutput. Tests inject a sink and bypass the SAPI
+     * entirely.
+     *
+     * @param array{contentEncoding: bool} $capabilities
+     */
+    private function sendStreamingHeaders(HttpSession $session, array $capabilities): void
+    {
+        if (\function_exists('ob_get_level') && \function_exists('ob_end_flush')) {
+            while (\ob_get_level() > 0) {
+                $status = \ob_get_status();
+                if (!\is_array($status)
+                    || !isset($status['flags'])
+                    || (((int) $status['flags']) & \PHP_OUTPUT_HANDLER_REMOVABLE) === 0
+                ) {
+                    break;
+                }
+                if (!\ob_end_flush()) {
+                    break;
+                }
+            }
+        }
+        if (\function_exists('ignore_user_abort')) {
+            \ignore_user_abort(true);
+        }
+
+        if (!\headers_sent()) {
+            \http_response_code(200);
+            \header('Content-Type: text/event-stream');
+            \header('Cache-Control: no-cache, no-transform');
+            \header('X-Accel-Buffering: no');
+            if ($capabilities['contentEncoding']) {
+                // Suppress Apache mod_deflate / proxy gzip which would
+                // re-chunk the body and break the client's SSE parser.
+                \header('Content-Encoding: identity');
+            }
+            \header('Mcp-Session-Id: ' . $session->getId());
+        }
+    }
+
+    /**
+     * @return array{contentEncoding: bool}
+     */
+    private function detectStreamingRuntime(): array
+    {
+        return [
+            'contentEncoding' => true,
+        ];
+    }
+
+    /**
+     * Register a one-shot shutdown handler that finalizes the stream if the
+     * handler terminates fatally (uncaught error, exit(), time limit). The
+     * handler appends a synthesized error frame for the originating request
+     * so clients never hang on a stream that died mid-flight.
+     */
+    private function registerStreamingShutdownGuard(): void
+    {
+        if ($this->streamingShutdownGuarded) {
+            return;
+        }
+        $this->streamingShutdownGuarded = true;
+
+        \register_shutdown_function(function (): void {
+            if (!$this->streamingActive
+                || $this->streamingSession === null
+                || $this->streamingState === null
+                || $this->currentStreamId === null
+            ) {
+                return;
+            }
+
+            $error = \error_get_last();
+            $isFatal = \is_array($error)
+                && \in_array(
+                    (int) $error['type'],
+                    [\E_ERROR, \E_PARSE, \E_CORE_ERROR, \E_COMPILE_ERROR, \E_USER_ERROR],
+                    true
+                );
+
+            // Suspension case: the handler emitted a server→client request
+            // and legitimately left the stream open. A fatal at shutdown is
+            // bad news for the in-memory pending state, but synthesizing a
+            // response here would poison the log with a terminator the
+            // resume path would then replay. Persist whatever we have and
+            // let the follow-up POST surface the real failure.
+            if ($this->streamingSuspensionDetected) {
+                try {
+                    $this->streamingState->saveTo($this->streamingSession);
+                    $this->sessionStore->save($this->streamingSession);
+                } catch (\Throwable) {
+                    // Ignore — we're already shutting down.
+                }
+                return;
+            }
+
+            if (!$this->streamingFinalEmitted && $this->currentOriginatingRequestId !== null) {
+                $reason = $isFatal
+                    ? 'Internal error: fatal during handler execution'
+                    : 'Internal error: handler terminated without a response';
+                try {
+                    $errorMessage = new JsonRpcMessage(new JSONRPCError(
+                        jsonrpc: '2.0',
+                        id: new RequestId($this->currentOriginatingRequestId),
+                        error: new JsonRpcErrorObject(
+                            code: -32603,
+                            message: $reason,
+                            data: null,
+                        ),
+                    ));
+                    $this->emitStreamingFrame($errorMessage);
+                } catch (\Throwable) {
+                    // Best effort. The shutdown handler must never throw.
+                }
+            }
+
+            try {
+                $this->streamingState->getRegistry()->markCompleted($this->currentStreamId);
+                $this->streamingState->saveTo($this->streamingSession);
+                $this->sessionStore->save($this->streamingSession);
+            } catch (\Throwable) {
+                // Ignore — we're already shutting down.
+            }
+        });
     }
 
     /**

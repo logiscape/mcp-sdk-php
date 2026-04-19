@@ -127,6 +127,66 @@ class Environment
     }
     
     /**
+     * Check whether the runtime can reliably flush SSE frames mid-request.
+     *
+     * The streaming-SSE path echoes one frame at a time to `php://output` and
+     * calls `flush()` between frames so the client observes progress while
+     * the tool handler is still executing. That only works when nothing in
+     * the stack is going to batch or rewrite the body:
+     *
+     *  - `zlib.output_compression` forces gzip on the whole response and is
+     *    incompatible with per-frame flushing.
+     *  - An active output buffer that is NOT removable (framework/SAPI-owned)
+     *    holds writes until the handler returns, defeating the point.
+     *  - `output_buffering` ini set to a non-empty non-numeric value (e.g.
+     *    "On") indicates PHP itself is holding an implicit buffer that the
+     *    ob_end_flush loop in the runner cannot drain deterministically.
+     *
+     * When this returns false the SDK falls back to the buffered emission
+     * path, which is still spec-correct on the wire (priming + progress +
+     * response events arrive in order) but does not stream mid-execution.
+     */
+    public static function canStreamSse(): bool
+    {
+        if (!self::canSupportSse()) {
+            return false;
+        }
+
+        // Refuse when PHP ini holds an implicit buffer we can't prove is
+        // removable. Integer values (including 0 and a positive byte count)
+        // map to a standard output buffer the runner already drains via
+        // ob_end_flush; string values like "On"/"Off" indicate framework
+        // or SAPI handling that the runner can't influence.
+        $iniBuf = ini_get('output_buffering');
+        if ($iniBuf !== false && $iniBuf !== '' && !is_numeric($iniBuf)) {
+            return false;
+        }
+
+        // Any active buffer that is not flagged REMOVABLE would trap frames
+        // in memory until the handler returns. Walk the stack once; bail at
+        // the first non-removable layer.
+        if (function_exists('ob_get_status')) {
+            $status = ob_get_status(true);
+            if (is_array($status)) {
+                foreach ($status as $layer) {
+                    $flags = is_array($layer) ? (int) ($layer['flags'] ?? 0) : 0;
+                    if (($flags & PHP_OUTPUT_HANDLER_REMOVABLE) === 0) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // `flush()` is needed to push each frame past Apache/nginx. If it's
+        // been disabled via disable_functions, streaming is not viable.
+        if (!function_exists('flush')) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
      * Get recommended configuration based on the detected environment.
      *
      * @return array{session_timeout: int, enable_sse: bool, max_queue_size: int} Recommended configuration options

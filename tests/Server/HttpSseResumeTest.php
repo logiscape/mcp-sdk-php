@@ -48,6 +48,26 @@ final class HttpSseResumeTest extends TestCase
         return $request;
     }
 
+    /**
+     * Simulate the side-effect the HttpServerRunner normally persists after
+     * initialize completes: mark the transport's session as initialized so
+     * follow-up GET/DELETE requests pass the spec §5.8.2 strict-session gate.
+     * Tests that talk directly to the transport (bypassing the runner) need
+     * this helper because the runner is where the mcp_server_session
+     * metadata normally lands.
+     */
+    private function markSessionInitialized(HttpServerTransport $transport): void
+    {
+        $session = $transport->getLastUsedSession();
+        if ($session === null) {
+            return;
+        }
+        $session->setMetadata('mcp_server_session', [
+            'initializationState' => 3, // InitializationState::Initialized
+        ]);
+        $transport->saveSession($session);
+    }
+
     private function getRequest(string $sessionId, ?string $lastEventId = null): HttpMessage
     {
         $request = new HttpMessage();
@@ -79,6 +99,7 @@ final class HttpSseResumeTest extends TestCase
         $this->assertNotNull($sessionId);
         $this->assertNotNull($session);
         $this->assertNotNull($streamId);
+        $this->markSessionInitialized($transport);
 
         // Manually seed the event log with several post-priming events.
         $state = SseSessionState::loadFrom($session);
@@ -124,6 +145,7 @@ final class HttpSseResumeTest extends TestCase
         $sessionId = $postResp->getHeader('Mcp-Session-Id');
         $session = $transport->getLastUsedSession();
         $this->assertNotNull($session);
+        $this->markSessionInitialized($transport);
 
         $streamA = 'streamA';
         $streamB = 'streamB';
@@ -158,6 +180,7 @@ final class HttpSseResumeTest extends TestCase
         $postResp = $transport->handleRequest($this->postRequest($this->initBody(30)));
         $sessionId = $postResp->getHeader('Mcp-Session-Id');
         $this->assertNotNull($sessionId);
+        $this->markSessionInitialized($transport);
 
         $resp = $transport->handleRequest($this->getRequest($sessionId, 'unknown-stream:5'));
         $this->assertSame(404, $resp->getStatusCode());
@@ -177,6 +200,7 @@ final class HttpSseResumeTest extends TestCase
         $postResp = $transport->handleRequest($this->postRequest($this->initBody(40)));
         $sessionId = $postResp->getHeader('Mcp-Session-Id');
         $this->assertNotNull($sessionId);
+        $this->markSessionInitialized($transport);
 
         $resp = $transport->handleRequest($this->getRequest($sessionId, 'not-a-cursor'));
         $this->assertSame(400, $resp->getStatusCode());
@@ -195,6 +219,7 @@ final class HttpSseResumeTest extends TestCase
         $postResp = $transport->handleRequest($this->postRequest($this->initBody(50)));
         $sessionId = $postResp->getHeader('Mcp-Session-Id');
         $this->assertNotNull($sessionId);
+        $this->markSessionInitialized($transport);
 
         $resp = $transport->handleRequest($this->getRequest($sessionId, null));
 
@@ -244,6 +269,7 @@ final class HttpSseResumeTest extends TestCase
         $postResp = $transport->handleRequest($this->postRequest($this->initBody(80)));
         $sessionId = $postResp->getHeader('Mcp-Session-Id');
         $this->assertNotNull($sessionId);
+        $this->markSessionInitialized($transport);
 
         // Seed an outgoing message for this session before the GET fires.
         // writeMessage routes to the current session id set by the POST.
@@ -325,6 +351,7 @@ final class HttpSseResumeTest extends TestCase
         $streamId = $transport->currentStreamId();
         $this->assertNotNull($session);
         $this->assertNotNull($streamId);
+        $this->markSessionInitialized($transport);
 
         // Emit a real response through the normal path so the log is populated.
         $transport->writeMessage(new JsonRpcMessage(new JSONRPCResponse(
