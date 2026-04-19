@@ -26,6 +26,7 @@ use Mcp\Server\Elicitation\ElicitationContext;
 use Mcp\Server\Elicitation\ElicitationDeclinedException;
 use Mcp\Server\Elicitation\ElicitationSuspendException;
 use Mcp\Server\Transport\Http\FileSessionStore;
+use Mcp\Server\Transport\Http\HttpIoInterface;
 use Mcp\Server\Transport\Http\SessionStoreInterface;
 use Mcp\Server\Transport\Http\StandardPhpAdapter;
 use Mcp\Types\BlobResourceContents;
@@ -664,12 +665,31 @@ class McpServer
         $sessionStore = $this->sessionStore
             ?? new FileSessionStore(sys_get_temp_dir() . '/mcp_sessions');
 
+        // Allow embedders to inject a custom HttpIoInterface via the
+        // httpOptions key 'io'. The option is stripped before the
+        // remaining options reach the transport's Config so it is not
+        // surfaced as user-facing configuration. Defaults to NativePhpIo
+        // inside HttpServerRunner when omitted — the cPanel/Apache path.
+        $io = null;
+        $runnerOptions = $this->httpOptions;
+        if (array_key_exists('io', $runnerOptions)) {
+            $candidate = $runnerOptions['io'];
+            unset($runnerOptions['io']);
+            if (!$candidate instanceof HttpIoInterface) {
+                throw new \InvalidArgumentException(
+                    "httpOptions['io'] must implement " . HttpIoInterface::class
+                );
+            }
+            $io = $candidate;
+        }
+
         $runner = new HttpServerRunner(
             $this->server,
             $initOptions,
-            $this->httpOptions,
+            $runnerOptions,
             $this->logger,
-            $sessionStore
+            $sessionStore,
+            $io
         );
 
         $adapter = new StandardPhpAdapter($runner);

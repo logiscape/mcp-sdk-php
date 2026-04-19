@@ -34,13 +34,17 @@ use Mcp\Types\JSONRPCError;
 use Mcp\Types\RequestId;
 use Mcp\Types\JsonRpcErrorObject;
 use Mcp\Shared\McpError;
+use Mcp\Shared\Version;
 use Mcp\Server\Transport\Http\Config;
 use Mcp\Server\Transport\Http\Environment;
+use Mcp\Server\Transport\Http\HttpIoInterface;
 use Mcp\Server\Transport\Http\HttpMessage;
 use Mcp\Server\Transport\Http\HttpSession;
 use Mcp\Server\Transport\Http\InMemorySessionStore;
 use Mcp\Server\Transport\Http\MessageQueue;
+use Mcp\Server\Transport\Http\NativePhpIo;
 use Mcp\Server\Transport\Http\SessionStoreInterface;
+use Mcp\Server\Transport\Http\StreamedHttpMessage;
 use Mcp\Server\Transport\Http\Sse\SseEmitter;
 use Mcp\Server\Transport\Http\Sse\SseFrame;
 use Mcp\Server\Transport\Http\Sse\SseSessionState;
@@ -175,6 +179,14 @@ class HttpServerTransport implements Transport
     private bool $streamingShutdownGuarded = false;
 
     /**
+     * SAPI side-effect adapter. All direct PHP output (headers, body, flush,
+     * abort handling, shutdown registration) flows through this interface so
+     * the transport can be embedded in non-standard hosts and exercised by
+     * tests without touching php://output.
+     */
+    private HttpIoInterface $io;
+
+    /**
      * Originating request id of the handler currently being RESUMED after a
      * suspend (e.g., inside HttpServerSession::handleElicitationResponse).
      * While set, every outgoing message — response, notification, nested
@@ -190,8 +202,12 @@ class HttpServerTransport implements Transport
      *
      * @param array<string, mixed> $options Configuration options
      */
-    public function __construct(array $options = [], ?SessionStoreInterface $sessionStore = null, ?TokenValidatorInterface $validator = null)
-    {
+    public function __construct(
+        array $options = [],
+        ?SessionStoreInterface $sessionStore = null,
+        ?TokenValidatorInterface $validator = null,
+        ?HttpIoInterface $io = null
+    ) {
         $this->config = new Config($options);
         $this->validator = $validator ?? $this->config->getTokenValidator();
         $this->messageQueue = new MessageQueue(
@@ -200,6 +216,18 @@ class HttpServerTransport implements Transport
 
         // If no store passed, default to an in-memory store
         $this->sessionStore = $sessionStore ?? new InMemorySessionStore();
+
+        $this->io = $io ?? new NativePhpIo();
+    }
+
+    /**
+     * Swap the SAPI adapter after construction. Intended for embedders that
+     * build the transport eagerly (e.g. inside a DI container) and inject a
+     * per-request adapter once the HTTP context is known.
+     */
+    public function setIo(HttpIoInterface $io): void
+    {
+        $this->io = $io;
     }
     
     /**
@@ -344,6 +372,15 @@ class HttpServerTransport implements Transport
 
         // DNS rebinding protection: validate Origin header (MCP spec MUST requirement)
         if ($rejection = $this->validateOrigin($request)) {
+            return $rejection;
+        }
+
+        // Spec 2025-11-25 §Transports: an invalid or unsupported
+        // MCP-Protocol-Version header MUST be answered with 400 Bad Request.
+        // Absence is handled leniently per the spec's backwards-compatibility
+        // clause — the SDK's session already carries the negotiated version,
+        // so there is no need to fabricate a fallback here.
+        if ($rejection = $this->validateProtocolVersionHeader($request)) {
             return $rejection;
         }
 
@@ -955,15 +992,28 @@ class HttpServerTransport implements Transport
      * the handler is invoked; from this point on writeMessage() flushes
      * each frame straight to php://output.
      *
-     * Headers are sent via `header()` rather than returned on an HttpMessage
-     * because the runner needs to hand control back to the server session
-     * while the HTTP response is mid-body. The runner later sees a sentinel
-     * HttpMessage from finalizeStreamingSse() (with a X-Mcp-Already-Emitted
-     * marker) and skips its body-emission path so we don't double-echo.
+     * Headers are sent through the configured HttpIoInterface rather than
+     * returned on an HttpMessage because the runner needs to hand control
+     * back to the server session while the HTTP response is mid-body. The
+     * runner later sees a StreamedHttpMessage from finalizeStreamingSse()
+     * and skips its body-emission path so we don't double-echo.
      *
      * On any runtime that can't reliably flush (see Environment::canStreamSse),
      * callers should not invoke this method — they should fall back to
      * emitSseResponse() which buffers the body and sends it at the end.
+     *
+     * @param HttpSession $session The HTTP session being streamed.
+     * @param object|null $ioSink  Optional per-stream IO override.
+     *                             - HttpIoInterface: fully overrides
+     *                               $this->io for this stream; status,
+     *                               headers, body, flush, and shutdown
+     *                               registration all route to it.
+     *                             - Legacy duck-typed object (write/
+     *                               aborted only): wrapped in a no-op
+     *                               shim for existing tests. New callers
+     *                               should use HttpIoInterface or the
+     *                               transport constructor instead.
+     *                             - null: uses $this->io (production).
      */
     public function beginStreamingSseOutput(HttpSession $session, ?object $ioSink = null): void
     {
@@ -981,34 +1031,34 @@ class HttpServerTransport implements Transport
             $this->currentOriginatingRequestId
         );
 
-        // Set up the output sink. In production the sink echoes to the SAPI
-        // output buffer and flushes; tests inject a captured sink so the
-        // exact bytes produced are observable without touching php://output.
-        $sink = $ioSink;
-        if ($sink === null) {
-            $capabilities = $this->detectStreamingRuntime();
-            $this->sendStreamingHeaders($session, $capabilities);
-            $write = static function (string $s): void {
-                echo $s;
-                if (\function_exists('flush')) {
-                    \flush();
-                }
-            };
-            $aborted = static function (): bool {
-                return \function_exists('connection_aborted')
-                    ? (bool) \connection_aborted()
-                    : false;
-            };
-        } else {
-            // Test injection: $ioSink->write(string), $ioSink->aborted(): bool
-            $sinkObj = $ioSink;
-            $write = static function (string $s) use ($sinkObj): void {
-                $sinkObj->write($s);
-            };
-            $aborted = static function () use ($sinkObj): bool {
-                return method_exists($sinkObj, 'aborted') ? (bool) $sinkObj->aborted() : false;
-            };
-        }
+        // Resolve which HttpIoInterface this stream will use. Priority:
+        //   1. $ioSink is already an HttpIoInterface → use it directly;
+        //      it fully overrides $this->io for this stream (status,
+        //      headers, body, flush, shutdown).
+        //   2. $ioSink is a duck-typed legacy object (write/aborted only)
+        //      → wrap in a shim whose sendStatus/sendHeader/drain/flush/
+        //        registerShutdownHandler are no-ops, preserving the pre-
+        //        refactor contract of "tests inject a sink and bypass
+        //        SAPI entirely" while still letting frames flow.
+        //   3. $ioSink is null (production) → use $this->io, which
+        //      defaults to NativePhpIo.
+        $io = $this->resolveStreamingIo($ioSink);
+
+        // Route status + headers through the resolved IO. For the legacy
+        // duck-typed shim these are no-ops, matching the pre-refactor
+        // behavior that the test path recorded no SAPI calls. For
+        // production and for a direct HttpIoInterface embedder, this is
+        // the only place the SSE response headers and status land.
+        $capabilities = $this->detectStreamingRuntime();
+        $this->sendStreamingHeaders($session, $capabilities, $io);
+
+        $write = static function (string $s) use ($io): void {
+            $io->write($s);
+            $io->flush();
+        };
+        $aborted = static function () use ($io): bool {
+            return $io->connectionAborted();
+        };
 
         $emitter = new SseEmitter($write, $aborted);
 
@@ -1031,7 +1081,7 @@ class HttpServerTransport implements Transport
         $this->streamingFinalEmitted = false;
         $this->streamingSuspensionDetected = false;
 
-        $this->registerStreamingShutdownGuard();
+        $this->registerStreamingShutdownGuard($io);
     }
 
     /**
@@ -1168,6 +1218,17 @@ class HttpServerTransport implements Transport
         $this->streamingState = null;
         $this->streamingSession = null;
 
+        // Clear the shutdown-guard latch so the next stream on this
+        // transport registers a fresh handler on its own resolved IO.
+        // Without this, long-running hosts (FrankenPHP, RoadRunner) and
+        // any transport reused across requests would keep the first
+        // request's guard and silently skip registration for every
+        // subsequent stream — even though a per-request HttpIoInterface
+        // passed via setIo() or $ioSink expects to own its own fatal-
+        // safety-net. The latch still prevents double-registration
+        // within a single stream cycle (begin→finalize).
+        $this->streamingShutdownGuarded = false;
+
         return $this->sentinelAlreadyEmittedResponse();
     }
 
@@ -1303,12 +1364,15 @@ class HttpServerTransport implements Transport
     }
 
     /**
-     * Build the zero-body sentinel the runner uses to signal "response was
-     * already emitted directly to the wire — don't echo the body again".
+     * Build the zero-body StreamedHttpMessage the runner uses to signal
+     * "response was already emitted directly to the wire — don't echo the
+     * body again". The X-Mcp-Already-Emitted header is retained for one
+     * release for backward compatibility with anything that inspected it
+     * before the StreamedHttpMessage type existed.
      */
     private function sentinelAlreadyEmittedResponse(): HttpMessage
     {
-        $response = new HttpMessage('');
+        $response = new StreamedHttpMessage('');
         $response->setStatusCode(200);
         $response->setHeader('Content-Type', 'text/event-stream');
         $response->setHeader('Cache-Control', 'no-cache, no-transform');
@@ -1318,47 +1382,87 @@ class HttpServerTransport implements Transport
     }
 
     /**
-     * Walk active output buffers, push status + headers to the SAPI, and
-     * disable user-abort short-circuits so a mid-handler disconnect does
+     * Resolve which HttpIoInterface a streaming POST should use. Supports
+     * the pre-refactor duck-typed sink injection (object with write/aborted
+     * methods) by wrapping it in a shim so existing tests keep passing.
+     */
+    private function resolveStreamingIo(?object $ioSink): HttpIoInterface
+    {
+        if ($ioSink === null) {
+            return $this->io;
+        }
+        if ($ioSink instanceof HttpIoInterface) {
+            return $ioSink;
+        }
+        return new class ($ioSink) implements HttpIoInterface {
+            public function __construct(private readonly object $sink)
+            {
+            }
+            public function sendStatus(int $code): void
+            {
+            }
+            public function sendHeader(string $name, string $value): void
+            {
+            }
+            public function headersSent(): bool
+            {
+                return false;
+            }
+            public function drainOutputBuffers(): void
+            {
+            }
+            public function disableAbortKills(): void
+            {
+            }
+            public function write(string $bytes): void
+            {
+                if (\method_exists($this->sink, 'write')) {
+                    $this->sink->write($bytes);
+                }
+            }
+            public function flush(): void
+            {
+            }
+            public function connectionAborted(): bool
+            {
+                if (\method_exists($this->sink, 'aborted')) {
+                    return (bool) $this->sink->aborted();
+                }
+                return false;
+            }
+            public function registerShutdownHandler(callable $fn): void
+            {
+            }
+        };
+    }
+
+    /**
+     * Walk active output buffers, push status + headers through the adapter,
+     * and disable user-abort short-circuits so a mid-handler disconnect does
      * not silently kill the PHP process before it persists final state.
      *
      * Only invoked from the production path (no-$ioSink branch) of
-     * beginStreamingSseOutput. Tests inject a sink and bypass the SAPI
-     * entirely.
+     * beginStreamingSseOutput. Tests inject a sink and bypass this path
+     * entirely so header/status capture stays empty on the legacy path.
      *
      * @param array{contentEncoding: bool} $capabilities
      */
-    private function sendStreamingHeaders(HttpSession $session, array $capabilities): void
+    private function sendStreamingHeaders(HttpSession $session, array $capabilities, HttpIoInterface $io): void
     {
-        if (\function_exists('ob_get_level') && \function_exists('ob_end_flush')) {
-            while (\ob_get_level() > 0) {
-                $status = \ob_get_status();
-                if (!\is_array($status)
-                    || !isset($status['flags'])
-                    || (((int) $status['flags']) & \PHP_OUTPUT_HANDLER_REMOVABLE) === 0
-                ) {
-                    break;
-                }
-                if (!\ob_end_flush()) {
-                    break;
-                }
-            }
-        }
-        if (\function_exists('ignore_user_abort')) {
-            \ignore_user_abort(true);
-        }
+        $io->drainOutputBuffers();
+        $io->disableAbortKills();
 
-        if (!\headers_sent()) {
-            \http_response_code(200);
-            \header('Content-Type: text/event-stream');
-            \header('Cache-Control: no-cache, no-transform');
-            \header('X-Accel-Buffering: no');
+        if (!$io->headersSent()) {
+            $io->sendStatus(200);
+            $io->sendHeader('Content-Type', 'text/event-stream');
+            $io->sendHeader('Cache-Control', 'no-cache, no-transform');
+            $io->sendHeader('X-Accel-Buffering', 'no');
             if ($capabilities['contentEncoding']) {
                 // Suppress Apache mod_deflate / proxy gzip which would
                 // re-chunk the body and break the client's SSE parser.
-                \header('Content-Encoding: identity');
+                $io->sendHeader('Content-Encoding', 'identity');
             }
-            \header('Mcp-Session-Id: ' . $session->getId());
+            $io->sendHeader('Mcp-Session-Id', $session->getId());
         }
     }
 
@@ -1377,15 +1481,22 @@ class HttpServerTransport implements Transport
      * handler terminates fatally (uncaught error, exit(), time limit). The
      * handler appends a synthesized error frame for the originating request
      * so clients never hang on a stream that died mid-flight.
+     *
+     * Registered on the IO resolved by beginStreamingSseOutput() — so an
+     * embedder passing a per-request HttpIoInterface via $ioSink gets its
+     * shutdown registered on that adapter, not on $this->io. The legacy
+     * duck-typed shim's registerShutdownHandler is a no-op, matching the
+     * pre-refactor behavior where tests did not register real PHP
+     * shutdown callbacks.
      */
-    private function registerStreamingShutdownGuard(): void
+    private function registerStreamingShutdownGuard(HttpIoInterface $io): void
     {
         if ($this->streamingShutdownGuarded) {
             return;
         }
         $this->streamingShutdownGuarded = true;
 
-        \register_shutdown_function(function (): void {
+        $io->registerShutdownHandler(function (): void {
             if (!$this->streamingActive
                 || $this->streamingSession === null
                 || $this->streamingState === null
@@ -1552,7 +1663,7 @@ class HttpServerTransport implements Transport
             while (\hrtime(true) < $deadlineNs) {
                 // Best-effort abort check. In buffered mode this rarely fires
                 // before the response is flushed, but costs nothing to probe.
-                if (\connection_aborted()) {
+                if ($this->io->connectionAborted()) {
                     break;
                 }
                 $remainingUs = (int) (($deadlineNs - \hrtime(true)) / 1000);
@@ -1923,6 +2034,43 @@ class HttpServerTransport implements Transport
         }
 
         return null;
+    }
+
+    /**
+     * Validate the MCP-Protocol-Version HTTP header when present.
+     *
+     * Spec 2025-11-25 §Transports: "If the server receives a request with an
+     * invalid or unsupported MCP-Protocol-Version, it MUST respond with 400
+     * Bad Request." The same section permits lenience on absence ("if the
+     * server does not receive an MCP-Protocol-Version header, and has no
+     * other way to identify the version ... the server SHOULD assume protocol
+     * version 2025-03-26"). Because this SDK persists the negotiated version
+     * on the session, absence is a no-op here — the session remains
+     * authoritative for downstream feature gating. Only a *present* value
+     * outside SUPPORTED_PROTOCOL_VERSIONS triggers the reject path.
+     *
+     * @return HttpMessage|null A 400 response on rejection, or null to allow
+     */
+    private function validateProtocolVersionHeader(HttpMessage $request): ?HttpMessage
+    {
+        $version = $request->getHeader('MCP-Protocol-Version');
+        if ($version === null || $version === '') {
+            return null;
+        }
+        if (in_array($version, Version::SUPPORTED_PROTOCOL_VERSIONS, true)) {
+            return null;
+        }
+        return HttpMessage::createJsonResponse(
+            [
+                'jsonrpc' => '2.0',
+                'id' => null,
+                'error' => [
+                    'code' => -32600,
+                    'message' => 'Unsupported MCP-Protocol-Version: ' . $version,
+                ],
+            ],
+            400
+        );
     }
 
     /**

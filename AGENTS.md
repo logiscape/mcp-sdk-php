@@ -133,6 +133,7 @@ When using the convenience wrapper, `run()` is a router that uses the stdio tran
    - Stdio: Uses PHP process control (pcntl) for server process management
    - HTTP: Supports both standard HTTP and Server-Sent Events (SSE) for streaming
    - `MemoryStream` for testing without actual I/O
+   - `HttpIoInterface`: SAPI adapter seam for the HTTP runner. `NativePhpIo` (default) wraps `header()`/`echo`/`flush()`/`ob_*`/`connection_aborted` for cPanel/Apache/FPM; `BufferedIo` captures bytes for tests or non-SAPI hosts. Pass a custom implementation via `McpServer::httpOptions(['io' => $adapter])` or the `HttpServerRunner` constructor to embed the runner in a framework (Symfony, Slim, FrankenPHP, RoadRunner). `handleRequest()` returns a `StreamedHttpMessage` when the streaming-SSE body was already written through the adapter during handler execution — integrators can check `instanceof StreamedHttpMessage` to skip re-emitting the body.
 
 ### Handler Registration Pattern
 

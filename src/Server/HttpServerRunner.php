@@ -27,9 +27,12 @@ declare(strict_types=1);
 namespace Mcp\Server;
 
 use Mcp\Server\Transport\HttpServerTransport;
-use Mcp\Server\Transport\Http\HttpMessage;
 use Mcp\Server\Transport\Http\Environment;
+use Mcp\Server\Transport\Http\HttpIoInterface;
+use Mcp\Server\Transport\Http\HttpMessage;
+use Mcp\Server\Transport\Http\NativePhpIo;
 use Mcp\Server\Transport\Http\SessionStoreInterface;
+use Mcp\Server\Transport\Http\StreamedHttpMessage;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -47,14 +50,23 @@ class HttpServerRunner extends ServerRunner
      * @var HttpServerTransport
      */
     private HttpServerTransport $transport;
-    
+
     /**
      * Server session instance.
      *
      * @var HttpServerSession|null
      */
     private ?HttpServerSession $serverSession = null;
-    
+
+    /**
+     * SAPI side-effect adapter shared with the transport. Every header,
+     * body byte, flush, abort check, and shutdown registration performed
+     * on behalf of this runner flows through this object so the runner
+     * can be embedded in non-standard hosts or exercised by tests without
+     * touching php://output.
+     */
+    private HttpIoInterface $io;
+
     /**
      * Constructor.
      *
@@ -63,17 +75,22 @@ class HttpServerRunner extends ServerRunner
      * @param array<string, mixed> $httpOptions HTTP transport options
      * @param LoggerInterface|null $logger Logger
      * @param SessionStoreInterface|null $sessionStore Session store
+     * @param HttpIoInterface|null $io SAPI adapter (defaults to NativePhpIo)
      */
     public function __construct(
         private readonly Server $server,
         private readonly InitializationOptions $initOptions,
         array $httpOptions = [],
         ?LoggerInterface $logger = null,
-        ?SessionStoreInterface $sessionStore = null
+        ?SessionStoreInterface $sessionStore = null,
+        ?HttpIoInterface $io = null
     ) {
-        // Create HTTP transport
-        $this->transport = new HttpServerTransport($httpOptions, $sessionStore);
-        
+        $this->io = $io ?? new NativePhpIo();
+
+        // Create HTTP transport, sharing the SAPI adapter so only one
+        // implementation owns side effects for this request.
+        $this->transport = new HttpServerTransport($httpOptions, $sessionStore, null, $this->io);
+
         parent::__construct($server, $initOptions, $logger ?? new NullLogger());
     }
     
@@ -198,64 +215,49 @@ class HttpServerRunner extends ServerRunner
     public function sendResponse(HttpMessage $response): void
     {
         // Streaming SSE path: the transport already wrote headers + priming
-        // + progress frames + final response directly to the SAPI during
+        // + progress frames + final response through the SAPI adapter during
         // handler execution. sendResponse() is called at the tail of the
         // runner loop just to keep a single exit point; for an already-
         // emitted response we have nothing to add to the wire. Skip the
         // body path entirely and let the request end.
-        if ($response->getHeader('X-Mcp-Already-Emitted') === '1') {
+        //
+        // The StreamedHttpMessage instanceof check is the canonical signal;
+        // the legacy X-Mcp-Already-Emitted header is still recognized for
+        // backward compatibility with any external code that inspected it
+        // before StreamedHttpMessage existed.
+        if ($response instanceof StreamedHttpMessage
+            || $response->getHeader('X-Mcp-Already-Emitted') === '1'
+        ) {
             return;
         }
 
-        // Send headers
-        http_response_code($response->getStatusCode());
+        // Send status + headers through the adapter. All SAPI side effects
+        // live inside HttpIoInterface implementations — the runner itself
+        // stays free of direct header()/echo/flush calls.
+        $this->io->sendStatus($response->getStatusCode());
 
         foreach ($response->getHeaders() as $name => $value) {
-            header("$name: $value");
+            $this->io->sendHeader($name, $value);
         }
 
         // For SSE responses, make the payload visible to the client as
-        // promptly as possible: drain any active output buffers and force a
-        // flush after writing. Each helper is guarded with function_exists()
-        // because hardened shared-hosting environments may remove these from
-        // the function table via disable_functions; error suppression (`@`)
-        // would not prevent a fatal on a missing/disabled function.
+        // promptly as possible: drain any active output buffers and disable
+        // user-abort short-circuits before writing.
         $contentType = $response->getHeader('Content-Type') ?? '';
         $isSse = \stripos($contentType, 'text/event-stream') !== false;
         if ($isSse) {
-            if (\function_exists('ob_end_flush')) {
-                // Drain active buffers so SSE frames reach the client
-                // promptly. A buffer can be non-removable (framework- or
-                // SAPI-owned) in which case ob_end_flush() returns false
-                // without changing ob_get_level — looping would spin
-                // forever. Guard with the REMOVABLE flag and break on a
-                // false return so response delivery never hangs.
-                while (\ob_get_level() > 0) {
-                    $status = \ob_get_status();
-                    if (!\is_array($status)
-                        || !isset($status['flags'])
-                        || (((int) $status['flags']) & \PHP_OUTPUT_HANDLER_REMOVABLE) === 0
-                    ) {
-                        break;
-                    }
-                    if (!\ob_end_flush()) {
-                        break;
-                    }
-                }
-            }
-            if (\function_exists('ignore_user_abort')) {
-                \ignore_user_abort(true);
-            }
+            $this->io->drainOutputBuffers();
+            $this->io->disableAbortKills();
         }
 
         // Send body
         $body = $response->getBody();
         if ($body !== null) {
-            echo $body;
+            $this->io->write($body);
         }
 
-        if ($isSse && \function_exists('flush')) {
-            \flush();
+        if ($isSse) {
+            $this->io->flush();
         }
     }
     

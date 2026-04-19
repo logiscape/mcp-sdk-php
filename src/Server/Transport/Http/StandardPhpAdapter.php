@@ -57,23 +57,31 @@ class StandardPhpAdapter
         try {
             // Create request from globals
             $request = HttpMessage::fromGlobals();
-            
+
             // Process the request
             $response = $this->serverRunner->handleRequest($request);
-            
+
             // Send the response
             $this->serverRunner->sendResponse($response);
         } catch (\Exception $e) {
-            // Log error
+            // Log error to the PHP error log (separate from the HTTP
+            // response channel — useful for shared-hosting diagnostics
+            // where the injected IO may not surface server-side logs).
             error_log('MCP Server error: ' . $e->getMessage());
-            
-            // Send error response
-            http_response_code(500);
-            header('Content-Type: application/json');
-            echo json_encode([
-                'error' => 'Internal server error',
-                'message' => $e->getMessage()
-            ]);
+
+            // Route the 500 through the runner so the same HttpIoInterface
+            // that would have owned a successful response also owns the
+            // exception path. Embedders using BufferedIo or a framework
+            // adapter need predictable capture on errors, not silent
+            // direct-SAPI writes.
+            $errorResponse = HttpMessage::createJsonResponse(
+                [
+                    'error' => 'Internal server error',
+                    'message' => $e->getMessage(),
+                ],
+                500,
+            );
+            $this->serverRunner->sendResponse($errorResponse);
         }
     }
     
