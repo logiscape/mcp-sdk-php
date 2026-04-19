@@ -385,7 +385,23 @@ final class HttpIoInjectionTest extends TestCase
         };
 
         $adapter = new StandardPhpAdapter($throwingRunner);
-        $adapter->handle();
+
+        // The catch block deliberately calls error_log() for operator
+        // diagnostics. Under PHPUnit that writes to stderr and surfaces
+        // as noise ("MCP Server error: simulated handler failure") on
+        // every run. Redirect to a temp file for the duration of this
+        // test only so the suite output stays clean without suppressing
+        // the production diagnostic.
+        $previousErrorLog = \ini_get('error_log');
+        $tempErrorLog = \tempnam(\sys_get_temp_dir(), 'mcp-test-error-log-');
+        $this->assertNotFalse($tempErrorLog);
+        \ini_set('error_log', $tempErrorLog);
+        try {
+            $adapter->handle();
+        } finally {
+            \ini_set('error_log', $previousErrorLog === false ? '' : $previousErrorLog);
+            @\unlink($tempErrorLog);
+        }
 
         $this->assertSame(500, $io->status, '500 status must land on the injected IO');
         $contentType = $io->headerValues('Content-Type');
