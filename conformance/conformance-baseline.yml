@@ -24,12 +24,6 @@ server:
     # HTTP rework; generalising it to sampling requires a shared
     # ClientRequestSuspendException path and a sampling-specific responder.
 
-  - elicitation-sep1330-enums
-    # Enum support in elicitation schemas: partially implemented but the
-    # conformance tool's fixture exercises edge cases the SDK's elicitation
-    # schema handling does not yet cover. Tracked separately from the
-    # transport-layer fixes.
-
 client:
   # --- OAuth: not implemented ---
   - auth/client-credentials-jwt

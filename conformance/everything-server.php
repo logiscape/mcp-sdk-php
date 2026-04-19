@@ -280,7 +280,7 @@ $server->tool('test_elicitation_sep1330_enums', 'Requests elicitation with enum 
                         ['const' => 'value3', 'title' => 'Third Option'],
                     ],
                 ],
-                'legacyTitled' => [
+                'legacyEnum' => [
                     'type' => 'string',
                     'enum' => ['opt1', 'opt2', 'opt3'],
                     'enumNames' => ['Option One', 'Option Two', 'Option Three'],
