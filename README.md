@@ -14,7 +14,7 @@ This PHP SDK implements the full MCP specification, making it easy to:
 
 This SDK began as a PHP port of the official [Python SDK](https://github.com/modelcontextprotocol/python-sdk) for the Model Context Protocol. It has since been expanded to fully support MCP using native PHP functions, helping to maximize compatibility with most standard web hosting environments.
 
-This SDK is primarily targeted at developers working on frontier AI integration solutions. Some functionality may be incomplete and implementations should undergo thorough testing and security review by experienced developers prior to production use.
+This SDK features a 100% pass rate on the applicable required [MCP Conformance Tests](https://github.com/modelcontextprotocol/conformance) as of testing suite v0.1.16 and aims to maintain full conformance as the spec and tests evolve, not including tests still marked as experimental or optional extensions.
 
 ## Installation
 

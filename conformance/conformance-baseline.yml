@@ -6,18 +6,13 @@
 #
 # Each entry documents WHY the test fails so SDK fixes can be targeted in future updates.
 #
-# Usage (via composer scripts — recommended):
-#   composer conformance            # Run both server and client tests
-#   composer conformance-server     # Run server tests only
-#   composer conformance-client     # Run client tests only
-#
 # Last updated: 2026-04-20
 # Conformance tool version: 0.1.16
 
 server: []
 
 client:
-  # --- OAuth: not implemented ---
+  # --- MCP Extensions: these are optional features that are not currently fully implemented ---
   - auth/client-credentials-jwt
     # No client_credentials grant_type or JWT assertion (client_assertion,
     # client_assertion_type) implementation.

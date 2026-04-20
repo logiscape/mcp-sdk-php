@@ -16,7 +16,8 @@ A comprehensive guide to developing Model Context Protocol servers using the `lo
 - [Part 6: Structured Output](#part-6-structured-output)
 - [Part 7: Returning Rich Content](#part-7-returning-rich-content)
 - [Part 8: Requesting Input with Elicitation](#part-8-requesting-input-with-elicitation)
-- [Part 9: Multi-Capability Servers](#part-9-multi-capability-servers)
+- [Part 9: Server-Initiated LLM Sampling](#part-9-server-initiated-llm-sampling)
+- [Part 10: Multi-Capability Servers](#part-10-multi-capability-servers)
 - [Appendix A: Configuration Reference](#appendix-a-configuration-reference)
 - [Appendix B: Deployment Checklist](#appendix-b-deployment-checklist)
 
@@ -30,7 +31,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io) (MCP) is an open s
 - **Prompts** -- Reusable message templates the user can select (user-controlled)
 - **Resources** -- Data that provides context to the model (application-controlled)
 
-The `logiscape/mcp-sdk-php` SDK implements the MCP specification (including the latest 2025-11-25 revision) for PHP 8.1+. It provides a `McpServer` convenience wrapper that lets you build a fully functional MCP server in just a few lines of code. The same server file can run locally via stdio or remotely over HTTP -- making it deployable to standard cPanel/Apache hosting with zero infrastructure changes.
+The `logiscape/mcp-sdk-php` SDK implements the MCP specification (including the latest 2025-11-25 revision) for PHP 8.1+. It provides a `McpServer` convenience wrapper that lets you build a fully functional MCP server in just a few lines of code. The same server file can run locally via stdio or remotely over HTTP -- making it deployable to standard cPanel/Apache hosting with zero infrastructure changes. Servers can also request information back from the client: elicitation (form mode since `2025-06-18`, URL mode since `2025-11-25`) and server-initiated LLM sampling (in the base spec since `2024-11-05`, with tool-enabled sampling added in `2025-11-25`) work across both transports, and the HTTP transport auto-suspends and resumes long-running tool calls to make that possible on stateless PHP.
 
 ### What You Can Build
 
@@ -707,7 +708,7 @@ $server
     ->httpOptions([
         'session_timeout' => 1800,     // 30-minute session timeout
         'max_queue_size' => 500,       // Message queue limit
-        'enable_sse' => false,         // Disable SSE for shared hosting compatibility
+        'enable_sse' => false,         // Plain JSON responses (default; see "Streaming and graceful fallback" below)
         'shared_hosting' => true,      // Optimize for shared hosting
         'server_header' => 'My-MCP-Server/1.0',
         'allowed_origins' => ['yoursite.com'],  // DNS rebinding protection (see below)
@@ -718,6 +719,32 @@ $server
     })
     ->run();
 ```
+
+### Streaming and Graceful Fallback
+
+The HTTP transport can respond to a single POST in one of three wire formats: a plain JSON body, a buffered `text/event-stream` body (one HTTP response that happens to be SSE-framed), or a live-flushed SSE stream that emits frames as the tool runs. Two settings control which one a given request gets:
+
+- `enable_sse` (default `false`) is the **master switch**. While it's off, every POST gets a plain JSON response regardless of what the client asked for -- this is the safe default for compatibility with arbitrary shared hosts. Set it to `true` to let the transport negotiate SSE with clients that advertise `text/event-stream` in their `Accept` header. The default is intentionally conservative because every spec-compliant MCP client lists both media types in `Accept`, so flipping to SSE silently would change the wire `Content-Type` on every deployment.
+- `sse_mode` (default `'auto'`) is a **secondary mode** that only kicks in once SSE has been enabled and the transport has chosen SSE for a given request. It decides between buffered and live-flushed framing. When `enable_sse => false` it has no effect.
+
+Live flushing needs a PHP runtime that actually delivers `flush()` output to the client, which is not a given on shared hosting -- `zlib.output_compression`, SAPI-owned `output_buffering`, `mod_deflate`, and a few similar settings will swallow flushes or interleave compressed chunks with the SSE framing. The SDK detects all of that automatically. `Environment::canStreamSse()` walks the output buffer stack and checks each relevant ini setting; if anything would break live streaming, the transport silently downgrades to the buffered body. No request ever hangs waiting for a flush the environment refuses to deliver, and the client always gets a spec-compliant response.
+
+To opt into SSE and pick a mode:
+
+```php
+$server->httpOptions([
+    'enable_sse' => true,   // required to respond with text/event-stream
+    'sse_mode'   => 'auto', // 'auto' | 'streaming' | 'buffered'
+]);
+```
+
+The modes behave as follows (after `enable_sse => true`):
+
+- `'auto'` (default) -- live-flush when (a) the runtime supports it *and* (b) the client's request carries a `_meta.progressToken`, otherwise buffer. Short JSON-RPC round-trips stay on the simpler buffered path; live streaming is reserved for tools that actually emit progress.
+- `'streaming'` -- live-flush whenever the runtime permits; fall back to buffered only when it does not.
+- `'buffered'` -- always buffer, even on FrankenPHP or RoadRunner where live streaming would work. Use this when you specifically want the SSE wire format without any mid-response flushing.
+
+If you leave `enable_sse => false` (the default), the server never emits SSE and the `sse_mode` setting is ignored. That is the right call for the widest shared-hosting compatibility; only flip it on when you have a reason to (long-running tools emitting progress, clients that explicitly prefer SSE, etc.).
 
 ### DNS Rebinding Protection
 
@@ -1505,9 +1532,229 @@ This means you should write elicitation code as if it were straight-line and syn
 
 No extra wiring is required in your server file -- `McpServer::run()` / `runHttp()` handle the suspend/resume plumbing automatically.
 
+The same suspend/resume mechanism also powers server-initiated LLM sampling (covered in [Part 9](#part-9-server-initiated-llm-sampling)), and a single tool call can freely mix `$elicit->form()` and `$sampling->prompt()` calls. The SDK carries the previously-collected results of **both** features forward across every HTTP round, so on resume each completed call returns its stored result without re-prompting the user or the LLM.
+
 ---
 
-## Part 9: Multi-Capability Servers
+## Part 9: Server-Initiated LLM Sampling
+
+Sampling lets a tool ask the **client's LLM** to generate a completion on the server's behalf. It is the agentic mirror of elicitation: elicitation asks a human for input, sampling asks a language model for a response. The server never has to ship its own model or manage inference -- the client routes the request to whatever LLM the user already has configured (Claude Desktop, an IDE assistant, a local model, etc.), so cost, policy, and privacy all stay on the client side.
+
+The core `sampling/createMessage` primitive has been part of MCP since the base `2024-11-05` revision, so a plain `$sampling->prompt(...)` works against any client that negotiates `2024-11-05` or newer. What is newer is the **SDK support** for it: server-initiated sampling now works across both stdio and HTTP using the same suspend/resume plumbing that powers elicitation, and the `2025-11-25` revision also adds **tool-enabled sampling** (passing `tools` and `toolChoice` to `createMessage()` so the client's LLM can emit tool-use blocks), which the SDK gates on the client's `sampling.tools` sub-capability.
+
+### How Sampling Works
+
+The SDK injects a `SamplingContext` into any tool callback that declares one, using the same reflection mechanism as `ElicitationContext`. From there, your tool calls `prompt()` or `createMessage()` on the context and gets a `CreateMessageResult` back -- or `null` if the client didn't advertise the `sampling` capability.
+
+1. The MCP client advertises a `sampling` capability during initialization
+2. Your tool calls `$sampling->prompt(...)` or `$sampling->createMessage(...)`
+3. The SDK sends a `sampling/createMessage` request to the client
+4. The client runs its LLM (with optional user review) and returns the completion
+5. Your tool receives a `CreateMessageResult` and continues
+
+Per the MCP spec, `sampling/createMessage` may only be sent while the server is processing a client-originated request -- there's no "background sampling." The SDK enforces this structurally: `SamplingContext` is only ever instantiated inside a tool handler, so there is no way to accidentally sample outside that window.
+
+### When to Use It
+
+- **Agentic tools** that need a follow-up completion to analyze, summarize, or rephrase something the tool just computed.
+- **Content generation** inside a tool where you want the user's own LLM (and their API key / model choice) to produce the text rather than the server shipping its own inference.
+- **Multi-step reasoning** where the server has domain knowledge but wants the client's LLM to stitch the final answer together.
+- **Keeping policy on the client.** Content filtering, audit logging, and rate limiting happen where the user has already set them up.
+
+### Basic Sampling Example
+
+A tool that forwards a user-supplied prompt to the client's LLM and returns the completion:
+
+```php
+<?php
+// sampling_basic.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+use Mcp\Server\Sampling\SamplingContext;
+use Mcp\Types\TextContent;
+
+$server = new McpServer('sampling-basic');
+
+$server->tool(
+    name: 'summarize',
+    description: 'Ask the client LLM to summarize a block of text in one sentence',
+    callback: function (string $text, SamplingContext $sampling): string {
+        if (!$sampling->supportsSampling()) {
+            return 'This client does not support sampling -- cannot summarize.';
+        }
+
+        $result = $sampling->prompt(
+            text: "Summarize the following in one sentence:\n\n{$text}",
+            maxTokens: 200,
+        );
+
+        if ($result === null) {
+            return 'Summarization is unavailable right now.';
+        }
+
+        // A plain prompt() returns a single text content block.
+        if ($result->content instanceof TextContent) {
+            return $result->content->text;
+        }
+
+        return 'Received an unexpected content type from the LLM.';
+    }
+);
+
+$server->run();
+```
+
+Notes:
+
+- `SamplingContext` can appear anywhere in the parameter list; the SDK strips it from the tool's input schema so the model only sees `text`.
+- `prompt()` is a one-shot convenience for single-turn text. It returns `null` when the client has not advertised `sampling`, when the negotiated protocol version is too old, or when the client returns an error -- always check.
+- `CreateMessageResult::$content` is a `TextContent|ImageContent|AudioContent|ToolUseContent` or an array of those, so handle it with `instanceof` rather than assuming a shape.
+
+### Structured Sampling Example
+
+`createMessage()` is the full API: multi-turn transcripts, an optional system prompt, temperature control, and `ModelPreferences` that let the server hint (but not require) properties like cost, speed, or intelligence bias. Here is a tool that asks the client LLM to classify a support ticket against a fixed taxonomy:
+
+```php
+<?php
+// sampling_classify.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+use Mcp\Server\Sampling\SamplingContext;
+use Mcp\Types\ModelPreferences;
+use Mcp\Types\Role;
+use Mcp\Types\SamplingMessage;
+use Mcp\Types\TextContent;
+
+$server = new McpServer('sampling-classify');
+
+$server->tool(
+    name: 'classify-ticket',
+    description: 'Classify a support ticket as billing, technical, or account',
+    callback: function (string $ticket, SamplingContext $sampling): string {
+        $messages = [
+            new SamplingMessage(
+                role: Role::USER,
+                content: new TextContent(text: "Ticket:\n{$ticket}\n\nCategory?"),
+            ),
+        ];
+
+        $result = $sampling->createMessage(
+            messages: $messages,
+            maxTokens: 10,
+            systemPrompt: 'Reply with exactly one word: billing, technical, or account.',
+            temperature: 0.0,
+            // Hint: cheaper + faster is fine, we don't need a flagship model for a one-word label.
+            modelPreferences: new ModelPreferences(
+                costPriority: 0.8,
+                speedPriority: 0.8,
+                intelligencePriority: 0.2,
+            ),
+        );
+
+        if ($result === null || !($result->content instanceof TextContent)) {
+            return 'unclassified';
+        }
+
+        $label = strtolower(trim($result->content->text));
+        return in_array($label, ['billing', 'technical', 'account'], true)
+            ? $label
+            : 'unclassified';
+    }
+);
+
+$server->run();
+```
+
+`ModelPreferences` is advisory -- the client decides whether to honor the hints. Always validate the response against what you actually need (here: coerce to the taxonomy, fall back to `unclassified`) rather than trusting the LLM to comply with the system prompt exactly.
+
+### Combining Sampling and Elicitation
+
+Sampling and elicitation compose. A tool can ask the user for a topic, then ask the client's LLM to draft something based on it, all in a single tool call:
+
+```php
+<?php
+// sampling_plus_elicitation.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+use Mcp\Server\Elicitation\ElicitationContext;
+use Mcp\Server\Elicitation\ElicitationDeclinedException;
+use Mcp\Server\Sampling\SamplingContext;
+use Mcp\Types\TextContent;
+
+$server = new McpServer('draft-helper');
+
+$server->tool(
+    name: 'draft-tweet',
+    description: 'Ask the user for a topic, then draft a tweet about it using the client LLM',
+    callback: function (ElicitationContext $elicit, SamplingContext $sampling): string {
+        try {
+            $form = $elicit->requiresForm(
+                message: 'What should the tweet be about?',
+                requestedSchema: [
+                    'type' => 'object',
+                    'properties' => [
+                        'topic' => ['type' => 'string', 'title' => 'Topic', 'minLength' => 2],
+                        'tone'  => [
+                            'type' => 'string',
+                            'title' => 'Tone',
+                            'enum' => ['serious', 'playful', 'technical'],
+                            'default' => 'playful',
+                        ],
+                    ],
+                    'required' => ['topic'],
+                ],
+            );
+        } catch (ElicitationDeclinedException $e) {
+            return 'No topic provided -- nothing to draft.';
+        }
+
+        $topic = $form->content['topic'];
+        $tone = $form->content['tone'] ?? 'playful';
+
+        $draft = $sampling->prompt(
+            text: "Write a single tweet (under 280 chars) about {$topic}. Tone: {$tone}.",
+            maxTokens: 120,
+        );
+
+        if ($draft === null || !($draft->content instanceof TextContent)) {
+            return "Drafting failed, but here's the topic you picked: {$topic} ({$tone}).";
+        }
+
+        return $draft->content->text;
+    }
+);
+
+$server->run();
+```
+
+Under HTTP this tool suspends twice -- once on the form, once on the sampling request -- so the callback ends up being invoked three times total: the initial invocation plus two resumes. On each resume the SDK re-enters the callback from the top, and every completed `form()` / `prompt()` call returns its stored result instead of firing a new request. You never have to think about that -- just write straight-line code and keep the call order deterministic so the stored results match up on every re-entry.
+
+### Sampling and the HTTP Transport
+
+Sampling works identically across stdio and HTTP, with the same mechanics as elicitation:
+
+- **Stdio:** the call to `prompt()` / `createMessage()` blocks until the client returns the completion.
+- **HTTP:** the SDK suspends the tool, emits the `sampling/createMessage` request to the client, and transparently resumes the tool on the next HTTP round with the preloaded result.
+
+The deterministic-ordering rule from [Part 8](#elicitation-and-the-http-transport) applies to sampling as well: don't make a sampling call conditional on non-deterministic data between resumes, or the SDK won't be able to match the stored result back to the call.
+
+### Feature Gating
+
+Two capability checks to know about:
+
+- `$sampling->supportsSampling()` -- returns `true` when the client advertised `sampling` during initialization and the negotiated protocol version covers it. Call this early and short-circuit if the answer is `false`.
+- `$sampling->supportsToolsInSampling()` -- tool-enabled sampling (passing `tools` / `toolChoice` to `createMessage()`) is gated on the `sampling.tools` sub-capability introduced in `2025-11-25`. If you plan to pass tools, check this separately; otherwise omit the check.
+
+If the client doesn't support sampling, `prompt()` and `createMessage()` both return `null` without sending any request. Handle `null` the same way you would handle any optional feature -- fall back, return a useful message, or mark the tool result as an error.
+
+> **Note:** The `2025-11-25` spec also introduces *task-augmented* sampling (linking a `sampling/createMessage` to an async `tasks/create` lifecycle). Like task-augmented elicitation, this is still experimental and intentionally not documented here.
+
+---
+
+## Part 10: Multi-Capability Servers
 
 Real-world MCP servers combine tools, prompts, and resources. Here is a complete server that demonstrates all three working together:
 
@@ -1663,7 +1910,11 @@ $server->run();
 |--------|------|---------|-------------|
 | `session_timeout` | int | 3600 | Session expiry in seconds |
 | `max_queue_size` | int | 1000 | Maximum messages in queue per session |
-| `enable_sse` | bool | false | Enable Server-Sent Events (disable for shared hosting) |
+| `enable_sse` | bool | false | Master switch for Server-Sent Events. While `false` every POST gets a plain JSON response. Set to `true` to let the transport negotiate SSE via the client's `Accept` header |
+| `sse_mode` | string | `'auto'` | Secondary setting that applies only when `enable_sse` is `true` and the transport picks SSE for a request. `'auto'` (stream only when the request carries a `progressToken`), `'streaming'` (always stream when the runtime permits), or `'buffered'` (single-response SSE -- never mid-response flushing) |
+| `sse_retry_ms` | int | 1500 | Reconnect hint emitted on SSE streams via the WHATWG `retry` field |
+| `sse_event_log_capacity` | int | 64 | Max events retained per session for resumable replay via `Last-Event-ID` |
+| `sse_standalone_get_idle_ms` | int | 0 | How long an idle standalone-GET SSE stream stays open; default 0 closes immediately (correct for PHP-FPM, where no background worker exists to push messages) |
 | `shared_hosting` | bool/null | null (auto-detect) | Force shared hosting optimizations |
 | `server_header` | string | `MCP-PHP-Server/1.0` | Server identification header |
 | `allowed_origins` | array/null | null | Allowed hostnames for Origin validation (auto-set for `cli-server` SAPI) |
@@ -1698,6 +1949,7 @@ $server->run();
 | `run()` | Auto-detect transport and start |
 | `runStdio()` | Force stdio transport |
 | `runHttp()` | Force HTTP transport |
+| *Context injection* | A tool callback that type-hints `ElicitationContext`, `SamplingContext`, or `ProgressContext` automatically receives that context at call time. The parameter is stripped from the tool's input schema. |
 | `getServer()` | Access the underlying Server instance |
 | `getTaskManager()` | Access the TaskManager instance |
 
