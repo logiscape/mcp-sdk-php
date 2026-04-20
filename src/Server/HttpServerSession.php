@@ -434,6 +434,13 @@ class HttpServerSession extends ServerSession
             $newServerRequestId = $this->getNextRequestId();
             $this->setNextRequestId($newServerRequestId + 1);
 
+            // Carry the elicitation results we just resolved into the
+            // sampling-side originalRequestParams so the next resume restores
+            // them and cached elicit calls don't re-suspend (cross-feature
+            // hop loses state otherwise — this hop is the only place to stash it).
+            $forwardedParams = $pending->originalRequestParams;
+            $forwardedParams['_elicitationResults'] = $allResults;
+
             $this->pendingSamplings[$newServerRequestId] = new PendingSampling(
                 toolName: $e->toolName,
                 toolArguments: $e->toolArguments,
@@ -442,7 +449,7 @@ class HttpServerSession extends ServerSession
                 samplingSequence: $e->samplingSequence,
                 previousResults: $e->previousResults,
                 createdAt: microtime(true),
-                originalRequestParams: $pending->originalRequestParams,
+                originalRequestParams: $forwardedParams,
             );
 
             $requestId = new RequestId($newServerRequestId);
@@ -644,6 +651,12 @@ class HttpServerSession extends ServerSession
             $newServerRequestId = $this->getNextRequestId();
             $this->setNextRequestId($newServerRequestId + 1);
 
+            // Mirror the elicit→sampling carry-forward: stash the just-resolved
+            // sampling results into originalRequestParams so cached sampling
+            // calls don't re-suspend after the elicitation resume.
+            $forwardedParams = $pending->originalRequestParams;
+            $forwardedParams['_samplingResults'] = $allResults;
+
             $this->pendingElicitations[$newServerRequestId] = new PendingElicitation(
                 toolName: $e->toolName,
                 toolArguments: $e->toolArguments,
@@ -652,7 +665,7 @@ class HttpServerSession extends ServerSession
                 elicitationSequence: $e->elicitationSequence,
                 previousResults: $e->previousResults,
                 createdAt: microtime(true),
-                originalRequestParams: $pending->originalRequestParams,
+                originalRequestParams: $forwardedParams,
             );
 
             $requestId = new RequestId($newServerRequestId);
