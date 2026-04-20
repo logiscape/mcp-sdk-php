@@ -14,25 +14,28 @@
  * @license    MIT License
  * @link       https://github.com/logiscape/mcp-sdk-php
  *
- * Filename: Server/Elicitation/ElicitationSuspendException.php
+ * Filename: Server/Sampling/SamplingSuspendException.php
  */
 
 declare(strict_types=1);
 
-namespace Mcp\Server\Elicitation;
+namespace Mcp\Server\Sampling;
 
 use Mcp\Server\ClientRequestSuspendException;
-use Mcp\Types\ElicitationCreateRequest;
+use Mcp\Types\CreateMessageRequest;
 use Mcp\Types\Request;
 
 /**
- * Exception thrown to suspend a tool handler's execution when elicitation is needed
- * in an HTTP (stateless) transport context.
+ * Exception thrown to suspend a tool handler's execution when a
+ * `sampling/createMessage` call is needed in an HTTP (stateless) transport
+ * context.
  *
- * This is NOT a JSON-RPC error — it is caught by the server handler layer to trigger
- * the suspend/resume pattern for multi-round HTTP exchanges.
+ * Caught by `HttpServerSession::handleRequest()` to trigger the suspend/resume
+ * pattern: the outgoing sampling request is written to the client, pending
+ * state is persisted, and the tool handler is re-invoked once the client's
+ * response arrives in a subsequent HTTP cycle.
  */
-class ElicitationSuspendException extends ClientRequestSuspendException
+class SamplingSuspendException extends ClientRequestSuspendException
 {
     /**
      * @param array<string, mixed> $toolArguments
@@ -40,20 +43,20 @@ class ElicitationSuspendException extends ClientRequestSuspendException
      * @param int|string $originalRequestId JSON-RPC id of the originating tools/call (`string | number`).
      */
     public function __construct(
-        public readonly ElicitationCreateRequest $request,
+        public readonly CreateMessageRequest $request,
         string $toolName,
         array $toolArguments,
         int|string $originalRequestId,
-        public readonly int $elicitationSequence,
+        public readonly int $samplingSequence,
         array $previousResults = [],
     ) {
         parent::__construct(
             toolName: $toolName,
             toolArguments: $toolArguments,
             originalRequestId: $originalRequestId,
-            sequence: $elicitationSequence,
+            sequence: $samplingSequence,
             previousResults: $previousResults,
-            message: 'Elicitation required: tool handler suspended pending client response',
+            message: 'Sampling required: tool handler suspended pending client response',
         );
     }
 

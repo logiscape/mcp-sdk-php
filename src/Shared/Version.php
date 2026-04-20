@@ -54,6 +54,8 @@ class Version {
         'annotations' => '2025-03-26',
         'tool_annotations' => '2025-03-26',
         'progress_message' => '2025-03-26',
+        // 2024-11-05 (base spec)
+        'sampling' => '2024-11-05',
         // 2025-06-18
         'elicitation' => '2025-06-18',
         'structured_content' => '2025-06-18',

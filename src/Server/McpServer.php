@@ -22,9 +22,12 @@ declare(strict_types=1);
 namespace Mcp\Server;
 
 use Mcp\Server\Auth\TokenValidatorInterface;
+use Mcp\Server\ClientRequestSuspendException;
 use Mcp\Server\Elicitation\ElicitationContext;
 use Mcp\Server\Elicitation\ElicitationDeclinedException;
 use Mcp\Server\Elicitation\ElicitationSuspendException;
+use Mcp\Server\Sampling\SamplingContext;
+use Mcp\Server\Sampling\SamplingSuspendException;
 use Mcp\Server\Transport\Http\FileSessionStore;
 use Mcp\Server\Transport\Http\HttpIoInterface;
 use Mcp\Server\Transport\Http\SessionStoreInterface;
@@ -136,6 +139,9 @@ class McpServer
     /** @var array<string, bool> Tool names that require ElicitationContext injection. */
     protected array $toolsNeedElicitation = [];
 
+    /** @var array<string, bool> Tool names that require SamplingContext injection. */
+    protected array $toolsNeedSampling = [];
+
     /**
      * Create a new McpServer instance.
      *
@@ -199,20 +205,28 @@ class McpServer
 
         $this->tools[] = $tool;
 
-        // Detect if callback needs ElicitationContext or ProgressContext
+        // Detect if callback needs ElicitationContext, SamplingContext, or ProgressContext
         $needsElicitation = $this->callbackNeedsElicitation($callback);
         if ($needsElicitation) {
             $this->toolsNeedElicitation[$name] = true;
         }
+        $needsSampling = $this->callbackNeedsSampling($callback);
+        if ($needsSampling) {
+            $this->toolsNeedSampling[$name] = true;
+        }
         $needsProgress = $this->callbackNeedsProgress($callback);
 
-        $this->toolHandlers[$name] = function ($args, ?Meta $meta = null) use ($name, $callback, $outputSchema, $needsElicitation, $needsProgress) {
+        $this->toolHandlers[$name] = function ($args, ?Meta $meta = null) use ($name, $callback, $outputSchema, $needsElicitation, $needsSampling, $needsProgress) {
             $arguments = json_decode(json_encode($args), true) ?? [];
 
-            // Check for preloaded elicitation results (HTTP resume path)
+            // Check for preloaded elicitation/sampling results (HTTP resume path)
             $elicitationResults = [];
             if (is_object($args) && isset($args->_elicitationResults)) {
                 $elicitationResults = (array) $args->_elicitationResults;
+            }
+            $samplingResults = [];
+            if (is_object($args) && isset($args->_samplingResults)) {
+                $samplingResults = (array) $args->_samplingResults;
             }
 
             $elicitContext = null;
@@ -229,6 +243,20 @@ class McpServer
                 );
             }
 
+            $samplingContext = null;
+            if ($needsSampling) {
+                $session = $this->server->getSession();
+                $isHttpMode = ($session instanceof HttpServerSession);
+                $samplingContext = new SamplingContext(
+                    session: $session,
+                    httpMode: $isHttpMode,
+                    preloadedResults: $samplingResults,
+                    toolName: $name,
+                    toolArguments: $arguments,
+                    originalRequestId: 0,
+                );
+            }
+
             // Create ProgressContext if callback needs it and a progressToken was provided
             $progressContext = null;
             if ($needsProgress && $meta !== null) {
@@ -242,7 +270,7 @@ class McpServer
                 }
             }
 
-            $ordered = $this->matchNamedParameters($callback, $arguments, $elicitContext, $progressContext);
+            $ordered = $this->matchNamedParameters($callback, $arguments, $elicitContext, $progressContext, $samplingContext);
 
             $result = $callback(...$ordered);
 
@@ -743,9 +771,12 @@ class McpServer
             $arguments = $params->arguments ?? new \stdClass();
             $meta = $params->_meta ?? null;
 
-            // Forward elicitation results for HTTP resume path
+            // Forward elicitation/sampling results for HTTP resume path
             if (is_object($params) && isset($params->_elicitationResults)) {
                 $arguments->_elicitationResults = $params->_elicitationResults;
+            }
+            if (is_object($params) && isset($params->_samplingResults)) {
+                $arguments->_samplingResults = $params->_samplingResults;
             }
 
             if (!isset($this->toolHandlers[$name])) {
@@ -756,7 +787,7 @@ class McpServer
 
             try {
                 $result = $handler($arguments, $meta);
-            } catch (ElicitationSuspendException $e) {
+            } catch (ClientRequestSuspendException $e) {
                 throw $e; // Must propagate to HttpServerSession for suspend/resume
             } catch (McpServerException $e) {
                 throw $e; // Programming errors should propagate
@@ -823,7 +854,10 @@ class McpServer
             $typeName = $type instanceof ReflectionNamedType ? $type->getName() : 'string';
 
             // Skip injected context parameters — they are not user input
-            if ($typeName === ElicitationContext::class || $typeName === ProgressContext::class) {
+            if ($typeName === ElicitationContext::class
+                || $typeName === ProgressContext::class
+                || $typeName === SamplingContext::class
+            ) {
                 continue;
             }
 
@@ -878,15 +912,18 @@ class McpServer
      * [Added] Match named arguments from a JSON object to a callback's parameters.
      *
      * Uses reflection to map argument names to parameter positions, providing
-     * correct ordering regardless of JSON key order. ElicitationContext parameters
-     * are injected automatically when provided.
+     * correct ordering regardless of JSON key order. ElicitationContext,
+     * SamplingContext, and ProgressContext parameters are injected automatically
+     * when provided.
      *
      * @param callable $callback The target callback
      * @param array<string, mixed> $arguments Associative array of arguments
      * @param ElicitationContext|null $elicitContext Optional context to inject
+     * @param ProgressContext|null $progressContext Optional context to inject
+     * @param SamplingContext|null $samplingContext Optional context to inject
      * @return array<int, mixed> Ordered arguments matching the callback's parameter list
      */
-    protected function matchNamedParameters(callable $callback, array $arguments, ?ElicitationContext $elicitContext = null, ?ProgressContext $progressContext = null): array
+    protected function matchNamedParameters(callable $callback, array $arguments, ?ElicitationContext $elicitContext = null, ?ProgressContext $progressContext = null, ?SamplingContext $samplingContext = null): array
     {
         $reflection = new ReflectionFunction(\Closure::fromCallable($callback));
         $parameters = $reflection->getParameters();
@@ -900,6 +937,12 @@ class McpServer
             // Inject ElicitationContext
             if ($typeName === ElicitationContext::class) {
                 $ordered[] = $elicitContext;
+                continue;
+            }
+
+            // Inject SamplingContext
+            if ($typeName === SamplingContext::class) {
+                $ordered[] = $samplingContext;
                 continue;
             }
 
@@ -936,6 +979,21 @@ class McpServer
         foreach ($reflection->getParameters() as $param) {
             $type = $param->getType();
             if ($type instanceof ReflectionNamedType && $type->getName() === ElicitationContext::class) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Check if a callback has a SamplingContext parameter.
+     */
+    protected function callbackNeedsSampling(callable $callback): bool
+    {
+        $reflection = new ReflectionFunction(\Closure::fromCallable($callback));
+        foreach ($reflection->getParameters() as $param) {
+            $type = $param->getType();
+            if ($type instanceof ReflectionNamedType && $type->getName() === SamplingContext::class) {
                 return true;
             }
         }

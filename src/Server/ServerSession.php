@@ -55,11 +55,17 @@ use Mcp\Types\Result;
 use Mcp\Types\TextContent;
 use Mcp\Types\Tool;
 use Mcp\Server\InitializationOptions;
+use Mcp\Types\CreateMessageRequest;
+use Mcp\Types\CreateMessageResult;
 use Mcp\Types\ElicitationCapability;
 use Mcp\Types\ElicitationCreateRequest;
 use Mcp\Types\ElicitationCreateResult;
 use Mcp\Types\Meta;
+use Mcp\Types\ModelPreferences;
+use Mcp\Types\SamplingCapability;
+use Mcp\Types\SamplingMessage;
 use Mcp\Types\TaskRequestParams;
+use Mcp\Types\ToolChoice;
 use Mcp\Server\Transport\Transport;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -491,6 +497,108 @@ class ServerSession extends BaseSession {
             return $this->sendRequest($request, ElicitationCreateResult::class);
         } catch (\Mcp\Shared\McpError $e) {
             $this->logger->error('Elicitation request failed: ' . $e->getMessage());
+            return null;
+        } finally {
+            $this->allowClientResponses = false;
+        }
+    }
+
+    /**
+     * Send a `sampling/createMessage` request to the client and block for the response.
+     *
+     * In stdio mode, this blocks until the client responds. In HTTP mode, tool
+     * handlers should go through `SamplingContext`, which uses the suspend/resume
+     * pattern instead of calling this method directly.
+     *
+     * Returns null when the client doesn't declare the `sampling` capability,
+     * the negotiated protocol version doesn't cover sampling, or the client
+     * returns an error response. The caller decides how to surface that in the
+     * tool result.
+     *
+     * Per spec, servers MUST only send `sampling/createMessage` while processing
+     * an originating client request (tools/call, resources/read, prompts/get).
+     * Enforcement of that constraint is the caller's responsibility; the
+     * {@see \Mcp\Server\Sampling\SamplingContext} is only instantiated inside a
+     * tool handler closure and so satisfies it structurally.
+     *
+     * @param SamplingMessage[] $messages
+     * @param string[]|null $stopSequences
+     * @param array<int, \Mcp\Types\Tool>|null $tools Requires both the `sampling_with_tools` protocol
+     *        feature and the client's `sampling.tools` sub-capability. When either is missing, this
+     *        method returns null without writing to the transport; callers should retry without tools
+     *        or choose a different fallback.
+     */
+    public function sendSamplingRequest(
+        array $messages,
+        int $maxTokens,
+        ?array $stopSequences = null,
+        ?string $systemPrompt = null,
+        ?float $temperature = null,
+        ?Meta $metadata = null,
+        ?ModelPreferences $modelPreferences = null,
+        ?string $includeContext = null,
+        ?array $tools = null,
+        ?ToolChoice $toolChoice = null,
+        ?Meta $_meta = null,
+    ): ?CreateMessageResult {
+        // Client must declare the sampling capability.
+        $requiredCap = new ClientCapabilities(sampling: new SamplingCapability());
+        if (!$this->checkClientCapability($requiredCap)) {
+            $this->logger->info('Client does not support sampling');
+            return null;
+        }
+
+        // Negotiated protocol version must cover sampling.
+        if (!$this->clientSupportsFeature('sampling')) {
+            $this->logger->info('Negotiated protocol version does not support sampling');
+            return null;
+        }
+
+        // Tools-in-sampling requires both the `sampling_with_tools` protocol
+        // feature and the client's sampling.tools sub-capability. When either
+        // is missing, refuse the call so callers can fall back explicitly
+        // instead of sending a plain sampling request that drops the tools.
+        if ($tools !== null || $toolChoice !== null) {
+            if (!$this->clientSupportsFeature('sampling_with_tools')) {
+                $this->logger->info('Sampling request with tools refused: negotiated protocol version predates sampling_with_tools');
+                return null;
+            }
+            $samplingCap = $this->clientParams->capabilities->sampling ?? null;
+            $toolsDeclared = false;
+            if ($samplingCap !== null) {
+                $extras = $samplingCap->jsonSerialize();
+                $toolsDeclared = is_array($extras) && array_key_exists('tools', $extras);
+            }
+            if (!$toolsDeclared) {
+                $this->logger->info('Sampling request with tools refused: client did not advertise sampling.tools capability');
+                return null;
+            }
+        }
+
+        $request = new CreateMessageRequest(
+            messages: $messages,
+            maxTokens: $maxTokens,
+            stopSequences: $stopSequences,
+            systemPrompt: $systemPrompt,
+            temperature: $temperature,
+            metadata: $metadata,
+            modelPreferences: $modelPreferences,
+            includeContext: $includeContext,
+            tools: $tools,
+            toolChoice: $toolChoice,
+            _meta: $_meta,
+        );
+        // Validate cross-message invariants before anything hits the wire, so a
+        // malformed transcript surfaces as an InvalidArgumentException at the
+        // call site rather than a -32602 from the client.
+        $request->validate();
+
+        $this->allowClientResponses = true;
+        try {
+            /** @var CreateMessageResult */
+            return $this->sendRequest($request, CreateMessageResult::class);
+        } catch (\Mcp\Shared\McpError $e) {
+            $this->logger->error('Sampling request failed: ' . $e->getMessage());
             return null;
         } finally {
             $this->allowClientResponses = false;

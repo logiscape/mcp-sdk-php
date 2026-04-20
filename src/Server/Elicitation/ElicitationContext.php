@@ -65,7 +65,9 @@ class ElicitationContext
      * @param array<int, array<string, mixed>> $preloadedResults Results from previous HTTP rounds, keyed by sequence number
      * @param string $toolName Current tool name (for suspend state)
      * @param array<string, mixed> $toolArguments Current tool arguments (for suspend state)
-     * @param int $originalRequestId Original tools/call request ID (for suspend state)
+     * @param int|string $originalRequestId JSON-RPC id of the originating tools/call (`string | number`).
+     *                   The default placeholder is overwritten by HttpServerSession when it records the
+     *                   suspend, using the actual id from the current responder.
      */
     public function __construct(
         private readonly ServerSession $session,
@@ -73,7 +75,7 @@ class ElicitationContext
         private readonly array $preloadedResults = [],
         private readonly string $toolName = '',
         private readonly array $toolArguments = [],
-        private readonly int $originalRequestId = 0,
+        private readonly int|string $originalRequestId = 0,
     ) {}
 
     /**

@@ -42,6 +42,17 @@ namespace Mcp\Types;
  * @property string|null $url URL for URL mode (elicitation/create)
  * @property string|null $elicitationId Elicitation identifier (elicitation/create)
  * @property array<int, array<string, mixed>>|null $_elicitationResults Preloaded elicitation results (internal)
+ * @property array<int, SamplingMessage>|null $messages Sampling messages (sampling/createMessage)
+ * @property int|null $maxTokens Maximum tokens to generate (sampling/createMessage)
+ * @property array<int, string>|null $stopSequences Stop sequences (sampling/createMessage)
+ * @property string|null $systemPrompt System prompt (sampling/createMessage)
+ * @property float|null $temperature Sampling temperature (sampling/createMessage)
+ * @property Meta|null $metadata Provider-specific metadata (sampling/createMessage)
+ * @property ModelPreferences|null $modelPreferences Model preferences (sampling/createMessage)
+ * @property string|null $includeContext Context-inclusion hint (sampling/createMessage)
+ * @property array<int, Tool>|null $tools Tools offered for sampling (sampling/createMessage, 2025-11-25)
+ * @property ToolChoice|null $toolChoice Tool-choice hint (sampling/createMessage, 2025-11-25)
+ * @property array<int, array<string, mixed>>|null $_samplingResults Preloaded sampling results (internal)
  * @property TaskRequestParams|null $task Task parameters for task-augmented requests (2025-11-25)
  */
 class RequestParams implements McpModel {

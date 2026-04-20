@@ -48,6 +48,7 @@ use Mcp\Types\CreateMessageResult;
 use Mcp\Types\SamplingMessage;
 use Mcp\Types\EmptyResult;
 use Mcp\Server\Elicitation\ElicitationContext;
+use Mcp\Server\Sampling\SamplingContext;
 
 // Minimal 1x1 transparent PNG (base64)
 const TEST_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
@@ -183,30 +184,34 @@ $server->tool('test_tool_with_progress', 'Sends progress notifications', functio
     );
 });
 
-// Sampling tool — uses server-to-client request via session. If HTTP transport
-// doesn't support this (stateless), the test will fail. That is correct.
-$server->tool('test_sampling', 'Requests LLM sampling via sampling/createMessage', function (string $prompt) use ($server): CallToolResult {
-    $session = $server->getServer()->getSession();
-    if (!$session) {
-        throw new \RuntimeException('No active session for sampling');
+// Sampling tool — uses the SamplingContext public API so the same handler
+// works across stdio, HTTP buffered, and HTTP SSE transports. In HTTP mode
+// the first call throws SamplingSuspendException and the tool resumes when
+// the client returns the CreateMessageResult.
+$server->tool('test_sampling', 'Requests LLM sampling via sampling/createMessage', function (string $prompt, SamplingContext $sampling): CallToolResult {
+    $response = $sampling->prompt($prompt, maxTokens: 100);
+
+    if ($response === null) {
+        // Client did not advertise sampling capability (or the negotiated
+        // protocol version predates sampling). Return an isError result so
+        // the tool call surfaces the unsupported state instead of a stub
+        // success.
+        return new CallToolResult(
+            content: [new TextContent(text: 'Sampling is not supported by this client')],
+            isError: true,
+        );
     }
 
-    $request = new CreateMessageRequest(
-        messages: [
-            new SamplingMessage(
-                role: Role::USER,
-                content: new TextContent(text: $prompt)
-            ),
-        ],
-        maxTokens: 100,
-    );
-
-    $response = $session->sendRequest($request, CreateMessageResult::class);
     $responseText = 'Sampling response received';
-    if ($response instanceof CreateMessageResult) {
-        $content = $response->content ?? null;
-        if ($content instanceof TextContent) {
-            $responseText = "LLM response: {$content->text}";
+    $content = $response->content;
+    if ($content instanceof TextContent) {
+        $responseText = "LLM response: {$content->text}";
+    } elseif (is_array($content)) {
+        foreach ($content as $block) {
+            if ($block instanceof TextContent) {
+                $responseText = "LLM response: {$block->text}";
+                break;
+            }
         }
     }
 

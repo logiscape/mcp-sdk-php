@@ -14,21 +14,21 @@
  * @license    MIT License
  * @link       https://github.com/logiscape/mcp-sdk-php
  *
- * Filename: Server/Elicitation/PendingElicitation.php
+ * Filename: Server/Sampling/PendingSampling.php
  */
 
 declare(strict_types=1);
 
-namespace Mcp\Server\Elicitation;
+namespace Mcp\Server\Sampling;
 
 /**
- * Serializable value object representing a suspended tool call awaiting
- * an elicitation response from the client.
+ * Serializable value object representing a suspended tool call awaiting a
+ * `sampling/createMessage` response from the client.
  *
- * Used in the HTTP transport's suspend/resume pattern to persist state
- * across stateless HTTP request/response cycles.
+ * Persisted across stateless HTTP request/response cycles so the tool handler
+ * can be re-invoked with the prior sampling result preloaded.
  */
-class PendingElicitation
+class PendingSampling
 {
     /**
      * @param array<string, mixed> $toolArguments
@@ -41,7 +41,7 @@ class PendingElicitation
         public readonly array $toolArguments,
         public readonly int|string $originalRequestId,
         public readonly int $serverRequestId,
-        public readonly int $elicitationSequence,
+        public readonly int $samplingSequence,
         public readonly array $previousResults = [],
         public readonly float $createdAt = 0.0,
         public readonly array $originalRequestParams = [],
@@ -57,7 +57,7 @@ class PendingElicitation
             'toolArguments' => $this->toolArguments,
             'originalRequestId' => $this->originalRequestId,
             'serverRequestId' => $this->serverRequestId,
-            'elicitationSequence' => $this->elicitationSequence,
+            'samplingSequence' => $this->samplingSequence,
             'previousResults' => $this->previousResults,
             'createdAt' => $this->createdAt ?: microtime(true),
             'originalRequestParams' => $this->originalRequestParams,
@@ -80,7 +80,7 @@ class PendingElicitation
             toolArguments: $data['toolArguments'] ?? [],
             originalRequestId: $originalId,
             serverRequestId: (int) $data['serverRequestId'],
-            elicitationSequence: (int) ($data['elicitationSequence'] ?? 0),
+            samplingSequence: (int) ($data['samplingSequence'] ?? 0),
             previousResults: $data['previousResults'] ?? [],
             createdAt: (float) ($data['createdAt'] ?? 0.0),
             originalRequestParams: $data['originalRequestParams'] ?? [],

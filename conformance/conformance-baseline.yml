@@ -11,18 +11,10 @@
 #   composer conformance-server     # Run server tests only
 #   composer conformance-client     # Run client tests only
 #
-# Last updated: 2026-04-19
+# Last updated: 2026-04-20
 # Conformance tool version: 0.1.16
 
-server:
-  # --- SDK limitation: sampling over HTTP still needs the resume pattern ---
-  - tools-call-sampling
-    # sampling/createMessage requires the server to send a request to the
-    # client and wait for a response. The elicitation suspend/resume pattern
-    # (ElicitationSuspendException + PendingElicitation + request-id-keyed
-    # stream routing) works for elicitation over HTTP as of the streamable
-    # HTTP rework; generalising it to sampling requires a shared
-    # ClientRequestSuspendException path and a sampling-specific responder.
+server: []
 
 client:
   # --- OAuth: not implemented ---
