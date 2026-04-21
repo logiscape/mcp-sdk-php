@@ -1,0 +1,43 @@
+# MCP Web Client — Apache hardening.
+#
+# This webclient is meant for internal MCP-server-developer use, not public
+# traffic, so host-level auth (basic auth, IP allowlist, VPN) should sit in
+# front of it. These rules are a belt-and-braces second layer: they keep the
+# token encryption key, log files, webclient internals, and packaging files
+# out of the public-facing URL tree even if the operator forgets to restrict
+# directory listings or access.
+
+# Deny the token encryption secret explicitly. cPanel/Apache commonly only
+# predenies `.ht*`; arbitrary dotfiles like `.token_secret` are otherwise
+# downloadable.
+<Files ".token_secret">
+    Require all denied
+    # Apache 2.2 fallback
+    Order allow,deny
+    Deny from all
+</Files>
+
+# Never serve Composer / Node packaging metadata from the webserver.
+<FilesMatch "^(composer\.(json|lock)|package(-lock)?\.json|README(\.[a-zA-Z-]+)?\.md|\.gitignore)$">
+    Require all denied
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Deny every file inside logs/, lib/, and vendor/. A dedicated .htaccess file
+# also lives inside logs/ and lib/ as a backstop in case this root file isn't
+# consulted (e.g., when AllowOverride is tightly scoped). vendor/ ships from
+# Composer and has no .htaccess of its own, so this rule is its only guard.
+RedirectMatch 404 /logs(/|$)
+RedirectMatch 404 /lib(/|$)
+RedirectMatch 404 /vendor(/|$)
+
+# tokens/ already ships its own .htaccess denying access; leave it be.
+
+# Default: block other dotfiles too (`.token_secret` is already covered above
+# but this catches anything new we add later by mistake).
+<FilesMatch "^\.(?!htaccess$)">
+    Require all denied
+    Order allow,deny
+    Deny from all
+</FilesMatch>

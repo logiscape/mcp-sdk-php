@@ -1,0 +1,227 @@
+/* MCP Web Client styles */
+
+:root {
+  --wc-surface: #ffffff;
+  --wc-border: #dee2e6;
+  --wc-muted: #6c757d;
+  --wc-code-bg: #1e1e1e;
+  --wc-code-fg: #d4d4d4;
+  --wc-code-accent-1: #569cd6;
+  --wc-code-accent-2: #4ec9b0;
+  --wc-code-accent-3: #ce9178;
+}
+
+body {
+  background: #f7f7f9;
+}
+
+/* Panels */
+
+.wc-panel {
+  background: var(--wc-surface);
+  border: 1px solid var(--wc-border);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.wc-panel h4 {
+  margin-top: 0;
+  margin-bottom: 1rem;
+}
+
+/* Capability panels (hidden until connected) */
+
+.capability-panel {
+  display: none;
+}
+
+.capability-panel.is-visible {
+  display: block;
+}
+
+/* Transport-specific field groups inside the connection form */
+
+.server-type-fields {
+  display: none;
+}
+
+.server-type-fields.is-active {
+  display: block;
+}
+
+/* Connection status */
+
+.connection-badge {
+  font-size: 0.8rem;
+  vertical-align: middle;
+  margin-left: 0.5rem;
+}
+
+.oauth-status {
+  display: none;
+}
+
+.oauth-status.is-active {
+  display: block;
+}
+
+/* Server info panel */
+
+.server-info dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0;
+}
+
+.server-info dt {
+  color: var(--wc-muted);
+  font-weight: 500;
+}
+
+.server-info code {
+  color: #212529;
+}
+
+/* Capability cards for prompts, tools, resources */
+
+.item-list .list-group-item {
+  cursor: pointer;
+}
+
+.item-list .list-group-item.selected {
+  background-color: #e7f3ff;
+  border-color: #9fcdff;
+}
+
+.item-meta {
+  color: var(--wc-muted);
+  font-size: 0.875rem;
+}
+
+.elicitation-badge {
+  background-color: #fff3cd;
+  color: #664d03;
+  border: 1px solid #ffecb5;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  margin-left: 0.5rem;
+}
+
+/* Result rendering */
+
+.result-block {
+  background: #f8f9fa;
+  border: 1px solid var(--wc-border);
+  border-radius: 6px;
+  padding: 12px;
+  margin-top: 0.75rem;
+}
+
+.result-block + .result-block {
+  margin-top: 0.5rem;
+}
+
+.result-block pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.result-image img,
+.result-audio audio {
+  max-width: 100%;
+}
+
+/* Elicitation capture card */
+
+.elicitation-card {
+  border-left: 4px solid #ffc107;
+  background: #fffaf0;
+  padding: 12px 16px;
+  margin-top: 0.75rem;
+  border-radius: 4px;
+}
+
+.elicitation-card h6 {
+  margin: 0 0 0.5rem;
+}
+
+.elicitation-card .field-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 0.5rem 0 0;
+}
+
+.elicitation-card .field-list li {
+  padding: 0.25rem 0;
+  border-bottom: 1px dashed #e9c77a;
+}
+
+.elicitation-card .field-list li:last-child {
+  border-bottom: none;
+}
+
+/* Completion dropdown */
+
+.completion-list {
+  position: absolute;
+  z-index: 1200;
+  background: #fff;
+  border: 1px solid var(--wc-border);
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  min-width: 12rem;
+  max-height: 14rem;
+  overflow-y: auto;
+  list-style: none;
+  padding: 0;
+  margin: 2px 0 0;
+}
+
+.completion-list li {
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+}
+
+.completion-list li:hover,
+.completion-list li.active {
+  background: #e9ecef;
+}
+
+/* Debug panel */
+
+.debug-panel {
+  background-color: var(--wc-code-bg);
+  color: var(--wc-code-fg);
+  font-family: 'Consolas', 'Monaco', monospace;
+  padding: 15px;
+  border-radius: 6px;
+  max-height: 300px;
+  overflow-y: auto;
+  font-size: 0.8rem;
+}
+
+.debug-panel .timestamp {
+  color: var(--wc-code-accent-1);
+}
+
+.debug-panel .level {
+  color: var(--wc-code-accent-2);
+}
+
+.debug-panel .message {
+  color: var(--wc-code-accent-3);
+}
+
+/* Utilities */
+
+.loading-spinner {
+  display: none;
+}
+
+.is-busy .loading-spinner {
+  display: inline-block;
+}

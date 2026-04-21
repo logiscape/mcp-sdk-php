@@ -8,8 +8,14 @@ tokens/*
 # Auto-generated encryption secret (regenerated on first use)
 .token_secret
 
-# Logs (directory created automatically by initLogger())
-logs/
+# Logs (directory created automatically by Bootstrap::logger())
+# But keep the .htaccess that denies web access.
+logs/*
+!logs/.htaccess
 
 # Composer dependencies (run 'composer install' in webclient directory)
 vendor/
+
+# Composer lock is intentionally untracked: the webclient requires
+# dev-main of the SDK, so each install picks up the latest commit.
+composer.lock

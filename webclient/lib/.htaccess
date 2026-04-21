@@ -1,0 +1,5 @@
+# Internal classes — never served directly.
+Require all denied
+# Apache 2.2 fallback
+Order allow,deny
+Deny from all

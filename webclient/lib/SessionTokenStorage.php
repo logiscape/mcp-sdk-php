@@ -3,15 +3,7 @@
 /**
  * Model Context Protocol SDK for PHP
  *
- * (c) 2025 Logiscape LLC <https://logiscape.com>
- *
- * Based on the Python SDK for the Model Context Protocol
- * https://github.com/modelcontextprotocol/python-sdk
- *
- * PHP conversion developed by:
- * - Josh Abbott
- * - Claude 3.5 Sonnet (Anthropic AI model)
- * - ChatGPT o1 pro mode
+ * (c) 2026 Logiscape LLC <https://logiscape.com>
  *
  * For the full copyright and license information, please view the LICENSE
  * file that was distributed with this source code.
@@ -131,49 +123,4 @@ class SessionTokenStorage implements TokenStorageInterface
         return $this->storage->isEncrypted();
     }
 
-    /**
-     * Clean up old session token directories.
-     *
-     * Removes token directories that haven't been accessed in the specified time.
-     *
-     * @param int $maxAge Maximum age in seconds (default: 7 days)
-     * @return int Number of directories cleaned up
-     */
-    public function cleanupOldSessions(int $maxAge = 604800): int
-    {
-        $cleaned = 0;
-        $cutoff = time() - $maxAge;
-
-        $dirs = glob($this->basePath . DIRECTORY_SEPARATOR . '*', GLOB_ONLYDIR);
-        if ($dirs === false) {
-            return 0;
-        }
-
-        foreach ($dirs as $dir) {
-            // Skip if this is the current session's directory
-            if (basename($dir) === $this->sanitizeSessionId($this->sessionId)) {
-                continue;
-            }
-
-            // Check directory modification time
-            $mtime = filemtime($dir);
-            if ($mtime !== false && $mtime < $cutoff) {
-                // Remove all files in the directory
-                $files = glob($dir . DIRECTORY_SEPARATOR . '*');
-                if ($files !== false) {
-                    foreach ($files as $file) {
-                        if (is_file($file)) {
-                            unlink($file);
-                        }
-                    }
-                }
-                // Remove the directory
-                if (rmdir($dir)) {
-                    $cleaned++;
-                }
-            }
-        }
-
-        return $cleaned;
-    }
 }

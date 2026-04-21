@@ -1,0 +1,15 @@
+{
+    "name": "logiscape/mcp-sdk-php-webclient",
+    "description": "Browser-based tester for MCP servers, built on logiscape/mcp-sdk-php",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.1",
+        "ext-curl": "*",
+        "ext-json": "*",
+        "logiscape/mcp-sdk-php": "dev-main",
+        "monolog/monolog": "^3.0"
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
