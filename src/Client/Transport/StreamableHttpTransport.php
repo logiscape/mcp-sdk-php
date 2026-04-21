@@ -424,18 +424,23 @@ class StreamableHttpTransport
             }
         );
 
-        // Pump the standalone stream from the xferinfo progress callback
-        // too. WRITEFUNCTION only fires when the POST itself is receiving
+        // Pump the standalone stream from the progress callback too.
+        // WRITEFUNCTION only fires when the POST itself is receiving
         // data, but a server that has fired a server-initiated request on
         // the standalone stream and is waiting for the client's response
         // before producing the POST's response will keep this POST idle.
-        // libcurl invokes XFERINFOFUNCTION roughly once per second even
-        // when the transfer is idle, giving us a reliable heartbeat to
-        // drain the standalone stream and avoid deadlock.
+        // libcurl invokes the progress callback roughly once per second
+        // even when the transfer is idle, giving us a reliable heartbeat
+        // to drain the standalone stream and avoid deadlock.
+        // CURLOPT_PROGRESSFUNCTION is used instead of the newer
+        // CURLOPT_XFERINFOFUNCTION because the latter requires PHP 8.2+
+        // while this package supports PHP 8.1. The callback shape is the
+        // same; only the size argument types differ (float vs int), and
+        // we don't read them.
         curl_setopt($ch, CURLOPT_NOPROGRESS, false);
         curl_setopt(
             $ch,
-            CURLOPT_XFERINFOFUNCTION,
+            CURLOPT_PROGRESSFUNCTION,
             function ($ch, $dlTotal, $dlNow, $ulTotal, $ulNow): int {
                 $this->pumpStandaloneSseStream();
                 return 0;
