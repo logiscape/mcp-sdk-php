@@ -444,6 +444,13 @@ final class SessionStore
             'connectionTimeout' => $config['connectionTimeout'] ?? 30.0,
             'readTimeout' => $config['readTimeout'] ?? 60.0,
             'verifyTls' => $config['verifyTls'] ?? true,
+            // The webclient issues one synchronous operation per PHP request
+            // and then detaches. A standalone GET SSE process cannot outlive
+            // that request usefully, and on cPanel/Apache it may be created
+            // with pcntl_fork(), inheriting the PHP session/log state from the
+            // request. Keep POST handling unchanged, but do not open that
+            // background channel for the wrapper UI.
+            'autoSse' => false,
         ];
         $oauthCfg = $this->buildOAuthConfiguration($config);
         if ($oauthCfg !== null) {
