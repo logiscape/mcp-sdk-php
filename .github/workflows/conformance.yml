@@ -1,0 +1,73 @@
+name: MCP Conformance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Manual trigger from the Actions tab, useful for re-running without a push.
+  workflow_dispatch:
+
+# Cancel in-progress runs when a new commit is pushed to the same PR/branch.
+concurrency:
+  group: conformance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Server conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: mbstring, json, curl
+          coverage: none
+          tools: composer:v2
+
+      - name: Install PHP dependencies
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Start MCP server
+        run: |
+          php -S 127.0.0.1:3000 conformance/everything-server.php &
+          # Wait until the server accepts HTTP requests.
+          # Match only real HTTP status codes (100-599). curl prints "000" on
+          # connection failure, so "^[0-9]{3}$" would exit the loop before the
+          # server is listening — "^[1-5][0-9]{2}$" rejects 000 explicitly.
+          timeout 30 bash -c \
+            'until curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000 | grep -qE "^[1-5][0-9]{2}$"; do sleep 0.5; done'
+
+      - name: Run server conformance
+        uses: modelcontextprotocol/conformance@v0.1.16
+        with:
+          mode: server
+          url: http://127.0.0.1:3000
+          expected-failures: ./conformance/conformance-baseline.yml
+
+  client:
+    name: Client conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: mbstring, json, curl
+          coverage: none
+          tools: composer:v2
+
+      - name: Install PHP dependencies
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      - name: Run client conformance
+        uses: modelcontextprotocol/conformance@v0.1.16
+        with:
+          mode: client
+          command: 'php conformance/everything-client.php'
+          suite: all
+          expected-failures: ./conformance/conformance-baseline.yml
