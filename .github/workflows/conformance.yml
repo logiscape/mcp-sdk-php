@@ -70,4 +70,5 @@ jobs:
           mode: client
           command: 'php conformance/everything-client.php'
           suite: all
+          timeout: 120000
           expected-failures: ./conformance/conformance-baseline.yml

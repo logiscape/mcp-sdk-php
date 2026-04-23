@@ -78,7 +78,8 @@ final class SseEmitterTest extends TestCase
     public function testHasEmittedStartsFalse(): void
     {
         $emitter = new SseEmitter(
-            static fn (string $s): null => null,
+            static function (string $s): void {
+            },
             static fn (): bool => false,
         );
         $this->assertFalse($emitter->hasEmitted());

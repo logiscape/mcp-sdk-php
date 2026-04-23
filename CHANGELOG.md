@@ -25,6 +25,7 @@ This file was introduced during the v1.7.x series. Structured entries below cove
   labels, testing) and `conformance/README.md`.
 - GitHub action for official MCP conformance tests
 - GitHub action for unit tests and PHPStan
+- PHP 8.1 compatibility fix for SSE emitter test
 
 ### Removed
 
