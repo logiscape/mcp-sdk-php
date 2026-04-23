@@ -1,6 +1,6 @@
 # Model Context Protocol SDK for PHP
 
-English | [中文](README.zh-CN.md)
+[![MCP Conformance](https://github.com/logiscape/mcp-sdk-php/actions/workflows/conformance.yml/badge.svg)](https://github.com/logiscape/mcp-sdk-php/actions/workflows/conformance.yml)
 
 This package provides a PHP implementation of the [Model Context Protocol](https://modelcontextprotocol.io). The primary goal of this project is to provide both a MCP server and a MCP client using pure PHP, making it easy to use in PHP/Apache/cPanel hosting environments with typical server configurations.
 
@@ -10,11 +10,12 @@ This PHP SDK implements the full MCP specification, making it easy to:
 * Build MCP clients that can connect to any MCP server
 * Create MCP servers that expose resources, prompts and tools
 * Use standard transports like stdio and HTTP
-* Handle all MCP protocol messages and lifecycle events
 
-This SDK began as a PHP port of the official [Python SDK](https://github.com/modelcontextprotocol/python-sdk) for the Model Context Protocol. It has since been expanded to fully support MCP using native PHP functions, helping to maximize compatibility with most standard web hosting environments.
+This SDK offers two major advantages for the MCP and PHP developer communities:
 
-This SDK features a 100% pass rate on the applicable required [MCP Conformance Tests](https://github.com/modelcontextprotocol/conformance) as of testing suite v0.1.16 and aims to maintain full conformance as the spec and tests evolve, not including tests still marked as experimental or optional extensions.
+* This SDK features a 100% pass rate on the applicable required [MCP Conformance Tests](https://github.com/modelcontextprotocol/conformance) as of testing suite v0.1.16 and aims to maintain full conformance as the spec and tests evolve, not including tests still marked as experimental or optional extensions.
+
+* The SDK can demonstrate both a functional MCP client and MCP server with a single Composer command. See the [Webclient Example](webclient/README.md).
 
 ## Installation
 
@@ -132,20 +133,38 @@ The HTTP server transport includes optional OAuth 2.1 support. For more details 
 
 ## Documentation
 
-For detailed information about the Model Context Protocol, visit the [official documentation](https://modelcontextprotocol.io).
+For detailed information about the Model Context Protocol itself, visit the [official documentation](https://modelcontextprotocol.io).
 
-## Latest Updates
+Project-specific documentation lives in this repository:
 
-The SDK is currently aiming to support the 2025-11-25 revision of the MCP Spec.
+| Document | Purpose |
+| --- | --- |
+| [Server Development Guide](docs/server-dev.md) | Building MCP servers with `McpServer`. |
+| [Testing Guide](docs/testing.md) | Unit tests, PHPStan, conformance, MCP Inspector, Claude Code, OpenAI. |
+| [Compatibility Guide](docs/compatibility.md) | cPanel / Apache / PHP-FPM notes and graceful-degradation rules. |
+| [Dependency Policy](docs/dependency-policy.md) | How dependencies are declared, bumped, and retired. |
+| [Label Scheme](docs/labels.md) | Issue labels aligned with the MCP SDK Working Group conventions. |
+| [Conformance Testing](conformance/README.md) | How the conformance harness works and the no-shortcut rule. |
 
-### Implemented
-- Structured tool output
-- New metadata such as icons
-- Experimental support for tasks
-- Elicitation
+Project governance and process:
 
-### Partial Implementation or In Development
-- Experimental support for task-augmented elicitation
+| Document | Purpose |
+| --- | --- |
+| [CONTRIBUTING](CONTRIBUTING.md) | Local development setup, test stack, coding standards, versioning policy. |
+| [ROADMAP](ROADMAP.md) | Direction, tier self-assessment against SEP-1730, and what we're working on. |
+| [CHANGELOG](CHANGELOG.md) | Structured release history. |
+| [SECURITY](SECURITY.md) | How to report vulnerabilities. |
+| [GOVERNANCE](GOVERNANCE.md) | How decisions are made and how to become a trusted contributor. |
+| [SUPPORT](SUPPORT.md) | Where to ask questions. |
+| [CODE_OF_CONDUCT](CODE_OF_CONDUCT.md) | Adopts Contributor Covenant 2.1 by reference; summarises the key sections. |
+
+## Project Status
+
+This SDK tracks the latest MCP specification revision (currently `2025-11-25`) and runs the full [official conformance suite](https://github.com/modelcontextprotocol/conformance) in CI. At the time of writing, 100% of the applicable required tests pass against suite `v0.1.16`; known failures are limited to optional MCP Extensions and are documented in [`conformance/conformance-baseline.yml`](conformance/conformance-baseline.yml).
+
+This is a community-maintained SDK. See [ROADMAP.md](ROADMAP.md) for a candid self-assessment against the [SDK tier criteria](https://modelcontextprotocol.io/community/sdk-tiers) and [GOVERNANCE.md](GOVERNANCE.md) for how the project is maintained.
+
+Release history is captured in [CHANGELOG.md](CHANGELOG.md); what is shipping next is tracked under its `[Unreleased]` heading.
 
 ## Credits
 

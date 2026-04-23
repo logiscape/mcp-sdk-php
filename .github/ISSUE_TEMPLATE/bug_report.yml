@@ -1,0 +1,119 @@
+name: Bug report
+description: Report a reproducible defect in the SDK.
+title: "[Bug]: "
+labels: ["bug", "needs confirmation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please make sure this is a **bug in the SDK**, not a support question — support questions belong in a [question issue](https://github.com/logiscape/mcp-sdk-php/issues/new?template=question.yml).
+
+        **Security issues must not be reported here.** Please follow [SECURITY.md](https://github.com/logiscape/mcp-sdk-php/blob/main/SECURITY.md).
+
+  - type: checkboxes
+    id: prechecks
+    attributes:
+      label: Before you submit
+      description: A quick sanity check.
+      options:
+        - label: I have searched [existing issues](https://github.com/logiscape/mcp-sdk-php/issues?q=is%3Aissue) (including closed ones) and not found a duplicate.
+          required: true
+        - label: I am using a supported version of the SDK (see [SECURITY.md](https://github.com/logiscape/mcp-sdk-php/blob/main/SECURITY.md) for the support table).
+          required: true
+        - label: This is not a security vulnerability. (If it is, close this form and see [SECURITY.md](https://github.com/logiscape/mcp-sdk-php/blob/main/SECURITY.md).)
+          required: true
+
+  - type: input
+    id: sdk-version
+    attributes:
+      label: SDK version
+      description: e.g. `v1.7.0`, or a commit hash if you're on `main`.
+      placeholder: "v1.7.0"
+    validations:
+      required: true
+
+  - type: input
+    id: php-version
+    attributes:
+      label: PHP version
+      description: Output of `php -v` (first line is fine).
+      placeholder: "PHP 8.2.15"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system / hosting
+      description: What you're running the SDK on.
+      options:
+        - Linux (CLI)
+        - Linux (Apache / cPanel)
+        - Linux (nginx / PHP-FPM)
+        - macOS (CLI)
+        - Windows (CLI)
+        - Docker
+        - Other (describe in "Additional context")
+    validations:
+      required: true
+
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      description: Which MCP transport is involved.
+      options:
+        - stdio
+        - HTTP (no SSE)
+        - HTTP with SSE
+        - Not applicable
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: oauth
+    attributes:
+      label: OAuth
+      options:
+        - label: OAuth is involved in the failing flow.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: A clear description of the behaviour you saw.
+      placeholder: "When I called `$session->callTool('foo', [...])`, the server returned …"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-expected
+    attributes:
+      label: What you expected to happen
+      placeholder: "According to the MCP spec / previous SDK version, I expected …"
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: |
+        Ideally, a small PHP snippet that reproduces the problem. If it's too
+        large for the textarea, link to a gist or a public repository.
+      render: php
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: SDK PSR-3 logs or server output, trimmed to the relevant section.
+      render: text
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else that might help — SAPI, `.htaccess`, PHP extensions, custom handlers.

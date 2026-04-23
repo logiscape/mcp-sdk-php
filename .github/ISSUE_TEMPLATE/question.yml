@@ -1,0 +1,43 @@
+name: Question
+description: Ask a question about using the SDK.
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Questions are welcome. A few quick pointers before you ask:
+
+        - [README](https://github.com/logiscape/mcp-sdk-php/blob/main/README.md) and the [docs/ directory](https://github.com/logiscape/mcp-sdk-php/tree/main/docs) cover the common cases.
+        - [SUPPORT.md](https://github.com/logiscape/mcp-sdk-php/blob/main/SUPPORT.md) explains what the maintainer can and cannot help with.
+        - For protocol-level questions that aren't really about the PHP SDK, the upstream [Model Context Protocol](https://modelcontextprotocol.io) community is a better fit.
+        - Do **not** use this form for security vulnerabilities — see [SECURITY.md](https://github.com/logiscape/mcp-sdk-php/blob/main/SECURITY.md).
+
+  - type: checkboxes
+    id: prechecks
+    attributes:
+      label: Before you ask
+      options:
+        - label: I have checked the [README](https://github.com/logiscape/mcp-sdk-php/blob/main/README.md), [server development guide](https://github.com/logiscape/mcp-sdk-php/blob/main/docs/server-dev.md), and [docs/ directory](https://github.com/logiscape/mcp-sdk-php/tree/main/docs).
+          required: true
+        - label: I have searched [existing issues](https://github.com/logiscape/mcp-sdk-php/issues?q=is%3Aissue) for a similar question.
+          required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: What you've tried
+      description: Code snippets, links to docs you've read, or approaches you've already ruled out.
+
+  - type: input
+    id: sdk-version
+    attributes:
+      label: SDK version (if relevant)
+      placeholder: "v1.7.0"

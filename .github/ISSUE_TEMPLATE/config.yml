@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/logiscape/mcp-sdk-php/security/advisories/new
+    about: Security issues must not be reported in public issues. Please use GitHub Security Advisories or follow SECURITY.md.
+  - name: Read the documentation
+    url: https://github.com/logiscape/mcp-sdk-php#documentation
+    about: Many questions are answered in the README, server development guide, and the docs/ directory.
+  - name: MCP specification and upstream community
+    url: https://modelcontextprotocol.io
+    about: Questions about the MCP specification itself (not this PHP SDK) are best asked upstream.

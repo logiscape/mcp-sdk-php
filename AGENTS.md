@@ -10,6 +10,18 @@ This is a PHP implementation of the Model Context Protocol (MCP), allowing appli
 - Supports both traditional CLI/stdio and web hosting environments
 - Includes McpServer convenience wrapper for building fully functional MCP servers with just a few lines of PHP code
 
+## Contributor-facing documentation
+
+For non-trivial work, please also consult the governance and process docs at
+the repository root: [CONTRIBUTING.md](CONTRIBUTING.md) (coding standards,
+test stack, versioning policy), [ROADMAP.md](ROADMAP.md) (direction and tier
+self-assessment), [SECURITY.md](SECURITY.md) (vulnerability reporting),
+[GOVERNANCE.md](GOVERNANCE.md), and the deeper guides under `docs/` —
+[docs/testing.md](docs/testing.md), [docs/compatibility.md](docs/compatibility.md)
+(the cPanel/Apache compatibility rules), [docs/dependency-policy.md](docs/dependency-policy.md),
+and [conformance/README.md](conformance/README.md) (including the
+no-shortcuts-for-conformance rule).
+
 ## Development Testing Commands
 
 ### Testing Suite Installation & Dependencies
@@ -160,7 +172,7 @@ The SDK implements MCP spec version negotiation in `BaseSession`:
 - Client requests specific protocol version in initialization request
 - Session negotiates to highest mutually supported version
 - Falls back to older versions for backward compatibility
-- Current implementation targets 2025-03-26 spec revision
+- Current implementation targets 2025-11-25 spec revision
 
 ### Web Hosting Considerations
 
