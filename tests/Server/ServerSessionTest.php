@@ -626,14 +626,16 @@ final class ServerSessionTest extends TestCase
     }
 
     /**
-     * Test that notification handlers for notifications/cancelled receive synthesized params.
+     * Test that notification handlers for notifications/cancelled receive params.
      *
-     * CancelledNotification stores its payload as direct properties rather than in
-     * Notification::$params, so the session normalizes it back into NotificationParams
-     * before invoking registered handlers. This preserves the existing callback shape
-     * while keeping the wire payload available to handlers.
+     * CancelledNotification mirrors its requestId / reason into Notification::$params
+     * inside the constructor (so the wire-side serializer also sees them), and the
+     * receive-side factory forwards any spec-extension fields onto the same params
+     * object. The session can therefore hand the params straight to the handler
+     * without further normalization.
      *
-     * Corresponds to ServerSession.php:247-275 (notification dispatch and param normalization)
+     * Corresponds to ServerSession.php handleNotification() and the
+     * CancelledNotification constructor / ClientNotification::createCancelledNotification factory.
      */
     public function testCancelledNotificationHandlerReceivesSynthesizedParams(): void
     {
@@ -698,14 +700,13 @@ final class ServerSessionTest extends TestCase
     }
 
     /**
-     * Test that extra wire fields on notifications/cancelled survive param normalization.
+     * Test that extra wire fields on notifications/cancelled survive parsing.
      *
      * The MCP spec allows unofficial extension fields on notification params for forward
-     * compatibility. ClientNotification::createCancelledNotification() preserves extra
-     * fields via ExtraFieldsTrait, and getHandlerNotificationParams() must carry them
-     * into the synthesized NotificationParams so handlers see the full wire payload.
-     *
-     * Corresponds to ServerSession.php:276-281 (extra field forwarding)
+     * compatibility. ClientNotification::createCancelledNotification() forwards every
+     * non-{requestId,reason} key from the wire payload onto the inner NotificationParams
+     * (via ExtraFieldsTrait::__set), so the handler that receives the params sees the
+     * full payload including extensions.
      */
     public function testCancelledNotificationPreservesExtraFields(): void
     {

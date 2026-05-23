@@ -292,29 +292,12 @@ class ServerSession extends BaseSession {
 
     private function getHandlerNotificationParams(Notification $notification): ?NotificationParams
     {
-        if ($notification->params !== null) {
-            return $notification->params;
-        }
-
-        if ($notification instanceof \Mcp\Types\CancelledNotification) {
-            $params = new NotificationParams();
-            $params->requestId = $notification->requestId->getValue();
-
-            if ($notification->reason !== null) {
-                $params->reason = $notification->reason;
-            }
-
-            // Preserve any extra wire fields for forward compatibility
-            foreach ($notification->getExtraFields() as $key => $value) {
-                if ($key !== 'requestId' && $key !== 'reason') {
-                    $params->$key = $value;
-                }
-            }
-
-            return $params;
-        }
-
-        return null;
+        // Every notification type the SDK builds populates Notification::$params
+        // with the wire-form params (CancelledNotification's constructor mirrors
+        // its direct requestId/reason properties into $params for serialization).
+        // Returning that slot directly gives handlers the unmodified inbound payload,
+        // including any spec-extension fields the factory forwarded onto it.
+        return $notification->params;
     }
 
     /**

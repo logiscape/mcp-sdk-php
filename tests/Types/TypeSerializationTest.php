@@ -5,9 +5,17 @@ declare(strict_types=1);
 namespace Mcp\Tests\Types;
 
 use Mcp\Types\CallToolResult;
+use Mcp\Types\CancelledNotification;
+use Mcp\Types\ClientNotification;
+use Mcp\Types\ProgressNotification;
+use Mcp\Types\ResourceUpdatedNotification;
+use Mcp\Types\ServerNotification;
+use Mcp\Types\JSONRPCNotification;
+use Mcp\Types\JsonRpcMessage;
 use Mcp\Types\TextContent;
 use Mcp\Types\ImageContent;
 use Mcp\Types\InitializeResult;
+use Mcp\Types\RequestId;
 use Mcp\Types\ServerCapabilities;
 use Mcp\Types\Implementation;
 use Mcp\Types\Result;
@@ -314,5 +322,173 @@ final class TypeSerializationTest extends TestCase
 
         $serialized = $result->jsonSerialize();
         $this->assertArrayNotHasKey('structuredContent', $serialized);
+    }
+
+    /**
+     * Verify the wire format of a sent CancelledNotification.
+     *
+     * BaseSession::sendNotification() reads $notification->params off the typed
+     * notification and copies it into the outgoing JSONRPCNotification. Per the
+     * MCP spec, notifications/cancelled MUST carry params.requestId on the wire,
+     * so the CancelledNotification constructor mirrors its direct properties
+     * into the parent params slot. This test pins down that contract: a default
+     * CancelledNotification must serialize to a frame whose params object
+     * contains the expected requestId and reason.
+     *
+     * Without this, a notification produced as `new CancelledNotification(...)`
+     * would serialize without a `params` key at all and silently be dropped by
+     * spec-compliant peers.
+     */
+    public function testCancelledNotificationSerializesParamsOnWire(): void
+    {
+        $notification = new CancelledNotification(
+            requestId: new RequestId(42),
+            reason: 'user cancel',
+        );
+
+        $this->assertNotNull(
+            $notification->params,
+            'CancelledNotification constructor must populate Notification::$params for the send-side serializer'
+        );
+
+        // Mirror exactly what BaseSession::sendNotification() does to build
+        // the outgoing wire frame.
+        $jrn = new JSONRPCNotification(
+            jsonrpc: '2.0',
+            method: $notification->method,
+            params: $notification->params,
+        );
+        $envelope = json_decode(json_encode(new JsonRpcMessage($jrn)), true);
+
+        $this->assertSame('notifications/cancelled', $envelope['method']);
+        $this->assertArrayHasKey('params', $envelope, 'Wire frame must include a params object');
+        $this->assertSame(42, $envelope['params']['requestId']);
+        $this->assertSame('user cancel', $envelope['params']['reason']);
+    }
+
+    /**
+     * The reason field is optional per the MCP spec; verify it is omitted from
+     * the wire frame when not supplied, while requestId remains present.
+     */
+    public function testCancelledNotificationOmitsReasonWhenAbsent(): void
+    {
+        $notification = new CancelledNotification(
+            requestId: new RequestId('req-abc'),
+        );
+
+        $jrn = new JSONRPCNotification(
+            jsonrpc: '2.0',
+            method: $notification->method,
+            params: $notification->params,
+        );
+        $envelope = json_decode(json_encode(new JsonRpcMessage($jrn)), true);
+
+        $this->assertSame('req-abc', $envelope['params']['requestId']);
+        $this->assertArrayNotHasKey('reason', $envelope['params']);
+    }
+
+    /**
+     * A cancellation arriving with a `_meta` object must parse without fatal.
+     *
+     * `_meta` is a declared `?Meta` property on NotificationParams, so the
+     * generic field-forwarding path must route it into a Meta object rather
+     * than assigning the raw array onto the typed slot (which throws a
+     * TypeError). This pins down the parse for the client-side union, and
+     * verifies the value survives a wire round-trip.
+     */
+    public function testClientCancelledNotificationParsesMeta(): void
+    {
+        $client = ClientNotification::fromMethodAndParams(
+            'notifications/cancelled',
+            ['requestId' => 'r1', 'reason' => 'stop', '_meta' => ['trace' => 'x']],
+        );
+
+        $notification = $client->getNotification();
+        $this->assertInstanceOf(CancelledNotification::class, $notification);
+
+        $meta = $notification->params->_meta;
+        $this->assertInstanceOf(Meta::class, $meta);
+        $this->assertSame('x', $meta->trace);
+
+        $jrn = new JSONRPCNotification(
+            jsonrpc: '2.0',
+            method: $notification->method,
+            params: $notification->params,
+        );
+        $envelope = json_decode(json_encode(new JsonRpcMessage($jrn)), true);
+
+        $this->assertSame('notifications/cancelled', $envelope['method']);
+        $this->assertSame('r1', $envelope['params']['requestId']);
+        $this->assertSame('stop', $envelope['params']['reason']);
+        $this->assertSame(['trace' => 'x'], $envelope['params']['_meta']);
+    }
+
+    /**
+     * Same regression as the client path, exercised through the server-side
+     * notification union so both factory methods are covered.
+     */
+    public function testServerCancelledNotificationParsesMeta(): void
+    {
+        $server = ServerNotification::fromMethodAndParams(
+            'notifications/cancelled',
+            ['requestId' => 42, '_meta' => ['trace' => 'y']],
+        );
+
+        $notification = $server->getNotification();
+        $this->assertInstanceOf(CancelledNotification::class, $notification);
+
+        $meta = $notification->params->_meta;
+        $this->assertInstanceOf(Meta::class, $meta);
+        $this->assertSame('y', $meta->trace);
+
+        $jrn = new JSONRPCNotification(
+            jsonrpc: '2.0',
+            method: $notification->method,
+            params: $notification->params,
+        );
+        $envelope = json_decode(json_encode(new JsonRpcMessage($jrn)), true);
+
+        $this->assertSame(42, $envelope['params']['requestId']);
+        $this->assertSame(['trace' => 'y'], $envelope['params']['_meta']);
+    }
+
+    /**
+     * The same `_meta` routing applies to the other notification factories
+     * that forward leftover params; progress is the representative case.
+     */
+    public function testProgressNotificationParsesMeta(): void
+    {
+        $client = ClientNotification::fromMethodAndParams(
+            'notifications/progress',
+            ['progressToken' => 'tok', 'progress' => 0.5, '_meta' => ['trace' => 'z']],
+        );
+
+        $notification = $client->getNotification();
+        $this->assertInstanceOf(ProgressNotification::class, $notification);
+
+        $meta = $notification->params->_meta;
+        $this->assertInstanceOf(Meta::class, $meta);
+        $this->assertSame('z', $meta->trace);
+    }
+
+    /**
+     * resources/updated forwards leftover params onto the params object after
+     * construction (skipping `uri`), so it shared the same `_meta` fatal. The
+     * uri must be preserved and `_meta` normalized into a Meta object.
+     */
+    public function testResourceUpdatedNotificationParsesMeta(): void
+    {
+        $server = ServerNotification::fromMethodAndParams(
+            'notifications/resources/updated',
+            ['uri' => 'file:///x', '_meta' => ['trace' => 'w']],
+        );
+
+        $notification = $server->getNotification();
+        $this->assertInstanceOf(ResourceUpdatedNotification::class, $notification);
+        $this->assertSame('file:///x', $notification->params->uri);
+
+        $meta = $notification->params->_meta;
+        $this->assertInstanceOf(Meta::class, $meta);
+        $this->assertSame('w', $meta->trace);
     }
 }

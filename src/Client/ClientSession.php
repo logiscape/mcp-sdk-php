@@ -62,6 +62,8 @@ use Mcp\Types\PromptReference;
 use Mcp\Types\InitializedNotification;
 use Mcp\Types\ProgressNotification;
 use Mcp\Types\PingRequest;
+use Mcp\Types\ListRootsRequest;
+use Mcp\Types\ListRootsResult;
 use Mcp\Types\RootsListChangedNotification;
 use Mcp\Types\JsonRpcMessage;
 use Psr\Log\LoggerInterface;
@@ -110,6 +112,12 @@ class ClientSession extends BaseSession {
     /** @var bool Whether the registered handler is prepared to handle URL-mode requests (2025-11-25). */
     private bool $elicitationSupportsUrlMode = false;
 
+    /** @var callable|null User-registered roots/list handler (one per session). */
+    private $rootsHandler = null;
+
+    /** @var bool Whether the client will emit notifications/roots/list_changed. */
+    private bool $rootsListChanged = true;
+
     /**
      * ClientSession constructor.
      *
@@ -135,6 +143,40 @@ class ClientSession extends BaseSession {
         $this->writeStream = $writeStream;
         $this->readTimeout = $readTimeout;
         $this->logger = $logger ?? new NullLogger();
+
+        $this->registerBuiltinPingResponder();
+    }
+
+    /**
+     * Register a built-in handler that auto-responds to server-initiated
+     * `ping` requests with an empty result.
+     *
+     * Per the MCP spec (https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/ping),
+     * either side can initiate a ping at any time and the receiver MUST respond
+     * promptly with `{}`. Without this, a server probing client liveness would
+     * see its ping time out and might consider the connection stale and tear it
+     * down, even when the PHP process is healthy and processing other work.
+     *
+     * The handler is registered first, so user-registered handlers run after it
+     * and may inspect the request — but it short-circuits via hasResponded() if
+     * a user handler beat it to the response, leaving room for advanced callers
+     * to override the default behavior without colliding with the built-in.
+     */
+    private function registerBuiltinPingResponder(): void {
+        $this->onRequest(function (RequestResponder $responder): void {
+            $wrapper = $responder->getRequest();
+            if (!($wrapper instanceof ServerRequest)) {
+                return;
+            }
+            if (!($wrapper->getRequest() instanceof PingRequest)) {
+                return;
+            }
+            if ($responder->hasResponded()) {
+                // A user-registered onRequest handler already replied; do nothing.
+                return;
+            }
+            $responder->sendResponse(new EmptyResult());
+        });
     }
 
     /**
@@ -338,6 +380,68 @@ class ClientSession extends BaseSession {
     }
 
     /**
+     * Register a handler for server-initiated `roots/list` requests.
+     *
+     * For a fresh session, this must be called before {@see initialize()} so
+     * the `roots` capability is advertised in the initialization handshake.
+     * Per the MCP spec a client that supports roots MUST declare the
+     * capability; without this registration the SDK advertises no roots
+     * capability and a spec-compliant server will never call `roots/list`.
+     *
+     * For a session rehydrated via {@see createRestored()}, registration is
+     * allowed post-init: the capability was already negotiated in the original
+     * PHP request and cannot be re-advertised, but the server can still send
+     * `roots/list` based on that negotiated state, so the dispatch path must
+     * still be wired up.
+     *
+     * When $listChanged is true (the default) the advertised capability is
+     * `{ "listChanged": true }`, signalling that the client may emit
+     * {@see sendRootsListChanged()} notifications when its root list changes.
+     * Pass false to advertise `{ "listChanged": false }` for a static root set.
+     *
+     * @param callable(): ListRootsResult $handler
+     */
+    public function onListRoots(callable $handler, bool $listChanged = true): void {
+        if ($this->initialized && !$this->isRestored) {
+            throw new RuntimeException('onListRoots() must be called before initialize()');
+        }
+        if ($this->rootsHandler !== null) {
+            throw new RuntimeException('Roots handler already registered');
+        }
+        $this->rootsHandler = $handler;
+        $this->rootsListChanged = $listChanged;
+
+        $this->onRequest(function (RequestResponder $responder) use ($handler): void {
+            $wrapper = $responder->getRequest();
+            if (!($wrapper instanceof ServerRequest)) {
+                return;
+            }
+            if (!($wrapper->getRequest() instanceof ListRootsRequest)) {
+                return;
+            }
+            if ($responder->hasResponded()) {
+                // A handler registered earlier already replied; do nothing.
+                return;
+            }
+            try {
+                $result = $handler();
+                if (!($result instanceof ListRootsResult)) {
+                    throw new RuntimeException(
+                        'Roots handler must return a ListRootsResult'
+                    );
+                }
+                $responder->sendResponse($result);
+            } catch (\Throwable $e) {
+                $this->logger->error('Roots handler failed: ' . $e->getMessage());
+                $responder->sendResponse(new ErrorData(
+                    code: -32603,
+                    message: 'Roots handler failed: ' . $e->getMessage(),
+                ));
+            }
+        });
+    }
+
+    /**
      * Build the ClientCapabilities advertised at initialization time.
      *
      * Advertises elicitation support only when a handler is registered;
@@ -345,6 +449,10 @@ class ClientSession extends BaseSession {
      * always supports inline form responses), and `url` is added only when
      * the caller opted in via $supportsUrlMode. The `applyDefaults` flag is
      * included only when the caller opted in.
+     *
+     * Advertises the `roots` capability only when a roots/list handler is
+     * registered via {@see onListRoots()}; `listChanged` reflects whether the
+     * caller intends to emit notifications/roots/list_changed.
      */
     private function buildClientCapabilities(): ClientCapabilities {
         $elicitation = null;
@@ -355,7 +463,11 @@ class ClientSession extends BaseSession {
                 applyDefaults: $this->elicitationApplyDefaults ? true : null,
             );
         }
-        return new ClientCapabilities(elicitation: $elicitation);
+        $roots = null;
+        if ($this->rootsHandler !== null) {
+            $roots = new ClientRootsCapability(listChanged: $this->rootsListChanged);
+        }
+        return new ClientCapabilities(roots: $roots, elicitation: $elicitation);
     }
 
     /**

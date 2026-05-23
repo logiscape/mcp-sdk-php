@@ -19,6 +19,11 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 ### Added
 
 - Client side documentation guide
+- `ClientSession::onListRoots()` and `Client::onListRoots()` register a
+  `roots/list` handler and advertise the `roots` capability in the
+  initialization handshake (`listChanged: true` by default; pass
+  `listChanged: false` for a static root set). Call before `connect()` /
+  `initialize()`.
 - `ClientSession::onElicit()` and `Client::onElicit()` accept a new
   `supportsUrlMode` parameter (default `false`) that opts the client into
   advertising the `url` sub-capability for elicitation, alongside `form`.
@@ -29,6 +34,34 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 ### Changed
 - Updated CI GitHub action for Node.js 24
 - ElicitationCompleteNotification moved to the correct union type
+- Expand server side documentation guide
+- CancelledNotification now serializes requestId and optional reason under
+  params, matching the MCP spec.
+
+### Fixed
+
+- Notifications carrying a `_meta` object no longer throw a `TypeError` while
+  parsing. `_meta` is a typed `?Meta` property on `NotificationParams`, but the
+  factory methods forwarded leftover wire fields with a direct assignment that
+  bypassed the extra-field path and fataled against the typed slot. A spec-valid
+  `notifications/cancelled` such as `{requestId, _meta: {...}}` now parses, as do
+  `notifications/progress`, `notifications/message`, `notifications/tasks/status`,
+  and `notifications/resources/updated`, which shared the same defect. `_meta` is
+  now normalized into a `Meta` object via the new
+  `NotificationParams::applyWireFields()` helper.
+- The client now declares the `roots` capability during initialization when a
+  roots handler is registered via `onListRoots()`, satisfying the MCP spec MUST
+  for clients that support roots. Previously there was no high-level way to
+  advertise `roots`, so a spec-compliant server never called `roots/list` and
+  any `notifications/roots/list_changed` the client sent used an un-negotiated
+  capability.
+- `ClientSession` now responds to server-initiated `ping` requests with an
+  empty result, satisfying the MCP spec MUST. Previously the request was
+  dispatched into the session but no handler replied, so a server probing
+  client liveness would see the ping time out and could consider the
+  connection stale. A new public `RequestResponder::hasResponded()` accessor
+  lets user-registered `onRequest` handlers coexist with the built-in
+  responder.
 
 ## [1.7.1]
 

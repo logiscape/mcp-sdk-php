@@ -90,16 +90,14 @@ class ClientNotification implements McpModel {
 
         $reason = $params['reason'] ?? null;
 
-        // Any extra fields?
         $notification = new CancelledNotification($requestId, $reason);
 
-        // If there are additional keys in $params not handled, we can attach them as extra fields
-        // CancelledNotification doesn't have a params object, but we can store extra fields directly on notification if needed.
-        foreach ($params as $k => $v) {
-            if ($k !== 'requestId' && $k !== 'reason') {
-                $notification->$k = $v; 
-            }
-        }
+        // Forward any spec-extension fields beyond the two known keys onto
+        // the inner NotificationParams so handlers see the full wire payload.
+        // The constructor has already populated $notification->params with
+        // requestId / reason, so this just augments that object. _meta is
+        // normalized into a Meta object by applyWireFields().
+        $notification->params->applyWireFields($params, ['requestId', 'reason']);
 
         return new self($notification);
     }
@@ -157,12 +155,9 @@ class ClientNotification implements McpModel {
             total: $total
         );
 
-        // Extra fields not in the known set can be added as extra fields
-        foreach ($params as $k => $v) {
-            if (!in_array($k, ['progressToken', 'progress', 'total'], true)) {
-                $progressParams->$k = $v;
-            }
-        }
+        // Extra fields not in the known set are forwarded; _meta is normalized
+        // into a Meta object by applyWireFields().
+        $progressParams->applyWireFields($params, ['progressToken', 'progress', 'total']);
 
         return new self(new ProgressNotification($progressParams));
     }

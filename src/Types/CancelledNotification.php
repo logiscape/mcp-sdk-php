@@ -29,14 +29,30 @@ declare(strict_types=1);
 namespace Mcp\Types;
 
 /**
- * Notification for cancelled requests
+ * Notification for cancelled requests.
+ *
+ * Stores `requestId` and `reason` as direct properties for ergonomic access
+ * by both the send-side caller (who builds the notification) and the
+ * receive-side dispatch path (which reads them off the typed instance).
+ *
+ * The wire form per spec carries those values inside `params.requestId` /
+ * `params.reason`, so the constructor also populates the parent
+ * `Notification::$params` slot. That is what `BaseSession::sendNotification()`
+ * actually serializes onto the JSON-RPC frame; without it the wire
+ * notification would be missing the required `requestId` and the receiver
+ * would silently drop it.
  */
 class CancelledNotification extends Notification {
     public function __construct(
         public readonly RequestId $requestId,
         public ?string $reason = null,
     ) {
-        parent::__construct('notifications/cancelled');
+        $params = new NotificationParams();
+        $params->requestId = $requestId->getValue();
+        if ($reason !== null) {
+            $params->reason = $reason;
+        }
+        parent::__construct('notifications/cancelled', $params);
     }
 
     public function validate(): void {

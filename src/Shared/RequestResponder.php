@@ -88,6 +88,19 @@ class RequestResponder {
     }
 
     /**
+     * Whether a response has already been sent for this request.
+     *
+     * Useful for handlers that share an iterator with other registered handlers
+     * (BaseSession dispatches incoming requests to every handler in order); a
+     * built-in default handler can call this to defer to a user-registered
+     * handler that already responded, instead of triggering the
+     * "Request already responded to" guard in respond().
+     */
+    public function hasResponded(): bool {
+        return $this->responded;
+    }
+
+    /**
      * Returns the Meta object associated with the request, if any.
      */
     public function getMeta(): ?Meta {

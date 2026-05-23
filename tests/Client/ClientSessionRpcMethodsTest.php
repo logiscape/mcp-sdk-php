@@ -18,6 +18,11 @@ use Mcp\Types\LoggingLevel;
 use Mcp\Types\PromptReference;
 use Mcp\Types\ResourceReference;
 use Mcp\Types\ProgressToken;
+use Mcp\Types\JSONRPCRequest;
+use Mcp\Types\PingRequest;
+use Mcp\Types\ServerRequest;
+use Mcp\Types\EmptyResult;
+use Mcp\Shared\RequestResponder;
 
 /**
  * Tests for all RPC methods on ClientSession.
@@ -625,5 +630,118 @@ final class ClientSessionRpcMethodsTest extends TestCase
         $this->assertSame('tasks/cancel', $sent['method']);
         $this->assertSame('task-1', $sent['params']['taskId']);
         $this->assertInstanceOf(\Mcp\Types\TaskGetResult::class, $result);
+    }
+
+    // -----------------------------------------------------------------------
+    // 23. Incoming ping — built-in auto-responder
+    // -----------------------------------------------------------------------
+
+    /**
+     * Verify that ClientSession auto-responds to a server-initiated `ping`.
+     *
+     * Per the MCP spec (basic/utilities/ping), either side can initiate a ping
+     * and the receiver MUST respond promptly with `{}`. ClientSession registers
+     * a built-in handler in its constructor that satisfies this; the test
+     * dispatches a synthetic ping into the session and asserts a properly
+     * shaped JSON-RPC response (id-correlated, empty result) was written back.
+     */
+    public function testIncomingPingIsAutoAnswered(): void
+    {
+        $readStream  = new MemoryStream();
+        $writeStream = new MemoryStream();
+        $session     = $this->createRestoredSession($readStream, $writeStream);
+
+        $session->dispatchIncomingMessage(new JsonRpcMessage(
+            new JSONRPCRequest(jsonrpc: '2.0', id: new RequestId(99), method: 'ping')
+        ));
+
+        $msg = $writeStream->receive();
+        $this->assertInstanceOf(JsonRpcMessage::class, $msg);
+
+        $envelope = json_decode(json_encode($msg), true);
+        $this->assertSame('2.0', $envelope['jsonrpc']);
+        $this->assertSame(99, $envelope['id']);
+        $this->assertArrayHasKey('result', $envelope);
+        // Empty result serializes as a stdClass → {} on the wire (decoded back as []).
+        $this->assertSame([], (array) $envelope['result']);
+
+        // No second response should leak through.
+        $this->assertNull($writeStream->receive(), 'Only one response expected for a single ping');
+    }
+
+    /**
+     * Verify that a user-registered onRequest() handler can coexist with the
+     * built-in ping responder by checking RequestResponder::hasResponded()
+     * before attempting to send its own response.
+     *
+     * Without the hasResponded() guard, the built-in (which fires first
+     * because it is registered in the constructor) would already have sent the
+     * empty result and a second sendResponse() from a user handler would throw
+     * "Request already responded to". This test confirms that the published
+     * pattern (peek-then-defer) works.
+     */
+    public function testUserHandlerCanCoexistWithBuiltinPingResponder(): void
+    {
+        $readStream  = new MemoryStream();
+        $writeStream = new MemoryStream();
+        $session     = $this->createRestoredSession($readStream, $writeStream);
+
+        $userObservedPing = false;
+        $userTriedToRespond = false;
+
+        $session->onRequest(function (RequestResponder $responder) use (&$userObservedPing, &$userTriedToRespond): void {
+            $wrapper = $responder->getRequest();
+            if (!($wrapper instanceof ServerRequest)) {
+                return;
+            }
+            if (!($wrapper->getRequest() instanceof PingRequest)) {
+                return;
+            }
+            $userObservedPing = true;
+
+            // Built-in already responded; defer to it.
+            if ($responder->hasResponded()) {
+                return;
+            }
+            $userTriedToRespond = true;
+            $responder->sendResponse(new EmptyResult());
+        });
+
+        $session->dispatchIncomingMessage(new JsonRpcMessage(
+            new JSONRPCRequest(jsonrpc: '2.0', id: new RequestId(7), method: 'ping')
+        ));
+
+        $first = $writeStream->receive();
+        $second = $writeStream->receive();
+
+        $this->assertInstanceOf(JsonRpcMessage::class, $first, 'Built-in handler should have responded');
+        $this->assertNull($second, 'User handler should defer; only one response on the wire');
+        $this->assertTrue($userObservedPing, 'User handler should still observe the ping for side-effects');
+        $this->assertFalse($userTriedToRespond, 'User handler should defer because hasResponded() returned true');
+    }
+
+    /**
+     * Verify that the built-in ping responder does not interfere with non-ping
+     * server-initiated requests (roots/list, sampling/createMessage,
+     * elicitation/create). A non-ping incoming request should pass through to
+     * any other registered handlers without the built-in producing a spurious
+     * response.
+     */
+    public function testBuiltinPingResponderIgnoresNonPingRequests(): void
+    {
+        $readStream  = new MemoryStream();
+        $writeStream = new MemoryStream();
+        $session     = $this->createRestoredSession($readStream, $writeStream);
+
+        // roots/list is a known ServerRequest variant that the SDK does not
+        // auto-handle; the built-in ping handler should not respond to it.
+        $session->dispatchIncomingMessage(new JsonRpcMessage(
+            new JSONRPCRequest(jsonrpc: '2.0', id: new RequestId(11), method: 'roots/list')
+        ));
+
+        $this->assertNull(
+            $writeStream->receive(),
+            'Built-in ping responder must not write a response to non-ping requests'
+        );
     }
 }

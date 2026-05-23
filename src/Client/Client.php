@@ -72,6 +72,12 @@ class Client {
     /** @var bool Whether the pending elicitation handler opted into URL-mode advertisement. */
     private bool $pendingElicitationSupportsUrlMode = false;
 
+    /** @var callable|null Pending roots/list handler to register before initialize(). */
+    private $pendingRootsHandler = null;
+
+    /** @var bool Whether the pending roots handler advertises listChanged. */
+    private bool $pendingRootsListChanged = true;
+
     /**
      * Client constructor.
      *
@@ -102,6 +108,30 @@ class Client {
         $this->pendingElicitationHandler = $handler;
         $this->pendingElicitationApplyDefaults = $applyDefaults;
         $this->pendingElicitationSupportsUrlMode = $supportsUrlMode;
+    }
+
+    /**
+     * Register a handler for server-initiated `roots/list` requests.
+     *
+     * Must be called before {@see connect()} so the `roots` capability is
+     * advertised in the initialization handshake. Per the MCP spec a client
+     * that supports roots MUST declare the capability; otherwise a
+     * spec-compliant server will never call `roots/list`. The handler is
+     * applied to the session that connect() creates.
+     *
+     * When $listChanged is true (the default) the client advertises
+     * `roots: { listChanged: true }`, signalling it may emit
+     * `notifications/roots/list_changed` via
+     * {@see ClientSession::sendRootsListChanged()}.
+     *
+     * @param callable(): \Mcp\Types\ListRootsResult $handler
+     */
+    public function onListRoots(callable $handler, bool $listChanged = true): void {
+        if ($this->session !== null) {
+            throw new RuntimeException('onListRoots() must be called before connect()');
+        }
+        $this->pendingRootsHandler = $handler;
+        $this->pendingRootsListChanged = $listChanged;
     }
 
     /**
@@ -214,6 +244,16 @@ class Client {
                     $this->pendingElicitationHandler,
                     $this->pendingElicitationApplyDefaults,
                     $this->pendingElicitationSupportsUrlMode
+                );
+            }
+
+            // Apply any roots handler registered via onListRoots() before
+            // connect(). Must happen before initialize() so the roots
+            // capability is advertised in the handshake.
+            if ($this->pendingRootsHandler !== null) {
+                $this->session->onListRoots(
+                    $this->pendingRootsHandler,
+                    $this->pendingRootsListChanged
                 );
             }
 
@@ -364,6 +404,18 @@ class Client {
                     $this->pendingElicitationHandler,
                     $this->pendingElicitationApplyDefaults,
                     $this->pendingElicitationSupportsUrlMode
+                );
+            }
+
+            // Apply any roots handler registered via onListRoots() before
+            // resumeHttpSession(). The original session advertised the roots
+            // capability at its handshake, so the server may still send
+            // roots/list on the resumed connection; without this, those
+            // requests would arrive with no registered handler.
+            if ($this->pendingRootsHandler !== null) {
+                $this->session->onListRoots(
+                    $this->pendingRootsHandler,
+                    $this->pendingRootsListChanged
                 );
             }
 

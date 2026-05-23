@@ -155,10 +155,15 @@ $server->tool(
 $server->run();
 ```
 
-The SDK inspects the callback with PHP reflection:
+The SDK inspects the callback with PHP reflection and produces a JSON Schema that conforms to the [JSON Schema draft 2020-12](https://json-schema.org/draft/2020-12) dialect:
 - `float $value` becomes `{ "type": "number" }` in the JSON Schema
 - `string $unit` becomes `{ "type": "string" }`
 - Required vs. optional is determined by whether the parameter has a default value
+- The top-level schema is always `{ "type": "object" }` with `properties` and `required` populated from the callback's signature
+
+Reflection-built schemas omit the `$schema` declaration -- 2020-12 is the assumed default for tool input schemas and adding it explicitly would be redundant. Hand-written schemas (covered in [Custom Input Schemas](#custom-input-schemas) below) are free to include `$schema` themselves and to use any 2020-12 keyword the spec defines, including `$defs`, `$ref`, `oneOf`/`anyOf`/`allOf`, `additionalProperties`, `patternProperties`, and `unevaluatedProperties`. The SDK enforces only the structural constraints the MCP spec requires of a tool input schema -- the top-level `type` must be `"object"`, `properties` (when present) must be a JSON object, and `required` (when present) must be an array of non-empty strings -- and passes every other keyword through to the wire unchanged.
+
+Two known limits of the reflection path: the auto-generated `description` for each property is a placeholder (`"Parameter: <name>"`), and union types or nested objects collapse to plain `string` because the reflector can't represent richer structure without help. When either matters, override the schema with the `$inputSchema` parameter -- see [Custom Input Schemas](#custom-input-schemas).
 
 ### Tool with Optional Parameters
 
@@ -231,6 +236,62 @@ $server->tool(
 
 $server->run();
 ```
+
+### Custom Input Schemas
+
+Reflection covers the common case, but it can only describe what PHP's type system can express. When you need a richer schema -- nested objects, enums beyond `bool`, value constraints, custom descriptions for the model -- pass an `$inputSchema` to `tool()` and the SDK will use it instead of building one from the callback's signature. The SDK enforces the spec-required envelope before serialization (top-level `type: object`, well-formed `properties` and `required` -- see the rules below), and any other keyword you include rides alongside unchanged. This is also how you opt into JSON Schema 2020-12 features like `$defs`, `$ref`, `additionalProperties`, and `oneOf`/`anyOf`/`allOf`.
+
+```php
+<?php
+// tools_custom_schema.php
+require 'vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+
+$server = new McpServer('custom-schema');
+
+$server->tool(
+    name: 'create-user',
+    description: 'Create a user record with a structured address',
+    callback: function (string $name, array $address): string {
+        return "Created user '{$name}' at {$address['street']}, {$address['city']}";
+    },
+    inputSchema: [
+        '$schema' => 'https://json-schema.org/draft/2020-12/schema',
+        'properties' => [
+            'name'    => [
+                'type'        => 'string',
+                'description' => 'Full display name',
+                'minLength'   => 1,
+                'maxLength'   => 200,
+            ],
+            'address' => ['$ref' => '#/$defs/address'],
+        ],
+        'required'             => ['name', 'address'],
+        'additionalProperties' => false,
+        '$defs' => [
+            'address' => [
+                'type'       => 'object',
+                'properties' => [
+                    'street' => ['type' => 'string'],
+                    'city'   => ['type' => 'string'],
+                ],
+                'required'             => ['street', 'city'],
+                'additionalProperties' => false,
+            ],
+        ],
+    ],
+);
+
+$server->run();
+```
+
+A few rules worth knowing:
+
+- **The top-level `type` must be `"object"`.** The MCP spec requires this for tool input schemas, and the SDK enforces it: the `inputSchema` array is merged on top of `['type' => 'object']` so you can omit `type` entirely (the default kicks in), but if you do supply it, it must be exactly `"object"`. Passing any other value -- `"string"`, `"array"`, etc. -- causes `tool()` to throw `InvalidArgumentException` rather than silently overwriting it. Use `oneOf`/`anyOf` or nested `properties` to express richer shapes within the object envelope.
+- **`properties` and `required` are shape-checked.** `properties` (when present) must be an associative array; `required` (when present) must be a list of non-empty strings. Anything else throws `InvalidArgumentException` at registration time. Every other keyword you supply -- `$schema`, `$defs`, `$ref`, `additionalProperties`, etc. -- is stored as-is and emitted verbatim on the wire.
+- **`$schema` is optional but recommended for hand-written schemas.** MCP defaults to JSON Schema draft 2020-12 for tool input, so omitting `$schema` works -- but declaring it explicitly removes any ambiguity for spec-strict clients and signals intent to readers.
+- **Reflection is bypassed entirely when `$inputSchema` is set.** Optional and required parameters in the PHP signature are ignored; the schema's `required` array is the source of truth.
 
 ### Multiple Tools
 
@@ -803,6 +864,56 @@ $server
     })
     ->run();
 ```
+
+### Connection Health and Cancellation
+
+Two protocol-level concerns are worth knowing about even though the convenience wrapper handles most of the work for you.
+
+**Pings.** MCP defines a `ping` request/response pair distinct from any application-level "ping" tool a server might expose -- it's a no-argument health check that lets either side verify the connection is still live. The SDK auto-registers a built-in ping handler on every `Server` instance that returns the empty result the spec mandates, so a client calling `sendPing()` against an `McpServer` works out of the box with no code on your part. There is nothing to configure and nothing to register; the handler is wired in `Mcp\Server\Server::__construct()` before any of your tool/prompt/resource registrations run.
+
+**Cancellation.** When a client decides to abort an in-flight request -- the user clicked cancel, a higher-level orchestrator timed out, the model produced a tool call the user rejected -- it sends a `notifications/cancelled` carrying the `requestId` it wants stopped. Per the [spec](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/cancellation), the receiver SHOULD stop processing, free associated resources, and **not send a response** for the cancelled request. The SDK delivers the notification through the hook below; the actual decision to stop work is yours.
+
+The SDK gives you the lower-level `Server::registerNotificationHandler()` hook to receive the notification. Keep in mind that PHP's synchronous, single-threaded execution means the SDK cannot interrupt a tool that is already running its own code -- the handler fires only when the SDK is next reading from the transport, never *during* a busy handler. So the realistic use is bookkeeping and cleanup (recording which request IDs the client abandoned, freeing resources, suppressing follow-up notifications), not preempting work in progress:
+
+```php
+<?php
+// cancellation_handler.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+use Mcp\Types\NotificationParams;
+
+$server = new McpServer('cancellation-aware');
+
+// Application-owned cancellation set; keys are the integer request IDs the
+// client asked to stop. Your own cleanup/logging code consults it.
+$cancelled = [];
+
+// Register the notification handler on the underlying Server instance.
+// The handler receives a NotificationParams whose `requestId` field carries
+// the integer request ID the client wants cancelled.
+$server->getServer()->registerNotificationHandler(
+    'notifications/cancelled',
+    function (?NotificationParams $params) use (&$cancelled): void {
+        if ($params === null || !isset($params->requestId)) {
+            return;
+        }
+        // Record the abandoned request ID. The SDK will not interrupt a
+        // running tool for you; consult this set from your own cleanup or
+        // logging code once control returns to the SDK's message loop.
+        $cancelled[(int) $params->requestId] = true;
+    }
+);
+
+$server->run();
+```
+
+A few things worth knowing:
+
+- **No mid-tool preemption.** Over stdio the message loop dispatches one message at a time, so a cancellation that arrives while your tool is running is only seen *after* the tool returns -- by which point its response has usually already been sent. Over HTTP on standard shared hosting each POST runs in its own process with its own memory, so an in-memory flag is neither shared across requests nor readable by an already-running handler. Either way the SDK cannot abort a tool from the outside; honoring a cancel is cooperative and only possible at points where your own code chooses to check.
+- **There is no acknowledgement.** Don't try to send a response from the notification handler; cancels are notifications, not requests, and writing back will produce an invalid JSON-RPC frame.
+
+For most servers no handler is needed at all -- the protocol still works correctly without it, the cancel is just ignored. That is explicitly allowed: the [spec](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/cancellation) says a receiver MAY ignore a cancellation whose request has already completed or cannot be cancelled. For work that must be genuinely abortable mid-flight, the spec's task-augmented requests (`tasks/cancel`, enabled via `enableTasks()`) are the intended mechanism -- still experimental and out of scope for this guide.
 
 ---
 
@@ -1968,6 +2079,8 @@ $server->run();
 | **Resource** | `ReadResourceResult` | Returned as-is |
 
 ### PHP Type to JSON Schema Mapping
+
+The reflection-based schema builder produces [JSON Schema draft 2020-12](https://json-schema.org/draft/2020-12) (the dialect the MCP spec assumes by default when a tool input schema omits `$schema`) using the following PHP-to-JSON-Schema type table. Pass an explicit `$inputSchema` to `tool()` if you need types or constraints this table can't express -- the SDK enforces only the spec-required envelope (top-level `type: object`, well-formed `properties` and `required`) and passes every other 2020-12 keyword through to the wire unchanged. See [Custom Input Schemas](#custom-input-schemas) for the full contract.
 
 | PHP Type | JSON Schema Type |
 |----------|-----------------|

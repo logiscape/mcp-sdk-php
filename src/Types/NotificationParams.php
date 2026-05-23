@@ -51,6 +51,38 @@ class NotificationParams implements McpModel {
         public ?Meta $_meta = null,
     ) {}
 
+    /**
+     * Apply arbitrary wire fields onto this params object, routing the reserved
+     * `_meta` key into the typed {@see Meta} object.
+     *
+     * A raw `_meta` array assigned straight onto the declared `?Meta $_meta`
+     * property bypasses {@see ExtraFieldsTrait::__set} (which only fires for
+     * undeclared names) and throws a TypeError, so `_meta` must be normalized
+     * here. Every other key is forwarded as an extra field.
+     *
+     * @param array<string, mixed> $fields Raw params from the JSON-RPC frame.
+     * @param list<string>         $skip   Keys already consumed by a typed constructor arg.
+     */
+    public function applyWireFields(array $fields, array $skip = []): void {
+        foreach ($fields as $key => $value) {
+            if (in_array($key, $skip, true)) {
+                continue;
+            }
+            if ($key === '_meta') {
+                // A non-array _meta is malformed per spec; ignore rather than fatal.
+                if (is_array($value)) {
+                    $meta = new Meta();
+                    foreach ($value as $metaKey => $metaValue) {
+                        $meta->$metaKey = $metaValue;
+                    }
+                    $this->_meta = $meta;
+                }
+                continue;
+            }
+            $this->$key = $value;
+        }
+    }
+
     public function validate(): void {
         if ($this->_meta !== null) {
             $this->_meta->validate();

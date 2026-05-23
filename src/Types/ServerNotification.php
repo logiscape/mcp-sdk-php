@@ -102,12 +102,12 @@ class ServerNotification implements McpModel {
 
         $notification = new CancelledNotification($requestId, $reason);
 
-        // Extra fields not defined in schema can be stored in $notification
-        foreach ($params as $k => $v) {
-            if (!in_array($k, ['requestId', 'reason'], true)) {
-                $notification->$k = $v;
-            }
-        }
+        // Forward any spec-extension fields beyond the two known keys onto
+        // the inner NotificationParams so handlers see the full wire payload.
+        // The constructor has already populated $notification->params with
+        // requestId / reason, so this just augments that object. _meta is
+        // normalized into a Meta object by applyWireFields().
+        $notification->params->applyWireFields($params, ['requestId', 'reason']);
 
         return new self($notification);
     }
@@ -133,12 +133,8 @@ class ServerNotification implements McpModel {
             total: $total
         );
 
-        // Extra fields
-        foreach ($params as $k => $v) {
-            if (!in_array($k, ['progressToken', 'progress', 'total'], true)) {
-                $progressParams->$k = $v;
-            }
-        }
+        // Extra fields are forwarded; _meta is normalized into a Meta object.
+        $progressParams->applyWireFields($params, ['progressToken', 'progress', 'total']);
 
         return new self(new ProgressNotification($progressParams));
     }
@@ -166,15 +162,10 @@ class ServerNotification implements McpModel {
         $uri = $params['uri'];
         $notification = new ResourceUpdatedNotification($uri);
 
-        // ResourceUpdatedNotificationParams will hold uri, extra fields can be set there if needed.
-        // We have no direct access to params object from here. If we need to set extra fields:
-        // Retrieve the params object and set fields on it.
-        $paramsObj = $notification->params;
-        foreach ($params as $k => $v) {
-            if ($k !== 'uri') {
-                $paramsObj->$k = $v;
-            }
-        }
+        // The constructor has populated params->uri; forward any remaining wire
+        // fields onto that object. _meta is normalized into a Meta object by
+        // applyWireFields().
+        $notification->params->applyWireFields($params, ['uri']);
 
         return new self($notification);
     }
@@ -222,12 +213,9 @@ class ServerNotification implements McpModel {
             logger: $logger
         );
 
-        // Extra fields not level/data/logger
-        foreach ($params as $k => $v) {
-            if (!in_array($k, ['level', 'data', 'logger'], true)) {
-                $loggingParams->$k = $v;
-            }
-        }
+        // Extra fields beyond level/data/logger are forwarded; _meta is
+        // normalized into a Meta object.
+        $loggingParams->applyWireFields($params, ['level', 'data', 'logger']);
 
         return new self(new LoggingMessageNotification($loggingParams));
     }
@@ -237,9 +225,8 @@ class ServerNotification implements McpModel {
      */
     private static function createTaskStatusNotification(array $params): self {
         $notifParams = new NotificationParams();
-        foreach ($params as $k => $v) {
-            $notifParams->$k = $v;
-        }
+        // _meta is normalized into a Meta object; all other keys are forwarded.
+        $notifParams->applyWireFields($params);
         return new self(new TaskStatusNotification($notifParams));
     }
 

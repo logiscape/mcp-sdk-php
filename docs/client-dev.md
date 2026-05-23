@@ -270,7 +270,51 @@ foreach ($result->tools as $tool) {
 $client->close();
 ```
 
-If the server's tool list is paginated, the result will carry a `nextCursor` property. The SDK does not yet expose a cursor parameter on `listTools()`, so for paginated catalogs you may need to use additional protocol features (or filter client-side). Most MCP servers return the full list in a single response.
+### Paginated Listings
+
+Most MCP servers return their entire tool, prompt, or resource catalog in a single response, so the convenience methods on `ClientSession` (`listTools()`, `listPrompts()`, `listResources()`) are deliberately cursor-free. For servers that *do* paginate -- typically because the catalog is large enough that returning it in one shot would blow past a sensible response budget -- the response will arrive with a non-null `nextCursor`, and the SDK exposes pagination through the lower-level `sendRequest()` API on the session.
+
+The pattern is the same for any paginated list method: build the typed `List…Request` with the cursor you want to send (or `null` to start from the beginning), call `sendRequest()`, and keep going while `nextCursor` is non-null:
+
+```php
+<?php
+// tools_list_paginated.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Client\Client;
+use Mcp\Types\ListToolsRequest;
+use Mcp\Types\ListToolsResult;
+
+$client = new Client();
+$session = $client->connect('https://example.com/mcp-server.php');
+
+$cursor = null;
+$allTools = [];
+$pageCount = 0;
+
+do {
+    /** @var ListToolsResult $page */
+    $page = $session->sendRequest(
+        new ListToolsRequest($cursor),
+        ListToolsResult::class,
+    );
+    $pageCount++;
+
+    foreach ($page->tools as $tool) {
+        $allTools[] = $tool;
+    }
+
+    $cursor = $page->nextCursor; // null on the final page
+} while ($cursor !== null);
+
+echo "Fetched " . count($allTools) . " tool(s) across {$pageCount} page(s)\n";
+
+$client->close();
+```
+
+`sendRequest()` is the same low-level call the convenience methods use under the hood; passing the typed request directly just gives you control over the cursor parameter that the wrappers don't expose. The same pattern works for `ListPromptsRequest` / `ListPromptsResult`, `ListResourcesRequest` / `ListResourcesResult`, and `ListTemplatesRequest` / `ListResourceTemplatesResult`. Treat the cursor as opaque -- it's a server-defined token, never something you construct yourself.
+
+If you don't care about pagination (and most callers don't), `listTools()` and friends are still the right call: they fetch a single page and ignore `nextCursor`. Reach for the lower-level form only when you know the server paginates and you actually need every page.
 
 ### Calling a Tool
 
@@ -1218,9 +1262,201 @@ To get progress notifications during a long tool call, attach a `progressToken` 
 
 For the *opposite* direction -- sending progress *to* the server while you're processing a server-initiated request -- use `$session->sendProgressNotification(...)`.
 
-### Roots
+### Protocol-Level Pings
 
-The MCP `roots` capability lets a client publish a list of filesystem (or virtual) URIs the server can use as anchors. The SDK's `ClientSession::sendRootsListChanged()` notifies the server when those URIs change, and `BaseSession::onRequest()` can be used to respond to a server's `roots/list` request, but the high-level handshake currently does not advertise the `roots` capability automatically. If your application needs full roots support, file an issue or implement the capability advertisement and request handler manually.
+MCP defines a `ping` request/response pair at the protocol level, separate from any application "ping" tool a server might expose. It's a no-argument health check: send `ping`, the peer is required to respond with an empty result, and a missing or slow response tells you the connection isn't healthy. Use it to verify a session is still live before kicking off expensive work, to keep an idle stdio subprocess from being killed by an inactivity reaper, or as a smoke test in your test suite.
+
+```php
+<?php
+// ping.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Client\Client;
+
+$client = new Client();
+$session = $client->connect('https://example.com/mcp-server.php');
+
+$start = microtime(true);
+$session->sendPing();                       // returns Mcp\Types\EmptyResult
+$rttMs = (microtime(true) - $start) * 1000;
+
+printf("Server is alive (round trip: %.1f ms)\n", $rttMs);
+
+$client->close();
+```
+
+`sendPing()` returns an `EmptyResult` on success and throws `Mcp\Shared\McpError` if the server returns an error response or `RuntimeException` if the transport fails. There is nothing to inspect on the result -- the value of a ping is that it returned at all. The SDK auto-handles incoming `ping` requests on both sides of the connection, so you do not need to register a handler to respond to a server-initiated ping.
+
+### Cancelling In-Flight Requests
+
+MCP cancellation is a **cooperative notification**. Either side can send a `notifications/cancelled` carrying the `requestId` of an in-flight request to signal "stop working on this." There is no acknowledgement, no guarantee the peer was able to abort cleanly, and no rollback -- it is a hint, not a contract. Per the [spec](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/cancellation), the receiver SHOULD stop processing the cancelled request, free its associated resources, and **not send a response** for it. The receiver MAY also ignore the cancel entirely if the request is unknown, has already completed, or cannot be cancelled. Late responses are tolerated as a race: if your cancel and the peer's in-flight response cross on the wire, the *sender* of the cancel SHOULD discard whichever response arrives.
+
+The SDK ships the wire format and dispatch path; deciding *when* to cancel and *what to do* on receipt is application logic.
+
+#### Sending a Cancel from the Client
+
+To cancel an outbound request, send a `CancelledNotification` referencing the same `requestId` the SDK assigned to the original send. The catch is that the high-level convenience methods (`callTool()`, `listTools()`, etc.) block until the response arrives, so issuing a cancel from the same PHP process means doing it from a separate code path -- typically a signal handler on a long-running stdio client, or a separate HTTP request that targets the same MCP session via `resumeHttpSession()` (see [Part 10](#part-10-resuming-http-sessions-across-web-requests)).
+
+The web-style flow looks like this. The first request stashes the in-flight request ID alongside the snapshot needed to resume the session; a second request loads both back, builds the cancel notification, and fires it:
+
+```php
+<?php
+// page1.php -- starts a long-running tool call and persists the request ID
+declare(strict_types=1);
+session_start();
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Client\Client;
+use Mcp\Client\Transport\StreamableHttpTransport;
+
+$client = new Client();
+$session = $client->connect(
+    commandOrUrl: 'https://example.com/mcp-server.php',
+    args: [],
+    env: ['autoSse' => false],
+);
+
+// Capture the request ID *before* sending. getNextRequestId() returns the
+// integer the SDK will assign to the next sendRequest() call, which is
+// exactly the value the cancel needs to reference.
+$_SESSION['inflight_request_id'] = $session->getNextRequestId();
+
+// Kick off the long-running call. (In a real app you'd run this in a way
+// that doesn't block the request -- a queue worker, a fork, etc. The
+// snapshot below assumes a separate worker is now driving the session.)
+// $session->callTool('long-running-search', ['query' => 'widgets']);
+
+// Snapshot the session so the cancel endpoint can resume into it.
+$transport = $client->getTransport();
+if ($transport instanceof StreamableHttpTransport) {
+    $_SESSION['mcp'] = [
+        'sessionManagerState' => $transport->getSessionManager()->toArray(),
+        'initResult'          => json_encode(
+            $session->getInitializeResult(),
+            JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
+        ),
+        'protocolVersion'     => $session->getNegotiatedProtocolVersion(),
+        'nextRequestId'       => $session->getNextRequestId(),
+        'serverUrl'           => 'https://example.com/mcp-server.php',
+    ];
+}
+$client->detach();
+```
+
+```php
+<?php
+// cancel.php -- a separate HTTP request that aborts the in-flight call
+declare(strict_types=1);
+session_start();
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Client\Client;
+use Mcp\Types\CancelledNotification;
+use Mcp\Types\RequestId;
+
+if (!isset($_SESSION['mcp'], $_SESSION['inflight_request_id'])) {
+    http_response_code(400);
+    exit('No in-flight request to cancel');
+}
+
+$snap = $_SESSION['mcp'];
+
+$client = new Client();
+$session = $client->resumeHttpSession(
+    url: $snap['serverUrl'],
+    sessionManagerState: $snap['sessionManagerState'],
+    initResultData: json_decode($snap['initResult'], true, flags: JSON_THROW_ON_ERROR),
+    negotiatedProtocolVersion: $snap['protocolVersion'],
+    nextRequestId: (int) $snap['nextRequestId'],
+    headers: [],
+    httpOptions: ['autoSse' => false],
+);
+
+$session->sendNotification(new CancelledNotification(
+    requestId: new RequestId((int) $_SESSION['inflight_request_id']),
+    reason: 'User clicked cancel',
+));
+
+unset($_SESSION['inflight_request_id']);
+$client->detach();
+```
+
+`sendNotification()` returns immediately -- there is no response to wait for. Whether the in-flight request actually stops depends entirely on the server: a spec-compliant server that polls for cancellation will short-circuit and (per the spec SHOULD) suppress its response; a server that doesn't poll will run to completion as if no cancel had arrived and send a normal response anyway. Your code should be ready for either: discard whichever response comes back after the cancel was sent, since the response that does arrive is a tolerated race rather than the cancel succeeding or failing. The `reason` field is optional and propagated to the server for logging. For long-running stdio clients the same `sendNotification()` call works; the difference is just that you can capture the cancel signal from `pcntl_signal` rather than going through session-resume gymnastics.
+
+#### Reacting to a Server-Initiated Cancel
+
+A server can cancel a request *it* sent to *you* -- for example, a `sampling/createMessage` it issued during a long tool call -- by sending the same notification in the opposite direction. Register a handler with `onNotification()` and dispatch on the typed notification class:
+
+```php
+$session->onNotification(static function (\Mcp\Types\ServerNotification $wrapper): void {
+    $note = $wrapper->getNotification();
+    if (!($note instanceof \Mcp\Types\CancelledNotification)) {
+        return; // Some other notification -- ignore here.
+    }
+
+    $cancelledRequestId = $note->requestId->getValue();
+    $reason = $note->reason ?? '(no reason given)';
+
+    fwrite(STDERR, "Server cancelled request #{$cancelledRequestId}: {$reason}\n");
+
+    // If you have a long-running handler keyed by request ID, set its
+    // cancellation flag here; otherwise just log and move on.
+});
+```
+
+The `requestId` is wrapped in a `RequestId` value object; call `->getValue()` to read the numeric ID. Cancellation handlers should be tolerant: as the spec notes, the notification can arrive after the work has already finished, so a cancel for an unknown request ID is normal and should be silently ignored.
+
+### Publishing Roots to the Server
+
+MCP **roots** let a client publish a list of `file://` URIs that act as anchors for what the server is allowed to look at -- typically the open workspace folders in an editor, or the working directory of a CLI invocation. The server requests the list with `roots/list` whenever it needs to know the current scope, and the client emits `notifications/roots/list_changed` when those anchors change so a long-lived server doesn't have to poll.
+
+Register a roots handler with `Client::onListRoots()` **before** `connect()`. That single call does two things: it advertises the `roots` capability in the initialization handshake (the MCP spec requires a client that supports roots to declare it, so a spec-compliant server only calls `roots/list` once it sees the capability), and it wires your handler to answer every incoming `roots/list`. Two things you still own:
+
+- **The roots store itself.** The SDK doesn't track which roots you've published. Hold them in an array (or whatever your application uses for workspace state) and return them from the handler on every `roots/list`.
+- **Change notifications.** Call `ClientSession::sendRootsListChanged()` whenever the store changes so a long-lived server can refresh. By default `onListRoots()` advertises `roots: { listChanged: true }`; pass `listChanged: false` if your root set is static and you will never send the notification.
+
+Putting it together:
+
+```php
+<?php
+// roots.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Client\Client;
+use Mcp\Types\ListRootsResult;
+use Mcp\Types\Root;
+
+// Application-owned root store. Update this whenever the user opens or closes
+// a workspace folder; the change notification below tells the server to refresh.
+$roots = [
+    new Root(uri: 'file:///home/alice/projects/website',  name: 'website'),
+    new Root(uri: 'file:///home/alice/projects/api',      name: 'api'),
+];
+
+$client = new Client();
+
+// Register the roots/list handler before connect() so the `roots` capability
+// is advertised in the handshake. The handler returns a ListRootsResult built
+// from the current store; capture $roots by reference (use (&$roots)) so later
+// updates are reflected on the next roots/list.
+$client->onListRoots(static function () use (&$roots): ListRootsResult {
+    return new ListRootsResult(roots: $roots);
+});
+
+$session = $client->connect('https://example.com/mcp-server.php');
+
+// Push an update when the user adds or removes a workspace.
+$roots[] = new Root(uri: 'file:///home/alice/projects/cli-tools', name: 'cli-tools');
+$session->sendRootsListChanged();
+
+$client->close();
+```
+
+A few constraints worth knowing:
+
+- **`Root::$uri` must be a `file://` URI.** `Root::validate()` rejects any other scheme with an `InvalidArgumentException`. Note that the SDK does *not* validate the result you hand to `sendResponse()` on the way out, nor does the `Root` constructor validate -- the check runs when the receiving peer parses the `ListRootsResult` off the wire (`Root::fromArray()`), so a non-`file://` URI is rejected there rather than thrown locally at construction time. There is no virtual-roots escape hatch -- everything published has to live under a `file://` scheme even if the underlying handler maps it to something exotic.
+- **`Root::$name` is optional** and is meant for display in client UI; servers should not parse it.
+- **`sendRootsListChanged()` is fire-and-forget.** The server may issue a fresh `roots/list` in response, or it may defer until it next needs the list -- both behaviors are spec-compliant.
 
 ---
 
@@ -1411,6 +1647,7 @@ For a complete reference implementation -- including OAuth, elicitation capture,
 | `setLoggingLevel(LoggingLevel)` | `logging/setLevel` |
 | `sendPing()` | `ping` |
 | `sendProgressNotification(...)` | Send progress while handling a server-initiated request |
+| `onListRoots(callable, bool)` | Advertise the `roots` capability and answer `roots/list` |
 | `sendRootsListChanged()` | Notify the server that the roots list changed |
 | `onNotification(callable)` | Register a server-notification handler |
 | `onRequest(callable)` | Register a low-level server-request handler (advanced) |
@@ -1422,6 +1659,7 @@ For a complete reference implementation -- including OAuth, elicitation capture,
 |--------|-------------|
 | `connect(commandOrUrl, args, env, readTimeout)` | Open transport, run handshake, return session |
 | `onElicit(callable, applyDefaults, supportsUrlMode)` | Register the elicitation handler -- call before `connect()`. `supportsUrlMode: true` opts the client into the `url` sub-capability (2025-11-25) in addition to `form` |
+| `onListRoots(callable, listChanged)` | Register the roots/list handler -- call before `connect()`. Advertises the `roots` capability (`listChanged: true` by default) in the handshake |
 | `close()` | Tear down session and transport (sends DELETE on HTTP) |
 | `detach()` | Close locally; preserve the server-side HTTP session |
 | `resumeHttpSession(...)` | Rebuild a session from a snapshot, skipping handshake |
