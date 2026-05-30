@@ -3,7 +3,7 @@
 [![CI](https://github.com/logiscape/mcp-sdk-php/actions/workflows/ci.yml/badge.svg)](https://github.com/logiscape/mcp-sdk-php/actions/workflows/ci.yml)
 [![MCP Conformance](https://github.com/logiscape/mcp-sdk-php/actions/workflows/conformance.yml/badge.svg)](https://github.com/logiscape/mcp-sdk-php/actions/workflows/conformance.yml)
 
-This package provides a PHP implementation of the [Model Context Protocol](https://modelcontextprotocol.io). The primary goal of this project is to provide both a MCP server and a MCP client using pure PHP, making it easy to use in PHP/Apache/cPanel hosting environments with typical server configurations.
+This package provides a PHP implementation of the [Model Context Protocol](https://modelcontextprotocol.io). The primary goal of this project is to provide both an MCP server and an MCP client using pure PHP, making it easy to use in PHP/Apache/cPanel hosting environments with typical server configurations.
 
 ## Overview
 
@@ -116,7 +116,7 @@ composer require monolog/monolog
 
 ## MCP Web Client
 
-The "webclient" directory includes a web-based application for testing MCP servers. It was designed to demonstrate a MCP client capable of running in a typical web hosting environment.
+The "webclient" directory includes a web-based application for testing MCP servers. It was designed to demonstrate an MCP client capable of running in a typical web hosting environment.
 
 ### Setting Up The Web Client
 
