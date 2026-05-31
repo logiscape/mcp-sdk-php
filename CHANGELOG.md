@@ -14,10 +14,17 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 **v1.6.0 and later**; earlier releases can be reviewed via the
 [Git tag history](https://github.com/logiscape/mcp-sdk-php/tags).
 
-## [Unreleased]
+## [1.7.2]
 
 ### Added
 
+- Published a day-one support roadmap for the MCP `2026-07-28` "stateless core"
+  spec revision (RC locked 2026-05-21). Adoption is additive and
+  version-negotiated — the new stateless paths run only for clients that
+  negotiate `2026-07-28`, leaving `2024-11-05`…`2025-11-25` core flows untouched.
+  The experimental Tasks primitive will be replaced cleanly with the SEP-2663
+  extension. See [ROADMAP.md](ROADMAP.md). No protocol changes ship in this entry;
+  this records the planned direction only.
 - Client side documentation guide
 - `ClientSession::onListRoots()` and `Client::onListRoots()` register a
   `roots/list` handler and advertise the `roots` capability in the

@@ -39,7 +39,7 @@ Group assigns tiers.
 | SEP-1730 criterion          | Target (Tier 1)          | Current state                                                                                                                          |
 | --------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
 | Conformance pass rate       | 100%                     | **100%** of applicable required tests on suite `v0.1.16`. Three known failures, all in optional MCP Extensions (documented in baseline). |
-| New protocol features       | Before spec release      | `2025-11-25` supported; back-compat for `2024-11-05`, `2025-03-26`, `2025-06-18`.                                                      |
+| New protocol features       | Before spec release      | `2025-11-25` supported; back-compat for `2024-11-05`, `2025-03-26`, `2025-06-18`. Day-one work for the `2026-07-28` RC is in progress ahead of final release (see below).        |
 | Issue triage                | 2 business days          | Best-effort; see response-time section below.                                                                         |
 | Critical bug resolution     | 7 days                   | Best-effort, typically weeks not days for non-trivial fixes.                                                          |
 | Stable release              | Required, clear versioning | Met. Currently `v1.7.0`, semver-tagged since `v1.0.0`.                                                                                 |
@@ -82,6 +82,141 @@ will — the arithmetic changes.
 - **Expand `conformance/everything-server.php` and `everything-client.php`**
   to cover new tools, prompts, and resources as the official suite grows.
 
+### Day-one support for the 2026-07-28 spec revision
+
+The [`2026-07-28` Release Candidate](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/)
+(locked 2026-05-21; final spec 2026-07-28) is the largest revision since launch —
+a **stateless core** that drops the connection handshake and the protocol-level
+session. In line with guiding principle #1 and the SEP-1730 expectation that
+SDKs implement new features before the revision ships, our target is a clean
+conformance run within the RC-to-final window. Neither the official Python SDK
+(latest `2025-11-25`, set in v1.23.1) nor the TypeScript SDK (v2 pre-alpha) has
+published `2026-07-28` support yet — though the Python SDK is explicitly
+architecting its in-progress v2 around exactly this transport-changing revision
+(see the release-vehicle note below).
+
+**Strategy: additive and version-negotiated.** `2026-07-28` becomes a negotiable
+protocol version; the new stateless code paths run **only** when a client speaks
+that revision. The existing handshake-and-session paths for `2024-11-05`…
+`2025-11-25` stay untouched, so no existing client or server breaks (guiding
+principle #4). Mechanically this reuses the gating the SDK already has — a new
+entry in `Version::SUPPORTED_PROTOCOL_VERSIONS` / `LATEST_PROTOCOL_VERSION` and
+`FEATURE_VERSIONS` (`src/Shared/Version.php`), feature checks via
+`ServerSession::clientSupportsFeature()` / `ClientSession::supportsFeature()`,
+and backward shaping via `ServerSession::adaptResponseForClient()`. The new
+wrinkle is dual-era interoperability. The spec lets a server support both eras at
+once and defines how each side detects which it is talking to, so back-compat is
+achievable additively in both directions:
+
+- **Server side.** A legacy client opens with an `initialize` request; a modern
+  client instead sends ordinary requests that carry the negotiated version in the
+  `MCP-Protocol-Version` HTTP header with matching `_meta`. The server keys off
+  that per-request version metadata (and the `initialize` method for legacy) —
+  *not* the session id. Under `2026-07-28` the `Mcp-Session-Id` header is removed
+  and ignored rather than used as a routing or mode signal.
+- **Client side.** We follow the spec's documented detection rather than guessing.
+  Over HTTP: send a modern request first and, on a `400`, inspect the body —
+  because a `400` is also returned for `UnsupportedProtocolVersionError`,
+  missing-capability, and header-validation failures, the status alone is not a
+  legacy signal. A recognized modern JSON-RPC error (e.g.
+  `UnsupportedProtocolVersionError`) means the server is modern (retry with one of
+  its advertised versions; do **not** fall back), whereas an empty or
+  unrecognized body means fall back to `initialize` and continue legacy. Over
+  stdio (no per-request status code): probe `server/discover` with the preferred
+  version in `_meta`, fall back to the legacy handshake on `Method not found`
+  (`-32601`), and on `UnsupportedProtocolVersionError` use one of the server's
+  advertised versions instead of falling back.
+
+What we intend to implement (intentions, not final API shapes — the same caveat
+the Medium-term section carries; several of these SEPs are still settling):
+
+- **Stateless core.**
+  - **SEP-2575** — remove the `initialize`/`initialized` handshake; carry
+    protocol version, client info, and capabilities in `_meta` on every request,
+    and answer the new `server/discover` method on demand (reusing
+    `Server::getCapabilities()`).
+  - **SEP-2567** — remove the protocol-level session: under `2026-07-28` the
+    SDK stops emitting and stops honouring the `Mcp-Session-Id` header (legacy
+    revisions keep it), so any request can land on any instance.
+  - **SEP-2243** — read and validate the request-metadata headers so gateways can
+    route without inspecting the body: `Mcp-Method` on **all** requests and
+    notifications, and `Mcp-Name` only on the name/uri-bearing methods
+    (`tools/call`, `resources/read`, `prompts/get`; the Tasks extension reuses it
+    for the task id). A header whose value disagrees with the body, or a missing
+    required header, is rejected `400` with a `HeaderMismatch` / `-32001` error.
+    (The mandatory per-request `MCP-Protocol-Version` header and its
+    must-match-`_meta` rule are defined by SEP-2575 above; SEP-2243 supplies the
+    `-32001` enforcement, which also covers a version-header/`_meta` mismatch.)
+    Also support the `x-mcp-header` schema annotation that mirrors designated tool
+    parameters into `Mcp-Param-*` headers (clients MUST emit them; whether those
+    headers survive network intermediaries and shared-hosting `.htaccess` is a
+    deployment concern, not something the spec obliges intermediaries to do).
+  - **SEP-2549** — emit `ttlMs` / `cacheScope` on list and resource-read results
+    (HTTP `Cache-Control` semantics).
+  - **SEP-2322** — the multi-round-trip request mechanism: sampling, elicitation,
+    and roots become `InputRequiredResult` exchanges (`inputRequests` /
+    `requestState` / `inputResponses`) instead of server-initiated requests. (Two
+    related removals live in adjacent SEPs: SEP-2575 removes the standalone GET
+    SSE stream, replacing it with `subscriptions/listen`, and SEP-2260 restricts
+    that channel to server→client *notifications* only — no independent
+    server-initiated *requests*.) Request-scoped SSE response streams
+    (request-related notifications then the final response) and long-lived
+    `subscriptions/listen` streams for change notifications remain; `Last-Event-ID`
+    resumption does not.
+  - **SEP-2106** — accept JSON Schema 2020-12 keywords (composition, conditionals,
+    `$ref`) in tool schemas, with the spec's constraints: `inputSchema` still
+    requires a root `type: "object"`, `outputSchema` is unrestricted, and
+    `structuredContent` may be any JSON value conforming to it. **SEP-2164** —
+    change the missing-resource error from `-32002` to `-32602`.
+- **Authorization.** SEP-2468 (`iss` validation, RFC 9207), SEP-837
+  (`application_type` on registration), SEP-2352 (credential binding), SEP-2207
+  (refresh-token flow), SEP-2350 (scope accumulation), and SEP-2351
+  (`.well-known` discovery). These drop into the existing `Client/Auth/` and
+  `Server/Auth/` framework rather than needing a new abstraction.
+- **Governance.** Adopt the SEP-2596 / SEP-2577 feature-lifecycle states (Active
+  / Deprecated / Removed, 12-month minimum) for the now-deprecated Roots,
+  Sampling, and Logging features — deprecated, not removed — and track the
+  SEP-2484 requirement that Standards-Track SEPs ship matching conformance
+  scenarios.
+- **Tasks extension (SEP-2663).** A **breaking redesign** of the experimental
+  Tasks primitive already in the tree: `tasks/get` / `tasks/update` /
+  `tasks/cancel`, the task handle returned from `tools/call`, and **removal of
+  `tasks/list`** (which cannot be scoped without sessions). Because the existing
+  Tasks surface is pre-release, we redesign it cleanly — gated to `2026-07-28`,
+  no deprecation shims — and keep the file-based store for shared-hosting
+  compatibility.
+
+**cPanel/Apache compatibility (guiding principle #3).** On balance this revision
+helps shared hosting: dropping sticky sessions and shared session stores, and
+turning sampling/elicitation into `InputRequiredResult` round-trips instead of
+server-initiated requests over an open stream, removes the most fragile pieces
+documented in [`docs/compatibility.md`](docs/compatibility.md). It is not a
+clean break from SSE, though — request-scoped SSE responses and opt-in
+`subscriptions/listen` streams remain long-lived, so the existing SSE
+shared-hosting guidance still applies to those. The items that need attention
+rather than a hard requirement are narrow: the request-metadata headers
+(`Mcp-Method`, `Mcp-Name`, `MCP-Protocol-Version`, and any `Mcp-Param-*`) must
+survive `.htaccess` and any proxy — the same class of forwarding concern we
+already document for `Authorization` — and the MCP Apps extension renders
+host-side, so the server emits the resource and must not fatal where a host can't
+display it. Core features (tools, prompts, resources, `server/discover`) remain a
+must-work-everywhere commitment.
+
+**Release vehicle — undecided, pending v2 linkage.** Per CONTRIBUTING's
+versioning policy, additive new-revision support qualifies on its own as a
+**minor** (`v1.X`) bump, while the major (`v2`) is reserved for "when the official
+MCP SDKs cut a `v2`." The signal here points toward linkage, not against it: the
+Python SDK's v1.25.0 release note states its v2 plan "relies on the next upcoming
+spec release which will heavily change how the transport layer works, which in
+turn will guide a lot of how we architect v2" — i.e. the official v2 is being
+designed around exactly this transport-changing revision. That makes it plausible
+the ecosystem `v2` and `2026-07-28` arrive together, which under our governance
+rule would have us cut our own `v2` to match. **Action item:** confirm with
+upstream whether the official SDKs are in fact tying their `v2` release to
+`2026-07-28` before choosing the vehicle. If they are, we align our `v2` with it;
+if the revision lands ahead of any `v2`, we ship it additively as a minor in the
+meantime.
+
 ### Medium-term
 
 Items in this section are directions we intend to explore ahead of a formal
@@ -97,18 +232,19 @@ the SEP is stable.
   [SUPPORT.md](SUPPORT.md) once enough trusted contributors are on board to
   sustain them. See [GOVERNANCE.md](GOVERNANCE.md) for the path to becoming
   one.
-- **Graduate the Tasks primitive (SEP-1686).** An experimental implementation
-  is already in the tree — `Mcp\Server\TaskManager` with file-based storage
-  (chosen for cPanel/Apache compatibility), the `McpServer::enableTasks()`
-  wiring for `tasks/get` / `tasks/list` / `tasks/cancel` / `tasks/result`,
-  client-side `getTask()` / `listTasks()` / `cancelTask()` methods, and a
-  full state-transition validator. The remaining work tracks the pieces that
-  are still moving upstream: richer retry semantics, configurable
-  result-expiry policies beyond the current TTL, and closing the
-  task-augmented-request gap explicitly marked in
-  `Server/Elicitation/ElicitationContext::url()` (and the equivalent
-  sampling path). Graduation out of "experimental" waits for spec stability
-  in the official SDKs.
+- **Graduate the Tasks primitive.** An experimental implementation is already
+  in the tree — `Mcp\Server\TaskManager` with file-based storage (chosen for
+  cPanel/Apache compatibility), the `McpServer::enableTasks()` wiring for
+  `tasks/get` / `tasks/list` / `tasks/cancel` / `tasks/result`, client-side
+  `getTask()` / `listTasks()` / `cancelTask()` methods, and a full
+  state-transition validator. As of the `2026-07-28` RC, Tasks has moved from a
+  core primitive (formerly tracked here as SEP-1686) to the **SEP-2663
+  extension** with a stateless redesign — notably dropping `tasks/list`. That
+  redesign is now tracked in the day-one subsection above; this bullet remains
+  only for the still-moving pieces (richer retry semantics, configurable
+  result-expiry beyond the current TTL, and the task-augmented-request gap
+  marked in `Server/Elicitation/ElicitationContext::url()` and the equivalent
+  sampling path).
 - **Finish task-augmented elicitation and sampling.** Form-mode and URL-mode
   elicitation are already wired on both sides of the wire, and
   `sampling/createMessage` already accepts `tools` / `toolChoice` under the
@@ -126,20 +262,26 @@ the SEP is stable.
   independent item.
 - **Shared session store for clustered HTTP deployments.** The
   `SessionStoreInterface` seam already accepts pluggable implementations;
-  file-based and in-memory stores ship in-box. Horizontal-scaling
-  friendliness is primarily about publishing a reference shared-store
-  implementation (likely a PSR-6 or PSR-16 adapter, so users can pick
-  Redis/Memcached/APCu without the SDK taking a hard dependency) and
-  documenting the seam so that the forthcoming stateless transport work
-  from the Transports WG does not force API churn.
-- **MCP Server Cards (SEP-2127).** OAuth `.well-known` endpoints are already
-  served by the HTTP runner; the MCP Server Card `.well-known` endpoint is not.
-  SEP-2127 is the current active draft for pre-connection discovery, replacing
-  the earlier SEP-1649 discussion and aligning with the 2026 roadmap's
-  transport-scalability priority. The SDK's role is a thin endpoint on
-  `HttpServerRunner` plus helpers for generating the document; this is a natural
-  fit for shared hosting, and we plan to ship it behind a config flag once the
-  path and schema stop moving.
+  file-based and in-memory stores ship in-box. The stateless transport work
+  once described here as "forthcoming from the Transports WG" is now concrete in
+  the `2026-07-28` RC (SEP-2567 removes the protocol-level session, SEP-2575
+  removes the handshake), which makes a shared session store **optional** rather
+  than a horizontal-scaling prerequisite under the new revision. The remaining
+  value is for clients still on `2024-11-05`…`2025-11-25`: publishing a reference
+  shared-store implementation (likely a PSR-6 or PSR-16 adapter, so users can
+  pick Redis/Memcached/APCu without the SDK taking a hard dependency) and keeping
+  the seam stable so the additive stateless paths above do not force API churn.
+- **Pre-connection discovery: Server Cards (SEP-2127) vs. `server/discover`
+  (SEP-2575).** OAuth `.well-known` endpoints are already served by the HTTP
+  runner; a discovery surface for capabilities is not. Two mechanisms now
+  overlap here: the SEP-2127 Server Card `.well-known` document (a static,
+  pre-connection descriptor) and the `2026-07-28` `server/discover` RPC method
+  (an on-demand, cacheable capability fetch that replaces what the handshake
+  used to provide). `server/discover` is the priority because it is part of
+  day-one revision support (tracked above); a Server Card endpoint remains a
+  complementary, lower-priority addition. Both are thin endpoints on
+  `HttpServerRunner` and natural fits for shared hosting, shipped behind a config
+  flag once the paths and schemas stop moving.
 - **Close remaining OAuth-spec alignment gaps.** The client-side already
   has `ClientIdMetadataDocument` (CIMD / SEP-991), a PKCE implementation,
   Protected-Resource and Authorization-Server metadata discovery, and
@@ -158,14 +300,19 @@ requirement, or because adoption depends on demand from this SDK's users
 (primarily PHP developers deploying on shared hosting). We would rather wait
 than put users on a breaking-API treadmill.
 
-- **MCP Apps extension (`ui://` resources).** The
+- **MCP Apps extension (`ui://` resources, SEP-1865).** The
   [ext-apps](https://github.com/modelcontextprotocol/ext-apps) repository
-  shipped its first stable spec revision in early 2026. Nothing in the
-  current `McpServer::resource()` API prevents serving a `ui://` resource
-  today — the question is whether a first-class helper (e.g. `->ui(...)`
-  that bundles the MIME type, size-bound checks, and tool-metadata
-  conventions) is worth adding. We will evaluate once the extension sees
-  traction in the MCP hosts PHP developers actually target.
+  shipped its first stable spec revision in early 2026, and the `2026-07-28`
+  extensions framework (SEP-2133) formalises it as an independently versioned
+  extension. It is explicitly **follow-on, not part of day-one revision
+  support** (see the day-one subsection): the UI renders host-side in a sandboxed
+  iframe, so the SDK's role is server-side emission only. Nothing in the current
+  `McpServer::resource()` API prevents serving a `ui://` resource today — the
+  question is whether a first-class helper (e.g. `->ui(...)` that bundles the
+  MIME type, size-bound checks, and tool-metadata conventions) is worth adding,
+  and the server must degrade gracefully where a host cannot display it. We will
+  evaluate once the extension sees traction in the MCP hosts PHP developers
+  actually target.
 - **Advanced OAuth profiles: DPoP and Workload Identity Federation.**
   SEP-1932 (DPoP, sender-constrained tokens per RFC 9449) and SEP-1933
   (Workload Identity Federation) are both in review and aimed primarily at
