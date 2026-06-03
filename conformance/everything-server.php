@@ -11,7 +11,7 @@
  * Design principles:
  *   - Use McpServer's public API wherever possible.
  *   - Use low-level Server::registerHandler() ONLY for features McpServer
- *     doesn't expose (resource templates, completion, logging/setLevel).
+ *     doesn't expose (logging/setLevel, resource subscriptions).
  *   - NEVER override tools/call or tools/list to work around SDK limitations.
  *     If the SDK drops _meta, doesn't support sampling in HTTP mode, etc.,
  *     let those tests FAIL — that surfaces real issues.
@@ -34,14 +34,10 @@ use Mcp\Types\AudioContent;
 use Mcp\Types\EmbeddedResource;
 use Mcp\Types\TextResourceContents;
 use Mcp\Types\BlobResourceContents;
-use Mcp\Types\ResourceTemplate;
 use Mcp\Types\ReadResourceResult;
-use Mcp\Types\ListResourceTemplatesResult;
 use Mcp\Types\PromptMessage;
 use Mcp\Types\GetPromptResult;
 use Mcp\Types\Role;
-use Mcp\Types\CompleteResult;
-use Mcp\Types\CompletionObject;
 use Mcp\Types\LoggingLevel;
 use Mcp\Types\CreateMessageRequest;
 use Mcp\Types\CreateMessageResult;
@@ -418,59 +414,57 @@ $server->resource(
     mimeType: 'text/plain'
 );
 
+// Resource template — exercised via McpServer's first-class resourceTemplate()
+// API, which advertises it in resources/templates/list and resolves matching
+// resources/read calls with the extracted {id} bound by name.
+$server->resourceTemplate(
+    uriTemplate: 'test://template/{id}/data',
+    name: 'Template Resource',
+    callback: fn(string $id) => "Template resource data for id={$id}",
+    description: 'A parameterized resource template',
+    mimeType: 'text/plain'
+);
+
+// Completions — exercised via McpServer's first-class completion API. Providers
+// receive the partial value (and any already-resolved context) and return the
+// suggestion list; McpServer advertises the `completions` capability and routes
+// completion/complete to the provider keyed by ref + argument name.
+$server->completionForPrompt(
+    'test_prompt_with_arguments',
+    'arg1',
+    fn(string $value) => array_values(array_filter(
+        ['value1', 'value2', 'value3'],
+        fn($v) => str_starts_with($v, $value)
+    ))
+);
+
+$server->completionForPrompt(
+    'test_prompt_with_embedded_resource',
+    'resourceUri',
+    fn(string $value) => array_values(array_filter(
+        ['test://static-text', 'test://static-binary', 'test://watched-resource'],
+        fn($v) => str_starts_with($v, $value)
+    ))
+);
+
+$server->completionForResourceTemplate(
+    'test://template/{id}/data',
+    'id',
+    fn(string $value) => array_values(array_filter(
+        ['item-1', 'item-2', 'item-3'],
+        fn($v) => str_starts_with($v, $value)
+    ))
+);
+
 // ---------------------------------------------------------------------------
 // Low-level handlers — ONLY for features McpServer doesn't expose
 //
-// These are necessary because McpServer's convenience API doesn't currently
-// support resource templates, completion, logging/setLevel, or resource
-// subscriptions. This is itself a signal about SDK gaps.
+// These remain low-level because McpServer's convenience API doesn't expose
+// logging/setLevel or resource subscriptions. Resource templates and
+// completions are now handled through McpServer's first-class APIs above.
 // ---------------------------------------------------------------------------
 
 $lowLevel = $server->getServer();
-
-// Resource templates — McpServer has no resourceTemplate() method
-$lowLevel->registerHandler('resources/templates/list', function () {
-    return new ListResourceTemplatesResult(
-        resourceTemplates: [
-            new ResourceTemplate(
-                name: 'Template Resource',
-                uriTemplate: 'test://template/{id}/data',
-                description: 'A parameterized resource template',
-                mimeType: 'text/plain'
-            ),
-        ]
-    );
-});
-
-// Extend resources/read to also handle template URIs.
-// McpServer only dispatches to exact URI matches, so template expansion
-// requires a low-level extension. We capture McpServer's handler and delegate
-// to it for all static resources, only handling templates ourselves.
-$mcpResourcesReadHandler = $lowLevel->getHandlers()['resources/read'] ?? null;
-$lowLevel->registerHandler('resources/read', function ($params) use ($mcpResourcesReadHandler) {
-    $uri = $params->uri;
-
-    // Template pattern: test://template/{id}/data
-    // Only handle template URIs here — everything else delegates to McpServer
-    if (preg_match('#^test://template/([^/]+)/data$#', $uri, $matches)) {
-        $id = $matches[1];
-        return new ReadResourceResult(
-            contents: [new TextResourceContents(
-                text: "Template resource data for id={$id}",
-                uri: $uri,
-                mimeType: 'text/plain'
-            )]
-        );
-    }
-
-    // Delegate to McpServer's handler for all static resources.
-    // This exercises the SDK's actual resource dispatch and serialization.
-    if ($mcpResourcesReadHandler) {
-        return $mcpResourcesReadHandler($params);
-    }
-
-    throw new \InvalidArgumentException("Unknown resource: {$uri}");
-});
 
 // Resource subscribe/unsubscribe — McpServer has no subscription API.
 // NOTE: We accept subscriptions but have no mechanism to emit
@@ -495,44 +489,6 @@ $lowLevel->registerHandler('logging/setLevel', function ($params) {
     // Accept the level; the capability is advertised but there's nothing
     // to configure at the test-server level.
     return new EmptyResult();
-});
-
-// Completion — McpServer has no completion API
-$lowLevel->registerHandler('completion/complete', function ($params) {
-    $argument = $params->argument ?? null;
-    $argumentName = '';
-    $argumentValue = '';
-
-    if (is_object($argument)) {
-        $argumentName = $argument->name ?? '';
-        $argumentValue = $argument->value ?? '';
-    }
-
-    $completions = [];
-    if ($argumentName === 'arg1') {
-        $completions = array_filter(
-            ['value1', 'value2', 'value3'],
-            fn($v) => str_starts_with($v, $argumentValue)
-        );
-    } elseif ($argumentName === 'resourceUri') {
-        $completions = array_filter(
-            ['test://static-text', 'test://static-binary', 'test://watched-resource'],
-            fn($v) => str_starts_with($v, $argumentValue)
-        );
-    } elseif ($argumentName === 'id') {
-        $completions = array_filter(
-            ['item-1', 'item-2', 'item-3'],
-            fn($v) => str_starts_with($v, $argumentValue)
-        );
-    }
-
-    return new CompleteResult(
-        completion: new CompletionObject(
-            values: array_values($completions),
-            total: count($completions),
-            hasMore: false
-        )
-    );
 });
 
 // ---------------------------------------------------------------------------
