@@ -111,6 +111,44 @@ class McpServerException extends McpError
     }
 
     /**
+     * Create a new exception for an unknown resource template.
+     *
+     * Used by the completion handler when a `ref/resource` completion names a
+     * URI that matches no registered template. The completion spec classifies
+     * an invalid reference as Invalid params (-32602), not "resource not found".
+     */
+    public static function unknownResourceTemplate(string $uriTemplate): self
+    {
+        return new self(new ErrorData(
+            code: -32602,
+            message: "Unknown resource template: {$uriTemplate}"
+        ));
+    }
+
+    /**
+     * Create a new exception for a malformed/invalid completion reference.
+     */
+    public static function invalidCompletionRef(): self
+    {
+        return new self(new ErrorData(
+            code: -32602,
+            message: "Invalid completion reference"
+        ));
+    }
+
+    /**
+     * Create a new exception for an invalid completion provider result.
+     */
+    public static function invalidCompletionResult(mixed $result): self
+    {
+        $type = is_object($result) ? get_class($result) : gettype($result);
+        return new self(new ErrorData(
+            code: -32603,
+            message: "Invalid completion provider result: expected array of strings, CompletionObject, or CompleteResult, got {$type}"
+        ));
+    }
+
+    /**
      * Create a new exception for a task that was not found.
      */
     public static function taskNotFound(string $taskId): self

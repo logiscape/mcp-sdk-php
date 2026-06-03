@@ -35,6 +35,7 @@ use Mcp\Types\ServerPromptsCapability;
 use Mcp\Types\ServerResourcesCapability;
 use Mcp\Types\ServerToolsCapability;
 use Mcp\Types\ServerLoggingCapability;
+use Mcp\Types\ServerCompletionsCapability;
 use Mcp\Types\TaskCapability;
 use Mcp\Types\ExperimentalCapabilities;
 use Mcp\Types\LoggingLevel;
@@ -141,6 +142,11 @@ class Server {
             );
         }
 
+        $completionsCapability = null;
+        if (isset($this->requestHandlers['completion/complete'])) {
+            $completionsCapability = new ServerCompletionsCapability();
+        }
+
         // Build tasks capability if task handlers are registered
         $tasksCapability = null;
         $hasTaskGet = isset($this->requestHandlers['tasks/get']);
@@ -161,6 +167,7 @@ class Server {
             resources: $resourcesCapability,
             tools: $toolsCapability,
             logging: $loggingCapability,
+            completions: $completionsCapability,
             experimental: ExperimentalCapabilities::fromArray($experimentalCapabilities),
             tasks: $tasksCapability,
         );

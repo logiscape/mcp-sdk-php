@@ -215,8 +215,12 @@ final class ClientRequest implements RequestWrapperInterface {
             default => throw new \InvalidArgumentException("Unknown ref type: {$refData['type']}")
         };
 
+        // Optional completion context (already-resolved argument values).
+        $contextData = $params['context'] ?? null;
+        $context = is_array($contextData) ? CompletionContext::fromArray($contextData) : null;
+
         // Construct the new CompleteRequestParams
-        $reqParams = new CompleteRequestParams($argument, $ref);
+        $reqParams = new CompleteRequestParams($argument, $ref, context: $context);
 
         // Now pass that to CompleteRequest
         return new self(new CompleteRequest($reqParams));

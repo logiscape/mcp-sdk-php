@@ -33,7 +33,8 @@ namespace Mcp\Types;
  * Params for CompleteRequest:
  * {
  *   argument: CompletionArgument,
- *   ref: PromptReference | ResourceReference
+ *   ref: PromptReference | ResourceReference,
+ *   context?: CompletionContext
  * }
  */
 class CompleteRequestParams extends RequestParams
@@ -41,7 +42,8 @@ class CompleteRequestParams extends RequestParams
     public function __construct(
         public readonly CompletionArgument $argument,
         public readonly PromptReference|ResourceReference $ref,
-        ?Meta $_meta = null
+        ?Meta $_meta = null,
+        public readonly ?CompletionContext $context = null,
     ) {
         parent::__construct($_meta);
     }
@@ -49,12 +51,15 @@ class CompleteRequestParams extends RequestParams
     public function validate(): void
     {
         parent::validate(); // validates $_meta if present
-        
+
         // Validate the CompletionArgument
         $this->argument->validate();
-        
+
         // Validate the reference
         $this->ref->validate();
+
+        // Validate the context if present
+        $this->context?->validate();
     }
 
     public function jsonSerialize(): mixed
@@ -63,7 +68,11 @@ class CompleteRequestParams extends RequestParams
             'argument' => $this->argument,
             'ref' => $this->ref,
         ];
-        
+
+        if ($this->context !== null) {
+            $data['context'] = $this->context;
+        }
+
         // Get parent data
         $parentData = parent::jsonSerialize();
 

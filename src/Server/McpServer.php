@@ -34,6 +34,9 @@ use Mcp\Server\Transport\Http\SessionStoreInterface;
 use Mcp\Server\Transport\Http\StandardPhpAdapter;
 use Mcp\Types\BlobResourceContents;
 use Mcp\Types\CallToolResult;
+use Mcp\Types\CompleteResult;
+use Mcp\Types\CompletionContext;
+use Mcp\Types\CompletionObject;
 use Mcp\Types\GetPromptResult;
 use Mcp\Types\ListPromptsResult;
 use Mcp\Types\ListResourcesResult;
@@ -42,8 +45,10 @@ use Mcp\Types\ListToolsResult;
 use Mcp\Types\Prompt;
 use Mcp\Types\PromptArgument;
 use Mcp\Types\PromptMessage;
+use Mcp\Types\PromptReference;
 use Mcp\Types\ReadResourceResult;
 use Mcp\Types\Resource;
+use Mcp\Types\ResourceReference;
 use Mcp\Types\ResourceTemplate;
 use Mcp\Types\Role;
 use Mcp\Types\Task;
@@ -126,6 +131,15 @@ class McpServer
      *      Compiled template handlers, in registration order.
      */
     protected array $resourceTemplateHandlers = [];
+
+    /** @var array<string, callable> Prompt-argument completion providers, keyed "promptName\0argName". */
+    protected array $promptCompletionProviders = [];
+
+    /** @var array<string, callable> Resource-template completion providers, keyed "uriTemplate\0argName". */
+    protected array $resourceTemplateCompletionProviders = [];
+
+    /** @var bool Whether the completion/complete handler has been registered. */
+    protected bool $completionHandlerRegistered = false;
 
     /** @var array<string, mixed> [Added] HTTP transport options. */
     protected array $httpOptions = [];
@@ -563,6 +577,62 @@ class McpServer
         throw McpServerException::invalidResourceResult($result);
     }
 
+    /**
+     * Register a completion provider for a prompt argument.
+     *
+     * The provider supplies autocomplete suggestions as the user types a value
+     * for the named argument of the named prompt. Registering any completion
+     * provider causes the server to advertise the `completions` capability.
+     *
+     * The provider is called as `$provider(string $value, array $context = [])`:
+     *  - `$value` is the partial argument value typed so far.
+     *  - `$context` is the map of already-resolved argument values the client
+     *    sent (empty when none) — useful to filter on a prior selection. A
+     *    provider that doesn't need context simply omits the second parameter.
+     *
+     * It may return a `string[]` (auto-wrapped, truncated to 100 with
+     * `hasMore`/`total` if longer), a {@see CompletionObject}, or a
+     * {@see CompleteResult} (both passed through after validation).
+     *
+     * @param string $promptName The prompt the argument belongs to
+     * @param string $argumentName The argument to complete
+     * @param callable $provider The suggestion provider
+     * @return self For method chaining
+     */
+    public function completionForPrompt(
+        string $promptName,
+        string $argumentName,
+        callable $provider
+    ): self {
+        $this->promptCompletionProviders[$this->completionKey($promptName, $argumentName)] = $provider;
+        $this->ensureCompletionHandler();
+        return $this;
+    }
+
+    /**
+     * Register a completion provider for a resource-template argument.
+     *
+     * Identical contract to {@see completionForPrompt()}, but keyed on a
+     * registered `uriTemplate` and one of its variables. The `$uriTemplate`
+     * must match the string passed to {@see resourceTemplate()}; a completion
+     * request naming a template that was never registered yields a -32602
+     * error rather than an empty result.
+     *
+     * @param string $uriTemplate The registered template string
+     * @param string $argumentName The template variable to complete
+     * @param callable $provider The suggestion provider
+     * @return self For method chaining
+     */
+    public function completionForResourceTemplate(
+        string $uriTemplate,
+        string $argumentName,
+        callable $provider
+    ): self {
+        $this->resourceTemplateCompletionProviders[$this->completionKey($uriTemplate, $argumentName)] = $provider;
+        $this->ensureCompletionHandler();
+        return $this;
+    }
+
     // -----------------------------------------------------------------------
     // Configuration — [Added]
     // -----------------------------------------------------------------------
@@ -953,6 +1023,131 @@ class McpServer
 
             throw McpServerException::unknownResource($uri);
         });
+    }
+
+    /**
+     * Build the composite key for a completion provider.
+     *
+     * Uses a NUL separator so a name containing the separator cannot collide
+     * with a different (name, argument) pair.
+     */
+    private function completionKey(string $refName, string $argumentName): string
+    {
+        return $refName . "\0" . $argumentName;
+    }
+
+    /**
+     * Whether any registered resource template uses the given URI template.
+     */
+    private function hasResourceTemplate(string $uriTemplate): bool
+    {
+        foreach ($this->resourceTemplates as $template) {
+            if ($template->uriTemplate === $uriTemplate) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Lazily register the completion/complete handler on first provider use.
+     *
+     * Keeping registration lazy means Server::getCapabilities() only advertises
+     * the `completions` capability for servers that actually register a
+     * provider.
+     */
+    private function ensureCompletionHandler(): void
+    {
+        if ($this->completionHandlerRegistered) {
+            return;
+        }
+        $this->completionHandlerRegistered = true;
+
+        $this->server->registerHandler('completion/complete', function ($params) {
+            $ref = is_object($params) ? ($params->ref ?? null) : null;
+            $argument = is_object($params) ? ($params->argument ?? null) : null;
+            $argName = is_object($argument) ? ($argument->name ?? '') : '';
+            $argValue = is_object($argument) ? ($argument->value ?? '') : '';
+
+            // Already-resolved arguments for multi-argument completion.
+            $context = [];
+            $ctx = is_object($params) ? ($params->context ?? null) : null;
+            if ($ctx instanceof CompletionContext) {
+                $context = $ctx->arguments;
+            }
+
+            // An invalid *reference* is a -32602 error, not an empty result.
+            if ($ref instanceof PromptReference) {
+                if (!isset($this->promptHandlers[$ref->name])) {
+                    throw McpServerException::unknownPrompt($ref->name);
+                }
+                $provider = $this->promptCompletionProviders[$this->completionKey($ref->name, $argName)] ?? null;
+            } elseif ($ref instanceof ResourceReference) {
+                // ResourceReference->uri carries the registered template string.
+                if (!$this->hasResourceTemplate($ref->uri)) {
+                    throw McpServerException::unknownResourceTemplate($ref->uri);
+                }
+                $provider = $this->resourceTemplateCompletionProviders[$this->completionKey($ref->uri, $argName)] ?? null;
+            } else {
+                throw McpServerException::invalidCompletionRef();
+            }
+
+            // Valid ref but no provider for this specific argument: no suggestions.
+            if ($provider === null) {
+                return new CompleteResult(completion: new CompletionObject(values: []));
+            }
+
+            return $this->normalizeCompletionResult($provider($argValue, $context));
+        });
+    }
+
+    /**
+     * Normalize a completion provider's return value into a CompleteResult.
+     *
+     * Enforces the spec's 100-value cap on the SEND side (BaseSession does not
+     * validate outgoing results):
+     *  - A `string[]` longer than 100 is truncated to the first 100, with
+     *    `hasMore: true` and `total` set to the full count; truncation is
+     *    logged so it is not silent.
+     *  - A hand-built CompletionObject/CompleteResult is validated (which throws
+     *    above 100), so an author-built oversized response fails loudly at the
+     *    source rather than emitting a spec-violating payload.
+     *
+     * @param mixed $result The raw provider return value
+     * @throws McpServerException If the result type is unsupported
+     */
+    private function normalizeCompletionResult(mixed $result): CompleteResult
+    {
+        if ($result instanceof CompleteResult) {
+            $result->completion->validate();
+            return $result;
+        }
+
+        if ($result instanceof CompletionObject) {
+            $result->validate();
+            return new CompleteResult(completion: $result);
+        }
+
+        if (is_array($result)) {
+            $values = array_values(array_map(static fn ($v): string => (string)$v, $result));
+            $total = count($values);
+
+            if ($total > 100) {
+                $this->logger->debug(sprintf(
+                    'Completion provider returned %d values; truncating to 100 and setting hasMore=true.',
+                    $total
+                ));
+                return new CompleteResult(completion: new CompletionObject(
+                    values: array_slice($values, 0, 100),
+                    total: $total,
+                    hasMore: true,
+                ));
+            }
+
+            return new CompleteResult(completion: new CompletionObject(values: $values));
+        }
+
+        throw McpServerException::invalidCompletionResult($result);
     }
 
     // -----------------------------------------------------------------------
