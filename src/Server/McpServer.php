@@ -37,12 +37,14 @@ use Mcp\Types\CallToolResult;
 use Mcp\Types\GetPromptResult;
 use Mcp\Types\ListPromptsResult;
 use Mcp\Types\ListResourcesResult;
+use Mcp\Types\ListResourceTemplatesResult;
 use Mcp\Types\ListToolsResult;
 use Mcp\Types\Prompt;
 use Mcp\Types\PromptArgument;
 use Mcp\Types\PromptMessage;
 use Mcp\Types\ReadResourceResult;
 use Mcp\Types\Resource;
+use Mcp\Types\ResourceTemplate;
 use Mcp\Types\Role;
 use Mcp\Types\Task;
 use Mcp\Types\TaskGetResult;
@@ -55,6 +57,7 @@ use Mcp\Types\Tool;
 use Mcp\Types\ToolInputProperties;
 use Mcp\Types\ToolInputSchema;
 use Mcp\Shared\ProgressContext;
+use Mcp\Shared\UriTemplate;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use ReflectionFunction;
@@ -114,6 +117,15 @@ class McpServer
 
     /** @var array<string, callable> Registered resource handlers keyed by URI. */
     protected array $resourceHandlers = [];
+
+    /** @var ResourceTemplate[] Registered resource templates. */
+    protected array $resourceTemplates = [];
+
+    /**
+     * @var array<int, array{matcher: UriTemplate, handler: callable, mimeType: string}>
+     *      Compiled template handlers, in registration order.
+     */
+    protected array $resourceTemplateHandlers = [];
 
     /** @var array<string, mixed> [Added] HTTP transport options. */
     protected array $httpOptions = [];
@@ -414,47 +426,141 @@ class McpServer
         $this->resources[] = $resource;
 
         $this->resourceHandlers[$uri] = function () use ($callback, $uri, $mimeType) {
-            $result = $callback();
-
-            if ($result instanceof ReadResourceResult) {
-                return $result;
-            }
-
-            if (is_string($result)) {
-                return new ReadResourceResult(
-                    contents: [
-                        new TextResourceContents(
-                            text: $result,
-                            uri: $uri,
-                            mimeType: $mimeType
-                        ),
-                    ]
-                );
-            }
-
-            if ($result instanceof \SplFileObject || is_resource($result)) {
-                $content = '';
-                if ($result instanceof \SplFileObject) {
-                    $content = $result->fread($result->getSize());
-                } else {
-                    $content = stream_get_contents($result);
-                }
-
-                return new ReadResourceResult(
-                    contents: [
-                        new BlobResourceContents(
-                            blob: base64_encode($content),
-                            uri: $uri,
-                            mimeType: $mimeType
-                        ),
-                    ]
-                );
-            }
-
-            throw McpServerException::invalidResourceResult($result);
+            return $this->normalizeReadResourceResult($callback(), $uri, $mimeType);
         };
 
         return $this;
+    }
+
+    /**
+     * Define a new resource template (RFC 6570 Level 1 + reserved {+var}).
+     *
+     * A resource template lets a single callback serve a family of URIs that
+     * share a structure, e.g. `db://{table}/{id}`. Registering a template makes
+     * it appear in `resources/templates/list`, and a `resources/read` for any
+     * URI that matches the template invokes the callback with the extracted
+     * variables bound to its parameters **by name** (`fn(string $id) => ...`).
+     *
+     * Supported template syntax (see {@see UriTemplate}):
+     *  - `{var}` matches a SINGLE path segment (one or more non-`/` characters).
+     *  - `{+var}` (reserved) matches greedily, INCLUDING `/`, for filesystem-like
+     *    templates. The spec's `file:///{path}` example only reads a real
+     *    multi-segment path when written as `file:///{+path}`.
+     *  - Any other RFC 6570 operator or modifier (`{?q}`, `{#f}`, `{var:3}`,
+     *    `{var*}`, `{a,b}`, …) is rejected with an `InvalidArgumentException` at
+     *    registration, so a template the read path cannot match is never
+     *    advertised.
+     *
+     * Precedence: an exact-URI {@see resource()} always wins over a template,
+     * and templates are tried in registration order (first registered wins on
+     * an overlap).
+     *
+     * The callback follows the same return-value contract as {@see resource()}:
+     * a string (auto-wrapped in `ReadResourceResult` with the concrete request
+     * URI), an `SplFileObject`/resource (base64 blob), or a `ReadResourceResult`
+     * (passed through).
+     *
+     * @param string $uriTemplate The URI template (RFC 6570 subset)
+     * @param string $name The template name
+     * @param callable $callback Receives the extracted variables by name
+     * @param string $description The template description
+     * @param string $mimeType The MIME type
+     * @param string|null $title Display title for the template
+     * @param array<int, array<string, mixed>>|null $icons Icons for the template
+     * @return self For method chaining
+     * @throws \InvalidArgumentException If the template uses unsupported syntax
+     * @throws McpServerException If the callback returns an invalid result
+     */
+    public function resourceTemplate(
+        string $uriTemplate,
+        string $name,
+        callable $callback,
+        string $description = '',
+        string $mimeType = 'text/plain',
+        ?string $title = null,
+        ?array $icons = null,
+    ): self {
+
+        // Compile first: an unsupported RFC 6570 operator throws here, before
+        // any descriptor is stored or advertised.
+        $matcher = new UriTemplate($uriTemplate);
+
+        $this->resourceTemplates[] = new ResourceTemplate(
+            name: $name,
+            uriTemplate: $uriTemplate,
+            description: $description !== '' ? $description : null,
+            mimeType: $mimeType,
+            title: $title,
+            icons: \Mcp\Types\Icon::parseArray($icons),
+        );
+
+        $handler = function (array $vars, string $uri) use ($callback, $mimeType): ReadResourceResult {
+            // Map the extracted variables onto the callback's parameters by name
+            // and stamp the contents with the concrete request URI (not template).
+            $ordered = $this->matchNamedParameters($callback, $vars);
+            return $this->normalizeReadResourceResult($callback(...$ordered), $uri, $mimeType);
+        };
+
+        $this->resourceTemplateHandlers[] = [
+            'matcher' => $matcher,
+            'handler' => $handler,
+            'mimeType' => $mimeType,
+        ];
+
+        return $this;
+    }
+
+    /**
+     * Normalize a resource callback's return value into a ReadResourceResult.
+     *
+     * Shared by {@see resource()} and {@see resourceTemplate()} so the two
+     * paths never diverge. Accepts a string (TextResourceContents), an
+     * SplFileObject/resource (base64 BlobResourceContents), or a
+     * ReadResourceResult (passthrough).
+     *
+     * @param mixed $result The raw callback return value
+     * @param string $uri The concrete resource URI to stamp on the contents
+     * @param string $mimeType The MIME type to stamp on the contents
+     * @throws McpServerException If the result type is not supported
+     */
+    private function normalizeReadResourceResult(mixed $result, string $uri, string $mimeType): ReadResourceResult
+    {
+        if ($result instanceof ReadResourceResult) {
+            return $result;
+        }
+
+        if (is_string($result)) {
+            return new ReadResourceResult(
+                contents: [
+                    new TextResourceContents(
+                        text: $result,
+                        uri: $uri,
+                        mimeType: $mimeType
+                    ),
+                ]
+            );
+        }
+
+        if ($result instanceof \SplFileObject || is_resource($result)) {
+            $content = '';
+            if ($result instanceof \SplFileObject) {
+                $content = $result->fread($result->getSize());
+            } else {
+                $content = stream_get_contents($result);
+            }
+
+            return new ReadResourceResult(
+                contents: [
+                    new BlobResourceContents(
+                        blob: base64_encode($content),
+                        uri: $uri,
+                        mimeType: $mimeType
+                    ),
+                ]
+            );
+        }
+
+        throw McpServerException::invalidResourceResult($result);
     }
 
     // -----------------------------------------------------------------------
@@ -821,15 +927,31 @@ class McpServer
             return new ListResourcesResult(array_values($this->resources));
         });
 
+        // Registered unconditionally (mirrors resources/list): a server with no
+        // templates answers with an empty list rather than "method not found",
+        // which is friendlier to clients that probe this method on connect.
+        $this->server->registerHandler('resources/templates/list', function () {
+            return new ListResourceTemplatesResult(array_values($this->resourceTemplates));
+        });
+
         $this->server->registerHandler('resources/read', function ($params) {
             $uri = $params->uri;
 
-            if (!isset($this->resourceHandlers[$uri])) {
-                throw McpServerException::unknownResource($uri);
+            // Exact-match static resources win over templates (unchanged fast path).
+            if (isset($this->resourceHandlers[$uri])) {
+                $handler = $this->resourceHandlers[$uri];
+                return $handler();
             }
 
-            $handler = $this->resourceHandlers[$uri];
-            return $handler();
+            // Fall through to templates, tried in registration order.
+            foreach ($this->resourceTemplateHandlers as $entry) {
+                $vars = $entry['matcher']->extract($uri);
+                if ($vars !== null) {
+                    return ($entry['handler'])($vars, $uri);
+                }
+            }
+
+            throw McpServerException::unknownResource($uri);
         });
     }
 

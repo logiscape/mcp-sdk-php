@@ -20,6 +20,7 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 
 - URI template matching engine that decides whether a concrete URI matches a
   registered URI template and extracts the variable values.
+- Implements resources templates as an API that aligns with the rest of the SDK.
 
 ## [1.7.2]
 
