@@ -14,7 +14,7 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 **v1.6.0 and later**; earlier releases can be reviewed via the
 [Git tag history](https://github.com/logiscape/mcp-sdk-php/tags).
 
-## [Unreleased]
+## [1.7.3]
 
 ### Added
 
