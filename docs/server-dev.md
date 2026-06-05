@@ -17,7 +17,9 @@ A comprehensive guide to developing Model Context Protocol servers using the `lo
 - [Part 7: Returning Rich Content](#part-7-returning-rich-content)
 - [Part 8: Requesting Input with Elicitation](#part-8-requesting-input-with-elicitation)
 - [Part 9: Server-Initiated LLM Sampling](#part-9-server-initiated-llm-sampling)
-- [Part 10: Multi-Capability Servers](#part-10-multi-capability-servers)
+- [Part 10: Providing Completions](#part-10-providing-completions)
+- [Part 11: Emitting Notifications, Logging, and Progress](#part-11-emitting-notifications-logging-and-progress)
+- [Part 12: Multi-Capability Servers](#part-12-multi-capability-servers)
 - [Appendix A: Configuration Reference](#appendix-a-configuration-reference)
 - [Appendix B: Deployment Checklist](#appendix-b-deployment-checklist)
 
@@ -458,6 +460,107 @@ $server->run();
 
 By including an assistant message, you prime the model to continue in a specific conversational style.
 
+### Prompts with Images or Embedded Resources
+
+A prompt message is not limited to text. A `PromptMessage` can carry `TextContent`, `ImageContent`, `AudioContent`, or an `EmbeddedResource` -- useful when the template needs to seed the conversation with a screenshot, a diagram, or a file the model should reason about. The string and array shortcuts only ever produce text messages, so to include non-text content you build the `GetPromptResult` explicitly.
+
+This prompt seeds the conversation with an image and asks the model to describe it:
+
+```php
+<?php
+// prompts_image.php
+require 'vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+use Mcp\Types\GetPromptResult;
+use Mcp\Types\PromptMessage;
+use Mcp\Types\TextContent;
+use Mcp\Types\ImageContent;
+use Mcp\Types\Role;
+
+$server = new McpServer('image-prompts');
+
+$server->prompt(
+    'describe-logo',
+    'Ask the model to describe the company logo',
+    function (): GetPromptResult {
+        // Set this to your actual image file
+        $bytes = file_get_contents(__DIR__ . '/assets/logo.png');
+
+        return new GetPromptResult(
+            description: 'Logo description starter',
+            messages: [
+                new PromptMessage(
+                    role: Role::USER,
+                    content: new TextContent(text: 'Describe this logo in one sentence:'),
+                ),
+                // ImageContent carries base64-encoded image bytes and a MIME type.
+                new PromptMessage(
+                    role: Role::USER,
+                    content: new ImageContent(
+                        data: base64_encode($bytes),
+                        mimeType: 'image/png',
+                    ),
+                ),
+            ],
+        );
+    }
+);
+
+$server->run();
+```
+
+To embed a full resource instead -- a config file, a document, a record the model should treat as addressable context -- wrap a `TextResourceContents` (or `BlobResourceContents` for binary) in an `EmbeddedResource`:
+
+```php
+<?php
+// prompts_embedded_resource.php
+require 'vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+use Mcp\Types\GetPromptResult;
+use Mcp\Types\PromptMessage;
+use Mcp\Types\TextContent;
+use Mcp\Types\EmbeddedResource;
+use Mcp\Types\TextResourceContents;
+use Mcp\Types\Role;
+
+$server = new McpServer('embedded-prompts');
+
+$server->prompt(
+    'review-config',
+    'Ask the model to review the current application configuration',
+    function (): GetPromptResult {
+        $config = json_encode(['debug' => false, 'cache' => 'redis'], JSON_PRETTY_PRINT);
+
+        return new GetPromptResult(
+            messages: [
+                new PromptMessage(
+                    role: Role::USER,
+                    content: new TextContent(text: 'Review this configuration for problems:'),
+                ),
+                // The embedded resource keeps its own URI so the model (and
+                // client) can refer to it as addressable context, not loose text.
+                new PromptMessage(
+                    role: Role::USER,
+                    content: new EmbeddedResource(
+                        resource: new TextResourceContents(
+                            text: $config,
+                            uri: 'config://app.json',
+                            mimeType: 'application/json',
+                        ),
+                    ),
+                ),
+            ],
+        );
+    }
+);
+
+$server->run();
+```
+
+Note the `TextResourceContents` argument order: `text` first, then `uri`, then the optional `mimeType`.
+
 ---
 
 ## Part 3: Resources
@@ -676,6 +779,70 @@ $server->resource(
 $server->run();
 ```
 
+### Resource Templates
+
+A *resource template* describes a whole family of resources with a single URI pattern instead of registering each URI one by one. When a client reads a URI that matches the pattern, the SDK extracts the variables from the URI and hands them to your callback. Templates are advertised through `resources/templates/list` so clients can discover the pattern, and matching `resources/read` calls are routed to your template handler automatically.
+
+Register one with `resourceTemplate()`:
+
+```php
+<?php
+// resource_template.php
+require 'vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+
+$server = new McpServer('templated-resources');
+
+// The {userId} placeholder matches a single path segment. When a client reads
+// "users://42/profile", the SDK extracts userId = "42" and passes it to the
+// callback by name -- the parameter name must match the template variable.
+$server->resourceTemplate(
+    uriTemplate: 'users://{userId}/profile',
+    name: 'User Profile',
+    callback: function (string $userId): string {
+        // In a real server, look the user up in a database.
+        return json_encode([
+            'id'   => $userId,
+            'name' => "User {$userId}",
+            'tier' => 'standard',
+        ], JSON_PRETTY_PRINT);
+    },
+    description: 'Profile data for a given user ID',
+    mimeType: 'application/json',
+);
+
+$server->run();
+```
+
+A few rules govern the template syntax:
+
+- **`{var}` matches a single path segment** -- everything except `/`. Use it for IDs, slugs, and other single-segment values.
+- **`{+var}` matches greedily, including `/`.** Use it for file-like paths whose value spans multiple segments. A template `files:///{+path}` reading `files:///docs/2026/report.txt` yields `path = "docs/2026/report.txt"`.
+- **Variables arrive as named parameters.** The SDK matches each template variable to a callback parameter by name (not position) using reflection, so name your parameters to match the placeholders. Percent-encoded values are decoded for you.
+- **Only those two forms are supported.** Other RFC 6570 operators (`{?query}`, `{#frag}`, `{var:3}`, `{a,b}`, etc.) throw `InvalidArgumentException` at registration time, so the server never advertises a pattern it can't actually match.
+
+Here is the multi-segment form:
+
+```php
+$server->resourceTemplate(
+    uriTemplate: 'files:///{+path}',
+    name: 'Project File',
+    callback: function (string $path): string {
+        // {+path} captures the full remainder, so reading
+        // files:///docs/guide.md gives $path === 'docs/guide.md'.
+        return "Contents of {$path}";
+    },
+);
+```
+
+Two things worth knowing:
+
+- An exact resource registered with `resource()` always wins over a template; templates are tried in registration order only when no exact URI matches.
+- The content the SDK returns carries the **concrete** request URI (e.g. `users://42/profile`), not the template pattern.
+
+To suggest values for a template's variables as the user types, pair it with a completion provider -- see [Part 10](#part-10-providing-completions).
+
 ---
 
 ## Part 4: Deploying Remote MCP Servers
@@ -806,6 +973,14 @@ The modes behave as follows (after `enable_sse => true`):
 - `'buffered'` -- always buffer, even on FrankenPHP or RoadRunner where live streaming would work. Use this when you specifically want the SSE wire format without any mid-response flushing.
 
 If you leave `enable_sse => false` (the default), the server never emits SSE and the `sse_mode` setting is ignored. That is the right call for the widest shared-hosting compatibility; only flip it on when you have a reason to (long-running tools emitting progress, clients that explicitly prefer SSE, etc.).
+
+### Transport Support: Streamable HTTP Only
+
+The SDK implements the modern **Streamable HTTP** transport -- a single endpoint that accepts JSON-RPC over POST and can answer with either plain JSON or SSE, as described above. This is the transport the current spec defines.
+
+It does **not** implement the deprecated **HTTP+SSE dual-endpoint** transport from the `2024-11-05` revision -- the older design that used a separate long-lived `GET /sse` stream alongside a separate POST endpoint. The spec deprecated that transport in favor of Streamable HTTP, and this SDK targets only the modern form.
+
+The practical consequence is narrow: a client that speaks *only* the old dual-endpoint transport cannot connect to a server built with this SDK over HTTP. This is intentional and does not reduce Streamable HTTP coverage -- any client implementing the current transport connects normally, and protocol-version negotiation still lets the server speak older *protocol* revisions (including `2024-11-05` message shapes) over the modern transport.
 
 ### DNS Rebinding Protection
 
@@ -1361,6 +1536,90 @@ $server->tool(
 $server->run();
 ```
 
+> **Wrap non-text content in a result object.** The convenience wrapper only auto-coerces `string` and `array` returns into a `CallToolResult`. Returning a bare `AudioContent`, `ImageContent`, or `EmbeddedResource` will throw an invalid-result error -- always wrap them in a `CallToolResult` as shown here.
+
+### Returning Audio
+
+`AudioContent` carries base64-encoded audio just as `ImageContent` carries images. Return it inside a `CallToolResult`:
+
+```php
+<?php
+// rich_content_audio.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+use Mcp\Types\CallToolResult;
+use Mcp\Types\TextContent;
+use Mcp\Types\AudioContent;
+
+$server = new McpServer('audio-tools');
+
+$server->tool(
+    'text-to-speech',
+    'Synthesize speech for a short phrase and return it as audio',
+    function (string $text): CallToolResult {
+        // A real tool would call a TTS engine; you can also set this to a pre-rendered clip.
+        $wav = file_get_contents(__DIR__ . '/assets/greeting.wav');
+
+        return new CallToolResult(
+            content: [
+                new TextContent(text: "Synthesized speech for: {$text}"),
+                new AudioContent(
+                    data: base64_encode($wav),
+                    mimeType: 'audio/wav',
+                ),
+            ]
+        );
+    }
+);
+
+$server->run();
+```
+
+### Returning an Embedded Resource
+
+A tool can embed a complete resource -- text or binary -- directly in its result with `EmbeddedResource`. Unlike a loose `TextContent` block, an embedded resource keeps its own URI and MIME type, so the model and client can treat the generated artifact as addressable context:
+
+```php
+<?php
+// rich_content_embedded.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+use Mcp\Types\CallToolResult;
+use Mcp\Types\TextContent;
+use Mcp\Types\EmbeddedResource;
+use Mcp\Types\TextResourceContents;
+
+$server = new McpServer('embedded-tools');
+
+$server->tool(
+    'generate-invoice',
+    'Generate an invoice and return it as an embedded resource',
+    function (string $customer, float $amount): CallToolResult {
+        $invoiceId = 'INV-' . str_pad((string) random_int(1, 9999), 4, '0', STR_PAD_LEFT);
+        $body = "Invoice {$invoiceId}\nCustomer: {$customer}\nAmount due: \${$amount}\n";
+
+        return new CallToolResult(
+            content: [
+                new TextContent(text: "Created invoice {$invoiceId} for {$customer}."),
+                new EmbeddedResource(
+                    resource: new TextResourceContents(
+                        text: $body,
+                        uri: "invoice://{$invoiceId}",
+                        mimeType: 'text/plain',
+                    ),
+                ),
+            ]
+        );
+    }
+);
+
+$server->run();
+```
+
+For binary payloads, swap `TextResourceContents` for `BlobResourceContents(blob: base64_encode($bytes), uri: ..., mimeType: ...)`.
+
 ---
 
 ## Part 8: Requesting Input with Elicitation
@@ -1865,7 +2124,298 @@ If the client doesn't support sampling, `prompt()` and `createMessage()` both re
 
 ---
 
-## Part 10: Multi-Capability Servers
+## Part 10: Providing Completions
+
+When a server advertises `completions`, clients can ask it to suggest values for a prompt argument or a resource-template variable as the user types -- the same way an IDE autocompletes. You register a provider per (prompt-or-template, argument) pair, and the SDK advertises the `completions` capability automatically as soon as the first provider is registered. Nothing else to wire up.
+
+### Completing a Prompt Argument
+
+Use `completionForPrompt(promptName, argumentName, provider)`. The provider receives the partial value the user has typed so far and returns an array of candidate strings:
+
+```php
+<?php
+// completion_prompt.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+
+$server = new McpServer('completion-server');
+
+$server->prompt(
+    'review-code',
+    'Review a snippet in a given language',
+    function (string $language, string $code): string {
+        return "Review this {$language} code:\n\n{$code}";
+    }
+);
+
+// Suggest values for the prompt's "language" argument. $value is what the
+// user has typed so far; return the candidates that match.
+$server->completionForPrompt(
+    'review-code',
+    'language',
+    function (string $value): array {
+        $languages = ['php', 'python', 'javascript', 'rust', 'go'];
+        return array_values(array_filter(
+            $languages,
+            fn (string $lang): bool => str_starts_with($lang, strtolower($value)),
+        ));
+    }
+);
+
+$server->run();
+```
+
+### Completing a Resource-Template Variable
+
+Use `completionForResourceTemplate(uriTemplate, variableName, provider)`. The template string must **exactly match** one you registered with `resourceTemplate()` (see [Part 3](#resource-templates)):
+
+```php
+<?php
+// completion_template.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+
+$server = new McpServer('completion-template-server');
+
+$server->resourceTemplate(
+    uriTemplate: 'users://{userId}/profile',
+    name: 'User Profile',
+    callback: fn (string $userId): string => "Profile for {$userId}",
+    mimeType: 'application/json',
+);
+
+// Suggest values for the {userId} variable. The first argument must be the
+// exact template string registered above.
+$server->completionForResourceTemplate(
+    'users://{userId}/profile',
+    'userId',
+    function (string $value): array {
+        $ids = ['1001', '1002', '2001'];
+        return array_values(array_filter(
+            $ids,
+            fn (string $id): bool => str_starts_with($id, $value),
+        ));
+    }
+);
+
+$server->run();
+```
+
+### Context-Aware Completions
+
+A provider may accept a second `array $context` parameter holding the values the user has already chosen for *other* arguments of the same prompt. Use it to narrow later suggestions -- for example, only offering frameworks that match the language already picked:
+
+```php
+$server->completionForPrompt(
+    'scaffold',
+    'framework',
+    function (string $value, array $context): array {
+        $byLanguage = [
+            'php'    => ['laravel', 'symfony', 'slim'],
+            'python' => ['django', 'flask', 'fastapi'],
+        ];
+        $candidates = $byLanguage[$context['language'] ?? ''] ?? [];
+        return array_values(array_filter(
+            $candidates,
+            fn (string $f): bool => str_starts_with($f, $value),
+        ));
+    }
+);
+```
+
+The SDK wraps your array in the protocol's completion response and caps it at 100 suggestions, setting the `hasMore` flag when it truncates. If you need full control over the `total` and `hasMore` fields, return a `Mcp\Types\CompletionObject` (or a complete `Mcp\Types\CompleteResult`) instead of a plain array.
+
+---
+
+## Part 11: Emitting Notifications, Logging, and Progress
+
+Every example so far has returned a single result. MCP also lets a server push *out-of-band* messages to the client while it works: progress updates during a long tool call, log messages, and "the list changed" hints that tell the client to refetch its tool/prompt/resource catalog. These are one-way notifications -- the server emits them, and the client's notification handler receives them (the [client guide](client-dev.md#part-9-notifications-progress-and-logging) covers the receiving side).
+
+> **Transport note (required reading for HTTP):** Server-to-client notifications travel on the open channel back to the client, and the two transports differ in a way that matters for compliance:
+>
+> - **Over stdio** the channel is always present -- emit freely.
+> - **Over HTTP** the Streamable HTTP spec requires that a plain `application/json` POST response contain exactly **one** JSON object: the result of the request. Notifications can only be delivered on a `text/event-stream` (SSE) response, interleaved *before* that result. So to emit notifications over HTTP you **must** enable SSE with `->httpOptions(['enable_sse' => true])`. With SSE left at its default (`false`), there is no spec-compliant way to attach a notification to the response, so a server that emits notifications must run over stdio or over an SSE-enabled HTTP endpoint. Every example in this section enables SSE for that reason.
+>
+> One more HTTP caveat even with SSE on: a stateless shared-hosting request that has already returned cannot push a notification after the fact. Always emit from *inside* a tool callback, while the request is still being processed.
+
+### Reporting Progress from a Long Tool
+
+A tool callback can type-hint `ProgressContext` to report incremental progress. The SDK injects it **only** when the client attached a `progressToken` to the call, so make the parameter nullable with a default of `null` and guard on it with `?->`:
+
+```php
+<?php
+// emit_progress.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+use Mcp\Shared\ProgressContext;
+
+$server = new McpServer('progress-server');
+
+// Required for HTTP: progress notifications can only be delivered on an SSE
+// response. Without this, an HTTP server has no compliant way to emit them.
+// (No effect over stdio.) See the transport note above.
+$server->httpOptions(['enable_sse' => true]);
+
+$server->tool(
+    'process-batch',
+    'Process a batch of records, reporting progress as it goes',
+    function (int $count, ?ProgressContext $progress = null): string {
+        for ($i = 0; $i < $count; $i++) {
+            // ... do one unit of work ...
+
+            // Report one step. If the client didn't request progress,
+            // $progress is null and this line is a no-op.
+            $progress?->progress(1);
+        }
+
+        return "Processed {$count} records.";
+    }
+);
+
+$server->run();
+```
+
+`ProgressContext::progress($amount)` increments a running total and emits a `notifications/progress`, which is all most tools need. The `ProgressContext` parameter is stripped from the tool's input schema, so the model never sees it.
+
+If you want to send an explicit `total` so the client can render a percentage, reach the live session and call `sendProgressNotification()` with the token directly:
+
+```php
+$server->tool(
+    'export-data',
+    'Export records, reporting percent complete',
+    function (?ProgressContext $progress = null) use ($server): string {
+        $session = $server->getServer()->getSession();
+        $token   = $progress?->getToken();
+
+        if ($session !== null && $token !== null) {
+            $session->sendProgressNotification($token, 0, 100);
+            // ... first half of the work ...
+            $session->sendProgressNotification($token, 50, 100);
+            // ... second half of the work ...
+            $session->sendProgressNotification($token, 100, 100);
+        }
+
+        return 'Export complete.';
+    }
+);
+```
+
+### Sending Log Messages
+
+A server can stream structured log messages to the client at the standard syslog severities (`DEBUG`, `INFO`, `NOTICE`, `WARNING`, `ERROR`, `CRITICAL`, `ALERT`, `EMERGENCY`). To advertise the `logging` capability -- which is what tells a spec-compliant client it may set a minimum level and expect log notifications -- register a `logging/setLevel` handler on the underlying `Server`. Then call `sendLogMessage()` from inside your tool:
+
+```php
+<?php
+// emit_logging.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+use Mcp\Types\LoggingLevel;
+use Mcp\Types\EmptyResult;
+
+$server = new McpServer('logging-server');
+
+// Required for HTTP: log notifications ride an SSE response (see transport note).
+$server->httpOptions(['enable_sse' => true]);
+
+// Advertise the `logging` capability. McpServer has no high-level wrapper for
+// logging/setLevel, so register it on the low-level Server. Accepting the level
+// is enough here; a real server could store it and filter its own output.
+$server->getServer()->registerHandler('logging/setLevel', fn () => new EmptyResult());
+
+$server->tool(
+    'reindex',
+    'Rebuild the search index, logging progress to the client',
+    function () use ($server): string {
+        $session = $server->getServer()->getSession();
+
+        if ($session !== null) {
+            // level, data (any JSON-serializable value), and an optional logger name.
+            $session->sendLogMessage(LoggingLevel::INFO, 'Reindex started', 'search');
+            // ... work ...
+            $session->sendLogMessage(LoggingLevel::INFO, 'Reindex finished', 'search');
+        }
+
+        return 'Reindex complete.';
+    }
+);
+
+$server->run();
+```
+
+The `data` argument can be any JSON-serializable value -- a string, or a structured array like `['stage' => 'merge', 'docs' => 1200]` -- and the optional third argument is a logger name the client can display or filter on.
+
+### Signaling That a List Changed
+
+If your server adds or removes tools, prompts, or resources at runtime, tell the client its cached catalog is stale so it refetches. This is a two-step feature:
+
+1. **Advertise the capability** with `notifyOnChanges()` before `run()`. This sets the `listChanged` flags in the initialization handshake so the client knows to listen.
+2. **Emit the notification** when the list actually changes, via `sendToolListChanged()`, `sendResourceListChanged()`, or `sendPromptListChanged()` on the session.
+
+```php
+<?php
+// emit_list_changed.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+
+$server = new McpServer('dynamic-server');
+
+// Required for HTTP: list-changed notifications ride an SSE response (see transport note).
+$server->httpOptions(['enable_sse' => true]);
+
+// Step 1: advertise that this server may send list-changed notifications.
+$server->notifyOnChanges(
+    resourcesChanged: true,
+    toolsChanged: true,
+    promptsChanged: true,
+);
+
+// Step 2: each tool calls the matching send…ListChanged() method after it
+// changes the corresponding catalog. The three methods are independent --
+// emit only the one(s) whose list actually changed.
+
+$server->tool('enable-beta-tools', 'Turn on the beta tool set', function () use ($server): string {
+    // ... register or unregister tools based on application state ...
+
+    // The TOOL list changed -> notify so the client refetches tools/list.
+    $session = $server->getServer()->getSession();
+    $session?->sendToolListChanged();
+
+    return 'Beta tools enabled.';
+});
+
+$server->tool('mount-dataset', 'Expose a new dataset as readable resources', function () use ($server): string {
+    // ... add resources for the newly mounted dataset ...
+
+    // The RESOURCE list changed -> notify so the client refetches resources/list.
+    $session = $server->getServer()->getSession();
+    $session?->sendResourceListChanged();
+
+    return 'Dataset mounted.';
+});
+
+$server->tool('install-prompt-pack', 'Add a pack of prompt templates', function () use ($server): string {
+    // ... register the new prompts ...
+
+    // The PROMPT list changed -> notify so the client refetches prompts/list.
+    $session = $server->getServer()->getSession();
+    $session?->sendPromptListChanged();
+
+    return 'Prompt pack installed.';
+});
+
+$server->run();
+```
+
+`notifyOnChanges()` only advertises the capability -- it does **not** auto-emit when you register a tool, prompt, or resource. You decide when a list has meaningfully changed and call the matching method: `sendToolListChanged()`, `sendResourceListChanged()`, or `sendPromptListChanged()`. The three are independent, so emit only the one whose catalog actually changed. As with all server notifications, delivery is immediate over stdio and, over HTTP, rides the in-flight request's SSE response (hence the `enable_sse => true` above). A long-running stdio server is the natural home for catalogs that change between calls.
+
+---
+
+## Part 12: Multi-Capability Servers
 
 Real-world MCP servers combine tools, prompts, and resources. Here is a complete server that demonstrates all three working together:
 
@@ -2052,6 +2602,9 @@ $server->run();
 | `tool(name, description, callback, title?, icons?, outputSchema?, inputSchema?)` | Register a tool |
 | `prompt(name, description, callback, title?, icons?)` | Register a prompt |
 | `resource(uri, name, callback, description?, mimeType?, title?, icons?, size?)` | Register a resource |
+| `resourceTemplate(uriTemplate, name, callback, description?, mimeType?, title?, icons?)` | Register a resource template (variables passed to the callback by name) |
+| `completionForPrompt(promptName, argumentName, provider)` | Register an argument-completion provider for a prompt |
+| `completionForResourceTemplate(uriTemplate, variableName, provider)` | Register a completion provider for a resource-template variable |
 | `httpOptions(array)` | Set HTTP transport configuration |
 | `sessionStore(SessionStoreInterface)` | Set the session persistence backend |
 | `withAuth(tokenValidator, authorizationServers, resourceId)` | Enable OAuth authentication |
@@ -2077,6 +2630,9 @@ $server->run();
 | **Resource** | `string` | Wrapped as `TextResourceContents` |
 | **Resource** | `SplFileObject` or `resource` | Base64-encoded as `BlobResourceContents` |
 | **Resource** | `ReadResourceResult` | Returned as-is |
+| **Resource template** | (same as Resource) | Template variables injected into the callback by name; return value normalized exactly like a resource |
+| **Completion provider** | `string[]` | Wrapped as a `CompletionObject` (capped at 100, sets `hasMore`) |
+| **Completion provider** | `CompletionObject` / `CompleteResult` | Returned as-is |
 
 ### PHP Type to JSON Schema Mapping
 

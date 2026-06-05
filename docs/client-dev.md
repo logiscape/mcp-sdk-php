@@ -681,6 +681,14 @@ $session = $client->connect(
 
 These are merged into every cURL handle the transport creates.
 
+### Transport Support: Streamable HTTP Only
+
+The SDK's HTTP client speaks the modern **Streamable HTTP** transport: a single endpoint to which it POSTs JSON-RPC and from which it accepts plain JSON or SSE responses (plus the optional standalone GET stream described above). This is the transport the current spec defines.
+
+It does **not** implement the deprecated **HTTP+SSE dual-endpoint** transport from the `2024-11-05` revision -- the older design where the client opened a separate long-lived `GET /sse` stream and POSTed messages to a second, distinct endpoint. The spec deprecated that transport in favor of Streamable HTTP, and this SDK targets only the modern form.
+
+The practical consequence is narrow: this client cannot connect to a server that *only* exposes the legacy dual-endpoint transport. This is intentional and does not reduce Streamable HTTP coverage -- any server implementing the current transport works normally, and protocol-version negotiation still lets the client speak older *protocol* revisions (including `2024-11-05` message shapes) over the modern transport.
+
 ---
 
 ## Part 6: Connecting to OAuth-Protected Servers from the CLI

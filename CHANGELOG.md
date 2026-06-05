@@ -22,6 +22,11 @@ This file was introduced during the v1.7.x series. Structured entries below cove
   registered URI template and extracts the variable values.
 - Implements resources templates as an API that aligns with the rest of the SDK.
 - Server-side completions API
+- Server and client doc additions
+
+### Removed
+
+- Old examples that used low-level functions instead of the modern MCP API wrapper
 
 ## [1.7.2]
 
