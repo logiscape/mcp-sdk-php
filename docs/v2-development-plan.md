@@ -34,7 +34,8 @@ wins** and this plan gets amended (see "Maintaining this plan").
 - [MCP Apps extension (ext-apps)](https://github.com/modelcontextprotocol/ext-apps)
   — stable revision `2026-01-26` plus the in-progress draft
 - [Official conformance suite](https://github.com/modelcontextprotocol/conformance)
-  (version pinned in [`package.json`](../package.json))
+  (stable and draft track versions both pinned in
+  [`package.json`](../package.json) — see WS7 for the dual-track strategy)
 - Reference SDKs for behavioral comparison: the TypeScript SDK v2 (`main`,
   pre-alpha) and Python SDK v2 (`main`) — useful as a second opinion on
   ambiguous spec text, never as a substitute for it
@@ -55,11 +56,16 @@ milestone follows the same four-step flow:
    including automated tests following the project's testing conventions
    ([docs/testing.md](testing.md), [CONTRIBUTING.md](../CONTRIBUTING.md)).
    Verification means `composer check` (PHPUnit + PHPStan) passes, and
-   `composer conformance` is regression-free for any milestone touching
-   protocol handling, transports, session management, or `McpServer`. Honest
-   conformance failures go into
-   [`conformance/conformance-baseline.yml`](../conformance/conformance-baseline.yml)
-   with a root cause — never an engineered workaround.
+   `composer conformance` (the stable conformance track) is regression-free
+   for any milestone touching protocol handling, transports, session
+   management, or `McpServer`. Milestones touching `2026-07-28` behavior
+   additionally run `composer conformance-draft` (the draft conformance
+   track — see WS7) and update
+   [`conformance/conformance-draft-baseline.yml`](../conformance/conformance-draft-baseline.yml)
+   to reflect honest progress: newly passing draft scenarios leave the
+   baseline, still-unimplemented ones stay with root causes. On both tracks,
+   honest conformance failures go into the track's baseline file with a root
+   cause — never an engineered workaround.
 3. **Code review (human-initiated).** Once the agent has verified the
    milestone is achieved and all tests pass, the human user initiates a code
    review of the changes. Findings are addressed (typically by an agent) and
@@ -145,6 +151,10 @@ fields appear on additional result types in the final schema.
 - Version gating proven by tests: every WS1 behavior activates only when the
   negotiated revision is `2026-07-28`, and all legacy-revision tests still
   pass unchanged.
+- Draft-track entries attributed to this workstream in
+  [`conformance/conformance-draft-baseline.yml`](../conformance/conformance-draft-baseline.yml)
+  pass and leave the draft baseline (or are re-attributed with a documented
+  reason).
 - `composer check` green; `composer conformance` regression-free.
 
 ## WS2 — Client/server negotiation
@@ -182,6 +192,9 @@ its advertised-versions payload; how the reference SDKs sequence the probe.
   with no spurious fallbacks.
 - The fallback path is provably not triggered by non-legacy `400`s
   (missing-capability and header-validation failures covered by tests).
+- Draft-track entries attributed to this workstream in the draft baseline
+  pass and leave the baseline (or are re-attributed with a documented
+  reason).
 - `composer check` green; `composer conformance` regression-free.
 
 ## WS3 — Transport changes
@@ -241,8 +254,11 @@ rules; final text of each auth SEP.
   (`auth/client-credentials-jwt`, `auth/client-credentials-basic`), or the
   baseline documents precisely why not; `auth/cross-app-access-complete-flow`
   investigated and resolved or re-documented.
-- `composer check` green; `composer conformance` regression-free, with the
-  baseline shrinking, not growing.
+- Draft-track entries attributed to this workstream in the draft baseline
+  (the SEP-2243 header scenarios, the `InputRequiredResult` scenarios, and
+  the SEP-2468/auth-hardening scenarios) pass and leave the baseline.
+- `composer check` green; `composer conformance` regression-free, with both
+  tracks' baselines shrinking, not growing.
 
 ## WS4 — Tasks extension
 
@@ -367,18 +383,42 @@ window, with no shortcuts (guiding principle #2).
 
 **Scope**
 
-- Track the official suite as `2026-07-28` scenarios land; bump the pin in
-  [`package.json`](../package.json) deliberately (the baseline file is tied
-  to the installed version).
+- **Dual-track tooling during the RC window.** The official tool publishes
+  `2026-07-28` draft-spec scenarios on its `0.2.0-alpha` line (npm `alpha`
+  dist-tag; started the day after the RC locked, and the line the official
+  TypeScript SDK v2 runs in CI), while `latest` stays on the stable `0.1.x`
+  line. The SDK pins both in [`package.json`](../package.json): the stable
+  pin is the legacy regression gate (`composer conformance`,
+  `conformance/conformance-baseline.yml`), and the alpha pin — installed
+  under the npm alias `conformance-draft` — runs the `draft` suite
+  (`composer conformance-draft`) against its own
+  `conformance/conformance-draft-baseline.yml`. Separate baselines mean
+  alpha-line churn re-curates only the draft baseline, never the stable
+  gate.
+- Bump the draft pin deliberately at milestone boundaries (each baseline
+  file is tied to its installed tool version), re-curating the draft
+  baseline in the same change set; draft entries name the workstream that
+  will make them pass and only shrink as workstreams complete.
+- **Converge at stable `0.2.0`.** When the tool's stable release covering
+  `2026-07-28` ships (expected around the final spec), collapse back to a
+  single pin and a single baseline; the draft alias, draft baseline, and
+  draft composer scripts retire in that change set.
 - Expand `conformance/everything-server.php` and
   `conformance/everything-client.php` to exercise the new surface: stateless
   negotiation, `server/discover`, metadata headers, `subscriptions/listen`,
   multi-round-trip exchanges, Tasks, and Apps.
-- Curate the baseline: every remaining entry has a root cause and either a
+- Curate both baselines: every remaining entry has a root cause and either a
   plan or an explicit not-pursuing rationale; entries only shrink.
 - Note SEP-2484: Standards-Track SEPs must ship matching conformance
   scenarios — where a scenario is missing upstream, an honest gap report
   (or upstream contribution) beats a private workaround.
+
+**Status (2026-06-11):** the dual-track scaffolding is in place — both pins
+installed (`0.1.16` stable, `0.2.0-alpha.2` draft), `composer
+conformance-draft` and a CI draft job wired up, and the initial draft
+baseline populated from a real run (all `2026-07-28` draft scenarios
+annotated with the workstream that will close them). Both tracks verified
+green against their baselines.
 
 **Completion criteria**
 

@@ -72,3 +72,39 @@ jobs:
           suite: all
           timeout: 120000
           expected-failures: ./conformance/conformance-baseline.yml
+
+  # Draft track: the 2026-07-28 draft-spec scenarios from the pinned
+  # 0.2.0-alpha conformance tool (npm alias "conformance-draft" in
+  # package.json), gated by conformance/conformance-draft-baseline.yml.
+  # The upstream GitHub Action has no alpha tag, so this job drives the
+  # locally-installed pin through the project's own runner, which also
+  # manages the test-server lifecycle.
+  draft:
+    name: Draft conformance (2026-07-28 track)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: mbstring, json, curl
+          coverage: none
+          tools: composer:v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install PHP dependencies
+        run: composer install --prefer-dist --no-progress --no-interaction
+
+      # package-lock.json is gitignored; both conformance pins are exact
+      # versions in package.json, so npm install is reproducible.
+      - name: Install pinned conformance tools
+        run: npm install
+
+      - name: Run draft conformance (server + client)
+        run: composer conformance-draft

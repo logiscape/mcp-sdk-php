@@ -1,0 +1,101 @@
+# MCP Conformance Draft-Track Baseline
+#
+# Expected failures for the DRAFT track only: the `draft` suite of the
+# pinned 0.2.0-alpha conformance tool (npm alias "conformance-draft" in
+# package.json), which carries the 2026-07-28 draft-spec scenarios.
+# The stable track keeps its own baseline in conformance-baseline.yml —
+# the two files are tied to different installed tool versions and are
+# curated independently (see docs/v2-development-plan.md, WS7).
+#
+# Until the v2 stateless core lands (WS1-WS3 in the development plan),
+# draft-only scenarios are expected to fail: the SDK on `main` still
+# implements the 2025-11-25 lifecycle. Each entry below names the
+# workstream that will make it pass; entries only shrink as workstreams
+# complete. The no-shortcut rule in conformance/README.md applies to this
+# file exactly as it does to the stable baseline.
+#
+# Last updated: 2026-06-11
+# Conformance tool version: 0.2.0-alpha.2 (draft pin)
+
+server:
+  # --- WS1 + WS2 (stateless foundation, negotiation) ---
+  - server-stateless
+    # SEP-2575/SEP-2567 stateless lifecycle (per-request _meta, no
+    # initialize handshake, server/discover) not yet implemented; spans
+    # WS1 (types, server/discover) and WS2 (per-request era detection).
+
+  # --- WS1 (stateless foundation) ---
+  - sep-2164-resource-not-found
+    # SEP-2164 error-code change (-32002 -> -32602 under 2026-07-28) not
+    # yet implemented; scenario runs against the legacy lifecycle.
+
+  - caching
+    # SEP-2549 ttlMs/cacheScope fields on list/read results not yet
+    # implemented.
+
+  # --- WS3 (transport changes: SEP-2243 request-metadata headers) ---
+  - http-header-validation
+    # Mcp-Method/Mcp-Name header validation and HeaderMismatch (-32001)
+    # rejection not yet implemented.
+
+  - http-custom-header-server-validation
+    # x-mcp-header schema annotation / Mcp-Param-* validation not yet
+    # implemented.
+
+  # --- WS3 (transport changes: SEP-2322 InputRequiredResult) ---
+  # The multi-round-trip input mechanism replacing server-initiated
+  # sampling/elicitation/roots requests is not yet implemented; the
+  # existing suspend/resume pattern still uses server-initiated requests.
+  - input-required-result-basic-elicitation
+  - input-required-result-basic-sampling
+  - input-required-result-basic-list-roots
+  - input-required-result-request-state
+  - input-required-result-multiple-input-requests
+  - input-required-result-multi-round
+  - input-required-result-missing-input-response
+  - input-required-result-non-tool-request
+  - input-required-result-result-type
+  - input-required-result-tampered-state
+  - input-required-result-capability-check
+  - input-required-result-ignore-extra-params
+
+client:
+  # --- WS1 (stateless foundation) ---
+  - json-schema-ref-no-deref
+    # SEP-2106 JSON Schema 2020-12 handling ($ref passed through without
+    # dereferencing) not yet implemented on the client.
+
+  # --- WS3 (transport changes: SEP-2243 request-metadata headers) ---
+  - request-metadata
+    # Mcp-Method/Mcp-Name header emission not yet implemented.
+
+  - http-custom-headers
+    # Mcp-Param-* mirroring of designated tool parameters not yet
+    # implemented.
+
+  - http-invalid-tool-headers
+    # Client-side rejection rules for invalid x-mcp-header mappings not
+    # yet implemented.
+
+  # --- WS3 (transport changes: SEP-2322 InputRequiredResult) ---
+  - sep-2322-client-request-state
+    # Client side of the multi-round-trip input mechanism (inputResponses,
+    # requestState round-tripping) not yet implemented.
+
+  # --- WS3 (authorization hardening) ---
+  - auth/iss-supported
+  - auth/iss-not-advertised
+  - auth/iss-supported-missing
+  - auth/iss-wrong-issuer
+  - auth/iss-unexpected
+  - auth/iss-normalized
+    # SEP-2468 `iss` parameter validation (RFC 9207) not yet implemented;
+    # one to two checks fail per iss scenario.
+
+  - auth/authorization-server-migration
+    # SEP-2352 credential binding to the issuing server's issuer not yet
+    # implemented.
+
+  - auth/offline-access-not-supported
+    # SEP-2207 refresh-token clarification: one check fails at the draft
+    # version (refresh behavior when offline_access is unsupported).

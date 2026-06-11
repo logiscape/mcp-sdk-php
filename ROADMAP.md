@@ -17,8 +17,10 @@ These are the principles every roadmap item is judged against:
    latest MCP specification revision and sensible back-compat for prior
    revisions.
 2. **No conformance shortcuts.** We do not engineer workarounds purely to
-   green a conformance test. If a test fails honestly, it goes in
-   [`conformance/conformance-baseline.yml`](conformance/conformance-baseline.yml)
+   green a conformance test. If a test fails honestly, it goes in the
+   relevant conformance baseline file (see
+   [`conformance/README.md`](conformance/README.md) — during v2 development
+   there is one per track: stable and `2026-07-28` draft)
    with a root cause and a plan — or no plan, if it is genuinely an optional
    extension we are not pursuing yet.
 3. **cPanel/Apache compatibility is mandatory for core MCP features.**

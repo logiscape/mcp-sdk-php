@@ -23,6 +23,17 @@ This file was introduced during the v1.7.x series. Structured entries below cove
   ordered workstreams with dependencies and completion criteria, the
   research → implement → human review → human commit milestone process, and
   release gates G1–G4. Referenced from ROADMAP.md and AGENTS.md.
+- Dual-track conformance testing for the `2026-07-28` RC window, mirroring
+  the official TypeScript SDK v2 setup: the stable conformance tool pin
+  (`0.1.16`) remains the legacy regression gate, and a second pin on the
+  upstream RC-validation line (`0.2.0-alpha.2`, npm alias
+  `conformance-draft`) runs the `2026-07-28` draft-spec suite via
+  `composer conformance-draft` against its own
+  `conformance/conformance-draft-baseline.yml` (initial baseline populated
+  from a real run, each entry annotated with the v2 workstream that will
+  close it). Includes a CI draft job and draft-track rules in the
+  development plan (WS7) and `conformance/README.md`. The tracks converge
+  to a single pin when the stable `0.2.0` tool ships.
 
 ### Changed
 

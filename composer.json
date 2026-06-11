@@ -33,6 +33,9 @@
         "check": ["@test", "@analyse"],
         "conformance": "@php conformance/run-conformance.php",
         "conformance-server": "@php conformance/run-conformance.php server",
-        "conformance-client": "@php conformance/run-conformance.php client"
+        "conformance-client": "@php conformance/run-conformance.php client",
+        "conformance-draft": "@php conformance/run-conformance.php draft",
+        "conformance-draft-server": "@php conformance/run-conformance.php server-draft",
+        "conformance-draft-client": "@php conformance/run-conformance.php client-draft"
     }
 }

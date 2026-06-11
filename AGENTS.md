@@ -95,28 +95,33 @@ composer check
 ```
 
 ### Conformance Testing
-The SDK integrates the official [MCP conformance test suite](https://github.com/modelcontextprotocol/conformance) which validates protocol compliance against the spec. The conformance tool version is pinned in `package.json` so tests are reproducible — the baseline file is tied to the installed version.
+The SDK integrates the official [MCP conformance test suite](https://github.com/modelcontextprotocol/conformance) which validates protocol compliance against the spec. During v2 development the suite runs on **two independently pinned tool versions** (both pinned in `package.json` so tests are reproducible — each baseline file is tied to its installed version):
+
+- **Stable track** (`composer conformance`): the pinned stable tool with the published-spec scenarios, gated by `conformance/conformance-baseline.yml`. This is the legacy regression gate.
+- **Draft track** (`composer conformance-draft`): the pinned `0.2.0-alpha` tool line — the upstream RC-validation track carrying the `2026-07-28` draft-spec scenarios — installed under the npm alias `conformance-draft`, run with `--suite draft`, gated by `conformance/conformance-draft-baseline.yml`. Draft baseline entries name the v2 workstream that will make them pass and only shrink as workstreams complete.
 
 ```bash
-# Run all conformance tests (server + client)
-composer conformance
+# Stable track (published-spec scenarios)
+composer conformance              # server + client
+composer conformance-server       # server only
+composer conformance-client       # client only
 
-# Run server conformance tests only
-composer conformance-server
-
-# Run client conformance tests only
-composer conformance-client
+# Draft track (2026-07-28 draft-spec scenarios)
+composer conformance-draft        # server + client
+composer conformance-draft-server # server only
+composer conformance-draft-client # client only
 
 # Run a single scenario
 php conformance/run-conformance.php server tools-list
+php conformance/run-conformance.php server-draft server-stateless
 ```
 
 **How it works:**
 - Server tests: The runner starts `conformance/everything-server.php` via PHP's built-in server, runs the conformance suite against it, then stops the server automatically via shutdown handler.
 - Client tests: The conformance framework spawns `conformance/everything-client.php` with test scenario env vars and a test server URL.
-- Known failures are tracked in `conformance/conformance-baseline.yml` with root cause documentation. The conformance tool uses this baseline to distinguish regressions from known limitations — if a previously passing test starts failing, it's flagged as a regression (exit code 1).
+- Known failures are tracked in the track's baseline file with root cause documentation. The conformance tool uses the baseline to distinguish regressions from known limitations — if a previously passing test starts failing, it's flagged as a regression (exit code 1).
 
-**When to run:** Run `composer conformance` after making changes to protocol handling, transport layers, session management, or McpServer. It is not included in `composer check` because it requires Node.js, but should be run separately before merging significant SDK changes.
+**When to run:** Run `composer conformance` after making changes to protocol handling, transport layers, session management, or McpServer — it must stay regression-free at every milestone. Run `composer conformance-draft` additionally for milestones touching `2026-07-28` behavior, updating the draft baseline to reflect honest progress. Neither is included in `composer check` because they require Node.js, but they should be run separately before merging significant SDK changes. See `conformance/README.md` for the dual-track rules and `docs/v2-development-plan.md` (WS7) for when the tracks converge.
 
 ## Building An MCP Server
 
