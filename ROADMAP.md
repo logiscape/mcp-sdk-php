@@ -25,10 +25,12 @@ These are the principles every roadmap item is judged against:
    Features that cannot be compatible with shared hosting still ship (for spec
    alignment) but must fail gracefully instead of crashing the SDK. See
    [`docs/compatibility.md`](docs/compatibility.md).
-4. **Avoid breaking changes where we can.** When breaking the public API or
-   documented flows is genuinely necessary, we bump the minor version
-   (`v1.X`), not the patch, and we document the change in
-   [CHANGELOG.md](CHANGELOG.md).
+4. **Avoid breaking changes where we can.** On the `1.x` line, when breaking
+   the public API or documented flows is genuinely necessary, we bump the
+   minor version (`v1.X`), not the patch, and we document the change in
+   [CHANGELOG.md](CHANGELOG.md). The `v2` major now in development (see below)
+   exists precisely to absorb the breaking `2026-07-28` protocol revision in
+   one place rather than dribbling breaks into `v1`.
 
 ## Current tier position (self-assessment)
 
@@ -39,10 +41,10 @@ Group assigns tiers.
 | SEP-1730 criterion          | Target (Tier 1)          | Current state                                                                                                                          |
 | --------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
 | Conformance pass rate       | 100%                     | **100%** of applicable required tests on suite `v0.1.16`. Three known failures, all in optional MCP Extensions (documented in baseline). |
-| New protocol features       | Before spec release      | `2025-11-25` supported; back-compat for `2024-11-05`, `2025-03-26`, `2025-06-18`. Day-one work for the `2026-07-28` RC is in progress ahead of final release (see below).        |
+| New protocol features       | Before spec release      | `2025-11-25` supported; back-compat for `2024-11-05`, `2025-03-26`, `2025-06-18`. Day-one support for the `2026-07-28` revision is the focus of `v2` development on `main` (see below).        |
 | Issue triage                | 2 business days          | Best-effort; see response-time section below.                                                                         |
 | Critical bug resolution     | 7 days                   | Best-effort, typically weeks not days for non-trivial fixes.                                                          |
-| Stable release              | Required, clear versioning | Met. Currently `v1.7.0`, semver-tagged since `v1.0.0`.                                                                                 |
+| Stable release              | Required, clear versioning | Met. Latest stable is `v1.7.3` on the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x); `main` carries the pre-alpha `v2`. Semver-tagged since `v1.0.0`.       |
 | Documentation               | Comprehensive w/ examples | Largely met. Covered by [README](README.md), [server-dev](docs/server-dev.md), [testing](docs/testing.md), [compatibility](docs/compatibility.md), plus 10 example programs and an example web client. |
 | Dependency update policy    | Published                | Met ([`docs/dependency-policy.md`](docs/dependency-policy.md)).                                                                        |
 | Roadmap                     | Published                | Met — this document.                                                                                                                   |
@@ -62,6 +64,28 @@ will — the arithmetic changes.
 
 ## What we are working on
 
+**v2 development has begun.** The `main` branch now carries the pre-alpha `v2`
+of the SDK, and the stable `v1` line lives on the
+[`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x), which
+continues to receive bug fixes and low-risk backports. v2 has two defining
+goals: day-one support for the `2026-07-28` spec revision, and full support
+for the MCP Apps extension as a release feature — both detailed below. The
+guiding principles above carry into v2 unchanged. In particular, principle #3
+is a v2 release requirement, not a v1 legacy: every core feature of v2 must
+run in a standard cPanel/Apache/PHP web hosting environment, while we
+simultaneously aim for 100% conformance with the new revision. The
+`2026-07-28` stateless core makes these two goals more compatible, not less —
+see the compatibility notes below.
+
+**The main working plan for v2 development is
+[`docs/v2-development-plan.md`](docs/v2-development-plan.md).** This roadmap
+describes direction and rationale; the development plan describes execution —
+the ordered workstreams (stateless foundation through documentation), their
+dependencies and completion criteria, the research → implement → human review
+→ human commit milestone process, and the release gates between today's
+pre-alpha and a tagged `v2.0.0`. All commits in that process are
+human-initiated.
+
 ### Near-term (next release cycle)
 
 - **Close optional conformance gaps, where we can do so spec-faithfully.**
@@ -75,25 +99,28 @@ will — the arithmetic changes.
   - `auth/cross-app-access-complete-flow` — the RFC 8707 `resource` parameter
     is already wired; the remaining two of ten assertions need investigation.
 - **Continue tracking the spec.** Any mid-cycle SEP that reaches "Accepted"
-  status is a candidate for inclusion in the next `v1.X` release.
+  status is a candidate for inclusion in a `v2` pre-release (and for backport
+  to `1.x` where low-risk).
 - **Inspector and real-world AI-app smoke tests as part of the contributor
   workflow** — already described in [`docs/testing.md`](docs/testing.md);
   continuing to refine what we check.
 - **Expand `conformance/everything-server.php` and `everything-client.php`**
   to cover new tools, prompts, and resources as the official suite grows.
 
-### Day-one support for the 2026-07-28 spec revision
+### v2 core: day-one support for the 2026-07-28 spec revision
 
 The [`2026-07-28` Release Candidate](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/)
 (locked 2026-05-21; final spec 2026-07-28) is the largest revision since launch —
 a **stateless core** that drops the connection handshake and the protocol-level
 session. In line with guiding principle #1 and the SEP-1730 expectation that
-SDKs implement new features before the revision ships, our target is a clean
-conformance run within the RC-to-final window. Neither the official Python SDK
-(latest `2025-11-25`, set in v1.23.1) nor the TypeScript SDK (v2 pre-alpha) has
-published `2026-07-28` support yet — though the Python SDK is explicitly
-architecting its in-progress v2 around exactly this transport-changing revision
-(see the release-vehicle note below).
+Tier 1 SDKs ship support within the ten-week RC-to-final validation window, our
+target is a clean conformance run inside that window. The official SDKs are on
+the same trajectory and the same timeline: the TypeScript SDK's `main` is a
+pre-alpha v2 whose documentation anticipates "a stable v2 release in Q3 2026
+along with the updated MCP spec," and the Python SDK's `main` is likewise its
+v2 development branch (its latest stable release, `v1.27.2`, still targets
+`2025-11-25`). Neither has published `2026-07-28` support yet. This work is the
+core of our own `v2` (see the release-vehicle note below).
 
 **Strategy: additive and version-negotiated.** `2026-07-28` becomes a negotiable
 protocol version; the new stateless code paths run **only** when a client speaks
@@ -153,6 +180,11 @@ the Medium-term section carries; several of these SEPs are still settling):
     deployment concern, not something the spec obliges intermediaries to do).
   - **SEP-2549** — emit `ttlMs` / `cacheScope` on list and resource-read results
     (HTTP `Cache-Control` semantics).
+  - **SEP-414** — preserve and expose W3C Trace Context fields
+    (`traceparent` / `tracestate`) carried in `_meta`, per the documented
+    distributed-tracing convention. The SDK's role is pass-through and
+    accessor surface only — no OpenTelemetry dependency (consistent with
+    [`docs/dependency-policy.md`](docs/dependency-policy.md)).
   - **SEP-2322** — the multi-round-trip request mechanism: sampling, elicitation,
     and roots become `InputRequiredResult` exchanges (`inputRequests` /
     `requestState` / `inputResponses`) instead of server-initiated requests. (Two
@@ -185,6 +217,25 @@ the Medium-term section carries; several of these SEPs are still settling):
   Tasks surface is pre-release, we redesign it cleanly — gated to `2026-07-28`,
   no deprecation shims — and keep the file-based store for shared-hosting
   compatibility.
+- **MCP Apps extension (SEP-1865) — a committed v2 release feature.** Decision
+  finalized June 2026: full support ships with `v2` releases, promoting Apps
+  from the wait-and-see long-term position it previously held here. Apps
+  looks to be a critical component of MCP going forward — at launch it was
+  co-developed by Anthropic and OpenAI with the MCP-UI maintainers, Claude and
+  VS Code already render it, and the `2026-07-28` extensions framework
+  (SEP-2133) formalises it as an independently versioned first-class
+  extension. The stable extension revision is
+  [`2026-01-26`](https://github.com/modelcontextprotocol/ext-apps); the
+  official ext-apps SDK is TypeScript-only today, so PHP server-side support
+  fills a real gap. The UI renders host-side in a sandboxed iframe, so the
+  SDK's role is the server side: declaring the extension, registering `ui://`
+  template resources with the MIME-type and size conventions the extension
+  defines, associating templates with tools through tool metadata so hosts can
+  prefetch, cache, and security-review them ahead of execution, and handling
+  the UI's tool-call-shaped messages like any other tool call. We will add a
+  first-class `McpServer` helper (working name `->ui(...)`) that bundles those
+  conventions so an app-enabled server stays a few lines of PHP, and the
+  server must degrade gracefully where a host cannot display the UI.
 
 **cPanel/Apache compatibility (guiding principle #3).** On balance this revision
 helps shared hosting: dropping sticky sessions and shared session stores, and
@@ -197,25 +248,28 @@ shared-hosting guidance still applies to those. The items that need attention
 rather than a hard requirement are narrow: the request-metadata headers
 (`Mcp-Method`, `Mcp-Name`, `MCP-Protocol-Version`, and any `Mcp-Param-*`) must
 survive `.htaccess` and any proxy — the same class of forwarding concern we
-already document for `Authorization` — and the MCP Apps extension renders
-host-side, so the server emits the resource and must not fatal where a host can't
-display it. Core features (tools, prompts, resources, `server/discover`) remain a
-must-work-everywhere commitment.
+already document for `Authorization` — and the MCP Apps extension (now a
+committed v2 feature, above) renders host-side, so the server's job is plain
+resource emission over standard HTTP — a natural fit for shared hosting — and
+it must not fatal where a host can't display the UI. Core features (tools,
+prompts, resources, `server/discover`) remain a must-work-everywhere
+commitment, and that commitment is a v2 release gate alongside the 100%
+conformance target, not a trade-off against it.
 
-**Release vehicle — undecided, pending v2 linkage.** Per CONTRIBUTING's
-versioning policy, additive new-revision support qualifies on its own as a
-**minor** (`v1.X`) bump, while the major (`v2`) is reserved for "when the official
-MCP SDKs cut a `v2`." The signal here points toward linkage, not against it: the
-Python SDK's v1.25.0 release note states its v2 plan "relies on the next upcoming
-spec release which will heavily change how the transport layer works, which in
-turn will guide a lot of how we architect v2" — i.e. the official v2 is being
-designed around exactly this transport-changing revision. That makes it plausible
-the ecosystem `v2` and `2026-07-28` arrive together, which under our governance
-rule would have us cut our own `v2` to match. **Action item:** confirm with
-upstream whether the official SDKs are in fact tying their `v2` release to
-`2026-07-28` before choosing the vehicle. If they are, we align our `v2` with it;
-if the revision lands ahead of any `v2`, we ship it additively as a minor in the
-meantime.
+**Release vehicle — decided: `v2`.** Per CONTRIBUTING's versioning policy, the
+major (`v2`) is reserved for "when the official MCP SDKs cut a `v2`." That
+linkage is now confirmed rather than speculative: the Python SDK's v1.25.0
+release note stated its v2 plan "relies on the next upcoming spec release
+which will heavily change how the transport layer works," its `main` branch is
+now its v2 development line, and the TypeScript SDK's v2 documentation
+anticipates "a stable v2 release in Q3 2026 along with the updated MCP spec."
+The ecosystem `v2` and `2026-07-28` are arriving together, so we have aligned:
+this repository's `main` branch is the pre-alpha `v2`, and `2026-07-28`
+day-one support ships as the headline feature of `v2.0` (with the MCP Apps
+extension as a release feature alongside it). The stable `v1` line continues
+on the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x) for
+users on the `2024-11-05`…`2025-11-25` revisions, receiving bug fixes and
+low-risk backports.
 
 ### Medium-term
 
@@ -300,19 +354,6 @@ requirement, or because adoption depends on demand from this SDK's users
 (primarily PHP developers deploying on shared hosting). We would rather wait
 than put users on a breaking-API treadmill.
 
-- **MCP Apps extension (`ui://` resources, SEP-1865).** The
-  [ext-apps](https://github.com/modelcontextprotocol/ext-apps) repository
-  shipped its first stable spec revision in early 2026, and the `2026-07-28`
-  extensions framework (SEP-2133) formalises it as an independently versioned
-  extension. It is explicitly **follow-on, not part of day-one revision
-  support** (see the day-one subsection): the UI renders host-side in a sandboxed
-  iframe, so the SDK's role is server-side emission only. Nothing in the current
-  `McpServer::resource()` API prevents serving a `ui://` resource today — the
-  question is whether a first-class helper (e.g. `->ui(...)` that bundles the
-  MIME type, size-bound checks, and tool-metadata conventions) is worth adding,
-  and the server must degrade gracefully where a host cannot display it. We will
-  evaluate once the extension sees traction in the MCP hosts PHP developers
-  actually target.
 - **Advanced OAuth profiles: DPoP and Workload Identity Federation.**
   SEP-1932 (DPoP, sender-constrained tokens per RFC 9449) and SEP-1933
   (Workload Identity Federation) are both in review and aimed primarily at
@@ -345,8 +386,8 @@ This is the honest answer to "what would have to be true?":
   window across any single week of the year.
 - **Sustained time-to-first-label under two business days** over a rolling
   three-month window, measurable from GitHub's API.
-- **A clean conformance run** on every new spec revision within the two-week
-  window between Release Candidate and final.
+- **A clean conformance run** on every new spec revision within the
+  RC-to-final validation window (ten weeks for `2026-07-28`).
 
 None of these are out of reach. They are the conditions the project needs to
 grow into — and the point of publishing them is so anyone reading can see

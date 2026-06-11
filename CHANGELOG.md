@@ -19,6 +19,17 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 ### Added
 
 - Add pre-alpha v2 notice to README
+- `docs/v2-development-plan.md` — the main working plan for v2 development:
+  ordered workstreams with dependencies and completion criteria, the
+  research → implement → human review → human commit milestone process, and
+  release gates G1–G4. Referenced from ROADMAP.md and AGENTS.md.
+
+### Changed
+
+- Roadmap: `v2` confirmed as the release vehicle for `2026-07-28` day-one
+  support (aligned with the official TypeScript and Python SDK v2 timelines),
+  and the MCP Apps extension (SEP-1865) promoted from long-term/conditional
+  to a committed v2 release feature.
 
 ## [1.7.3]
 

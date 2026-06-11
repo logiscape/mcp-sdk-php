@@ -17,10 +17,36 @@ the repository root: [CONTRIBUTING.md](CONTRIBUTING.md) (coding standards,
 test stack, versioning policy), [ROADMAP.md](ROADMAP.md) (direction and tier
 self-assessment), [SECURITY.md](SECURITY.md) (vulnerability reporting),
 [GOVERNANCE.md](GOVERNANCE.md), and the deeper guides under `docs/` —
-[docs/testing.md](docs/testing.md), [docs/compatibility.md](docs/compatibility.md)
+[docs/v2-development-plan.md](docs/v2-development-plan.md) (the main working
+plan for v2 development), [docs/testing.md](docs/testing.md),
+[docs/compatibility.md](docs/compatibility.md)
 (the cPanel/Apache compatibility rules), [docs/dependency-policy.md](docs/dependency-policy.md),
 and [conformance/README.md](conformance/README.md) (including the
 no-shortcuts-for-conformance rule).
+
+## V2 Development Process
+
+The `main` branch carries the pre-alpha v2 of the SDK (stable v1 lives on the
+`1.x` branch). **All v2 work follows
+[docs/v2-development-plan.md](docs/v2-development-plan.md)** — the main
+working plan, with ordered workstreams, dependencies, completion criteria,
+and release gates. Key rules for agents working on v2 milestones:
+
+1. **Research first.** Before implementing a milestone, gather the latest
+   details from official MCP sources (the spec repository, the `2026-07-28`
+   release-candidate material, the ext-apps repository, the conformance
+   suite). The plan reflects a point in time; the official text wins where
+   they disagree, and the plan should be amended in the same change set.
+2. **Implementation includes tests.** A milestone is achieved only when the
+   work is implemented, automated tests cover it per the project's testing
+   conventions, and `composer check` passes (plus `composer conformance`
+   regression-free for protocol/transport/session/McpServer changes).
+3. **Human-initiated code review.** After the agent has verified the
+   milestone, the human user initiates a code review; the agent addresses
+   findings and re-verifies.
+4. **All commits are human-initiated.** Agents must never run `git commit`,
+   `git push`, or tag releases. Leave verified work in the working tree for
+   the human user to review, approve, and commit. No exceptions.
 
 ## Development Testing Commands
 
