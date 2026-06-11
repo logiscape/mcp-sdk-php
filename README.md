@@ -3,6 +3,11 @@
 [![CI](https://github.com/logiscape/mcp-sdk-php/actions/workflows/ci.yml/badge.svg)](https://github.com/logiscape/mcp-sdk-php/actions/workflows/ci.yml)
 [![MCP Conformance](https://github.com/logiscape/mcp-sdk-php/actions/workflows/conformance.yml/badge.svg)](https://github.com/logiscape/mcp-sdk-php/actions/workflows/conformance.yml)
 
+> [!NOTE]
+> **This `main` branch contains the pre-alpha v2 of the logiscape/mcp-sdk-php SDK.**
+>
+> For the stable v1 code and documentation, see the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x).
+
 This package provides a PHP implementation of the [Model Context Protocol](https://modelcontextprotocol.io). The primary goal of this project is to provide both an MCP server and an MCP client using pure PHP, making it easy to use in PHP/Apache/cPanel hosting environments with typical server configurations.
 
 ## Overview
