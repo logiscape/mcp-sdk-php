@@ -324,10 +324,17 @@ class Server {
     /**
      * Sets the active server session.
      *
-     * @param ServerSession $session The server session to set.
+     * @param ServerSession $session The session to set.
      */
     public function setSession(ServerSession $session): void {
         $this->session = $session;
+    }
+
+    /**
+     * Clears the active server session between request-scoped dispatches.
+     */
+    public function clearSession(): void {
+        $this->session = null;
     }
 
     /**

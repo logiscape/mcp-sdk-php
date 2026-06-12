@@ -78,6 +78,18 @@ class OAuthClient implements OAuthClientInterface
     private array $clientCredentialsCache = [];
 
     /**
+     * Pre-registered credential migrations blocked for this client instance.
+     *
+     * The old bearer tokens are deleted immediately, but this marker keeps a
+     * retried challenge from silently reusing credentials bound to the old
+     * issuer. A fresh OAuthClient/configuration is required after credentials
+     * for the new issuer are provisioned.
+     *
+     * @var array<string, string> Resource URL => previous issuer
+     */
+    private array $blockedPreRegisteredMigrations = [];
+
+    /**
      * Set of authorization server URLs that were derived via the MCP 2025-03-26
      * legacy fallback (base URL stripped from the MCP server URL). Only these
      * URLs get relaxed issuer validation and legacy endpoint synthesis; AS URLs
@@ -123,7 +135,8 @@ class OAuthClient implements OAuthClientInterface
         // server. Re-fetch the Protected Resource Metadata instead of trusting
         // the in-memory cache so an authorization_servers change is observed.
         $storedTokens = $this->config->getTokenStorage()->retrieve($resourceUrl);
-        if ($storedTokens !== null) {
+        $migrationKey = $this->migrationKey($resourceUrl);
+        if ($storedTokens !== null || isset($this->blockedPreRegisteredMigrations[$migrationKey])) {
             unset($this->resourceMetadataCache[$resourceUrl]);
         }
 
@@ -142,6 +155,8 @@ class OAuthClient implements OAuthClientInterface
         // MUST NOT be presented to a different authorization server.
         if ($storedTokens !== null) {
             $this->handleIssuerChangeIfAny($resourceUrl, $storedTokens, $authServerMetadata);
+        } else {
+            $this->enforceBlockedMigrationIfAny($resourceUrl, $authServerMetadata);
         }
 
         // Step 4: Determine scopes to request (per MCP spec)
@@ -184,13 +199,23 @@ class OAuthClient implements OAuthClientInterface
         // Merge with current scopes
         $newScopes = array_unique(array_merge($current->scope, $requiredScopes));
 
-        // Discover metadata (may be cached)
+        // SEP-2352: an authorization server migration must be observable on
+        // this path too. Bypass the PRM cache exactly like the 401 path so an
+        // authorization_servers change (or a hostile resource server pointing
+        // resource_metadata at a different AS) is detected before any grant
+        // flow — and any credentials — reach the new issuer.
+        unset($this->resourceMetadataCache[$resourceUrl]);
+
         $resourceMetadataUrl = $wwwAuthHeader['resource_metadata'] ?? null;
         $resourceMetadata = $this->discoverResourceMetadata($resourceUrl, $resourceMetadataUrl);
 
         $authServerUrl = $this->resolveAuthorizationServer($resourceMetadata);
 
         $authServerMetadata = $this->discoverAuthorizationServerMetadata($authServerUrl);
+
+        // SEP-2352: same migration guard as the 401 path — the tokens that
+        // just drew insufficient_scope carry the issuer that produced them.
+        $this->handleIssuerChangeIfAny($resourceUrl, $current, $authServerMetadata);
 
         // Perform new authorization with expanded scopes
         $tokens = $this->performGrantFlow(
@@ -212,15 +237,15 @@ class OAuthClient implements OAuthClientInterface
      * Compares the issuer recorded on the stored tokens against the issuer of
      * the freshly discovered authorization server. When they differ:
      *
-     *   - The stored tokens are discarded (they are bound to the old AS and
-     *     must never be presented as proof of anything to the new one).
+     *   - Stored tokens are discarded immediately (they are bound to the old
+     *     AS and must not continue to be presented after migration is known).
+     *   - Pre-registered credentials cannot be assumed valid at the new AS;
+     *     since they were established with the previous server, reusing them
+     *     would leak the old client identity, so a clear error is raised and
+     *     an in-memory marker keeps retries blocked after token deletion.
      *   - Cached dynamic client credentials remain keyed by the OLD issuer,
      *     so the new issuer naturally triggers a fresh registration — the old
      *     client_id is never presented to the new authorization server.
-     *   - Pre-registered credentials cannot be assumed valid at the new AS;
-     *     since they were established with the previous server, reusing them
-     *     would leak the old client identity, so a clear error is raised
-     *     instead of silently continuing.
      *
      * @param string $resourceUrl The protected resource URL
      * @param TokenSet $storedTokens Tokens held when the 401 arrived
@@ -243,21 +268,60 @@ class OAuthClient implements OAuthClientInterface
             'newIssuer' => $authServerMetadata->issuer,
         ]);
 
-        // Discard tokens bound to the previous authorization server.
+        // Tokens bound to the previous issuer must not remain available after
+        // migration is known, including on the pre-registered error path.
         $this->config->getTokenStorage()->remove($resourceUrl);
 
         // Pre-registered credentials are bound to the AS they were registered
         // with. Spec (SEP-2352): credentials MUST NOT be reused across
-        // authorization servers — surface a clear error instead of silently
-        // presenting them to the new server.
+        // authorization servers. Preserve the old issuer separately so retries
+        // stay blocked without retaining a rejected bearer token.
         if ($this->config->hasClientCredentials()) {
-            throw OAuthException::authServerMigrationBlocked(
-                "The authorization server for {$resourceUrl} changed from "
-                . "{$previousIssuer} to {$authServerMetadata->issuer}, but pre-registered "
-                . 'client credentials were configured for the previous server. '
-                . 'Obtain credentials registered with the new authorization server.'
-            );
+            $this->blockedPreRegisteredMigrations[$this->migrationKey($resourceUrl)] = $previousIssuer;
+            $this->throwMigrationBlocked($resourceUrl, $previousIssuer, $authServerMetadata->issuer);
         }
+    }
+
+    /**
+     * Keep a pre-registered migration blocked after the old tokens were
+     * deleted. If discovery points back to the original issuer, the migration
+     * has reverted and the marker can be cleared.
+     */
+    private function enforceBlockedMigrationIfAny(
+        string $resourceUrl,
+        AuthorizationServerMetadata $authServerMetadata
+    ): void {
+        $migrationKey = $this->migrationKey($resourceUrl);
+        $previousIssuer = $this->blockedPreRegisteredMigrations[$migrationKey] ?? null;
+        if ($previousIssuer === null) {
+            return;
+        }
+        if ($this->urlsMatch($previousIssuer, $authServerMetadata->issuer)) {
+            unset($this->blockedPreRegisteredMigrations[$migrationKey]);
+            return;
+        }
+        $this->throwMigrationBlocked($resourceUrl, $previousIssuer, $authServerMetadata->issuer);
+    }
+
+    private function migrationKey(string $resourceUrl): string
+    {
+        return rtrim($resourceUrl, '/');
+    }
+
+    /**
+     * @throws OAuthException
+     */
+    private function throwMigrationBlocked(
+        string $resourceUrl,
+        string $previousIssuer,
+        string $newIssuer
+    ): never {
+        throw OAuthException::authServerMigrationBlocked(
+            "The authorization server for {$resourceUrl} changed from "
+            . "{$previousIssuer} to {$newIssuer}, but pre-registered "
+            . 'client credentials were configured for the previous server. '
+            . 'Obtain credentials registered with the new authorization server.'
+        );
     }
 
     /**

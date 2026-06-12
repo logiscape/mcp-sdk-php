@@ -101,6 +101,7 @@ final class HttpModernRequestTest extends TestCase
         );
         $runner = new HttpServerRunner($server, $initOptions, $httpOptions, null, null, new BufferedIo());
         $this->runnerHolder->runner = $runner;
+        $this->runnerHolder->server = $server;
         return $runner;
     }
 
@@ -520,6 +521,83 @@ final class HttpModernRequestTest extends TestCase
         $this->assertArrayNotHasKey('resultType', $legacyBody['result'], 'Modern fields must not leak to legacy clients');
         $this->assertArrayNotHasKey('ttlMs', $legacyBody['result']);
         $this->assertArrayNotHasKey('cacheScope', $legacyBody['result']);
+    }
+
+    /**
+     * The reverse interleaving of testMixedEraTrafficOnOneRunner: a MODERN
+     * request arrives FIRST on a fresh runner, then a legacy client
+     * initializes. The ephemeral modern session must not outlive its
+     * request (post-commit review finding): the runner used to keep it in
+     * $this->serverSession, so a following legacy initialize — which
+     * carries no session id and finds no saved state — was served by the
+     * stale modern-declared instance (still holding the modern request's
+     * headers and authenticated principal) and rejected -32602 for
+     * lacking the _meta envelope.
+     */
+    public function testLegacyInitializeAfterModernRequestOnOneRunner(): void
+    {
+        $runner = $this->makeRunner();
+
+        // 1) A modern stateless request is the runner's FIRST traffic.
+        $modernResponse = $runner->handleRequest($this->postRequest(
+            $this->body('tools/list', ['_meta' => $this->validEnvelope()], id: 1),
+            headerVersion: '2026-07-28'
+        ));
+        $this->assertSame(200, $modernResponse->getStatusCode());
+
+        // The ephemeral modern session is gone once its request completed.
+        $this->assertNull(
+            $runner->getServerSession(),
+            'Modern sessions are per-request; none may linger on the runner'
+        );
+        $this->assertNull(
+            $this->runnerHolder->server->getSession(),
+            'The Server facade must not retain the modern session between requests'
+        );
+
+        // 2) A legacy client now initializes on the same runner. It must be
+        // served by a fresh legacy session, not misrouted to modern
+        // envelope validation by leaked era state.
+        $initResponse = $runner->handleRequest($this->postRequest((string) json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 2,
+            'method' => 'initialize',
+            'params' => [
+                'protocolVersion' => '2025-11-25',
+                'capabilities' => [],
+                'clientInfo' => ['name' => 'legacy-client', 'version' => '1.0'],
+            ],
+        ])));
+        $this->assertSame(200, $initResponse->getStatusCode());
+        $initBody = json_decode((string) $initResponse->getBody(), true);
+        $this->assertArrayHasKey(
+            'result',
+            $initBody,
+            'Legacy initialize after a modern request must not hit modern _meta validation'
+        );
+        $this->assertSame('2025-11-25', $initBody['result']['protocolVersion']);
+        $legacySessionId = $initResponse->getHeader('Mcp-Session-Id');
+        $this->assertNotNull($legacySessionId);
+
+        // 3) The legacy session works era-correct afterwards.
+        $notifyResponse = $runner->handleRequest($this->postRequest((string) json_encode([
+            'jsonrpc' => '2.0',
+            'method' => 'notifications/initialized',
+        ]), sessionId: $legacySessionId));
+        $this->assertSame(202, $notifyResponse->getStatusCode());
+
+        $legacyResponse = $runner->handleRequest($this->postRequest(
+            $this->body('tools/list', [], id: 3),
+            sessionId: $legacySessionId
+        ));
+        $this->assertSame(200, $legacyResponse->getStatusCode());
+        $legacyBody = json_decode((string) $legacyResponse->getBody(), true);
+        $this->assertArrayHasKey('result', $legacyBody);
+        $this->assertArrayNotHasKey(
+            'resultType',
+            $legacyBody['result'],
+            'Modern fields must not leak to the legacy session'
+        );
     }
 
     /**

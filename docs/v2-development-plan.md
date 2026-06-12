@@ -623,6 +623,46 @@ now also covers integral floats (how PHP decodes large JSON integers):
 values, enforced on integer-typed designated parameters by both the
 client (throws before wire traffic, non-finite floats rejected
 outright) and the server (-32001).
+**Post-commit review round (2026-06-12):** four major findings from the
+post-commit review of the WS3 change set, all fixed with regression
+tests. (1) `HttpServerRunner` kept the ephemeral modern session in
+`$this->serverSession` after the sessionless early-return, so a later
+legacy request with no saved state (e.g. a fresh `initialize`) on a
+reused runner — long-running runtimes, embedding, tests — was served by
+the stale modern-declared instance (rejected `-32602` for lacking the
+`_meta` envelope) still carrying the prior request's headers and
+authenticated principal; the modern session is now installed only while
+its own request dispatches, with the previous session restored on both
+the runner and `Server` facade on every exit path. (2) The SEP-2352
+pre-registered-credentials migration block was single-shot: it discarded
+the stored tokens — whose recorded issuer was what armed migration
+detection — before throwing, so a retried 401 found no tokens, skipped
+the guard, and silently presented the old credentials to the new AS; the
+old issuer is now retained in an in-process migration marker, keeping
+retries within the client instance blocked while the rejected bearer
+tokens are discarded immediately (per-instance only — the `2026-07-28`
+draft's Authorization Server Binding section requires credentials keyed
+by issuer, so durable cross-process binding via issuer-bound
+pre-registered credentials is a planned follow-up). (3) The 403
+`insufficient_scope` path had no SEP-2352 guard
+at all; it now busts the PRM cache and runs the same
+issuer-change check as the 401 path before any grant flow, closing the
+hostile-RS `resource_metadata` redirection vector. (4) The default MRTR
+signing secret lived at a predictable shared-temp path with a
+world-readable creation window and a permanent-DoS stub on writer
+crash; `RequestStateCodec::withFileSecret()` now initializes under an
+exclusive flock (reclaiming crashed-writer stubs), verifies 0600 before
+any secret byte is written, and — at the default path, or on request
+via the new `$verifyOwnership` parameter — verifies the pathname still
+matches the locked handle and refuses symlinks and (POSIX) foreign-owned
+or group/other-readable files, failing loudly with
+explicit-secret guidance. Re-verified: `composer check` green (1148
+tests); stable conformance 40 server + 325 client checks, zero
+failures, both baselines still empty — six additional checks now
+execute and pass in the scope step-up scenarios (`auth/scope-step-up`
+21→23, `auth/scope-retry-limit` 22→26), exercised by the 403-path
+discovery re-fetch that fix (3) added; draft track unchanged at the two
+documented upstream-tool baseline entries.
 
 ## WS4 — Tasks extension
 

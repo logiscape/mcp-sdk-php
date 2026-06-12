@@ -40,15 +40,16 @@ use RuntimeException;
 /**
  * Tests for SEP-2352 credential binding and authorization server migration.
  *
- * When a 401 arrives while the client holds tokens for the resource, the
- * client MUST:
+ * When a 401 arrives while the client holds tokens for the resource — or a
+ * 403 insufficient_scope arrives for tokens it holds — the client MUST:
  *   - re-fetch the Protected Resource Metadata (not serve it from cache),
  *   - detect an authorization_servers issuer change,
- *   - discard tokens bound to the previous AS,
+ *   - discard tokens bound to the previous AS (dynamic-registration path),
  *   - never present the previous AS's client_id/credentials to the new AS
  *     (fresh DCR registration at the new AS instead),
  *   - surface a clear error for pre-registered credentials bound to the
- *     previous AS rather than silently reusing them.
+ *     previous AS rather than silently reusing them — durably on retries,
+ *     while still deleting bearer tokens bound to the old issuer.
  */
 final class OAuthClientMigrationTest extends TestCase
 {
@@ -250,8 +251,156 @@ final class OAuthClientMigrationTest extends TestCase
             'No authorization request may be started with credentials bound to the old AS'
         );
 
-        // Stale AS1 tokens are still discarded.
-        $this->assertNull($storage->retrieve(self::RESOURCE_URL));
+        $this->assertNull(
+            $storage->retrieve(self::RESOURCE_URL),
+            'Rejected bearer tokens bound to the old issuer must be deleted'
+        );
+    }
+
+    /**
+     * Regression (WS3 post-commit review): the guard used to discard the
+     * stored tokens before raising the pre-registered-credentials error,
+     * which disarmed migration detection on retry. The block must survive
+     * any number of retries without retaining the rejected bearer token.
+     */
+    public function testMigrationBlockWithPreRegisteredCredentialsSurvivesRetry(): void
+    {
+        $callback = $this->makeHaltingCallback();
+        [$client, $mockDiscovery, , $storage] = $this->createClient(
+            $callback,
+            preRegistered: new ClientCredentials('pre-registered-id', 'secret', 'client_secret_basic')
+        );
+
+        $storage->store(self::RESOURCE_URL, $this->makeAs1Tokens());
+
+        $mockDiscovery->method('discoverResourceMetadata')
+            ->willReturn(new ProtectedResourceMetadata(
+                resource: self::RESOURCE_URL,
+                authorizationServers: [self::AS2_ISSUER],
+            ));
+        $mockDiscovery->method('discoverAuthorizationServerMetadata')
+            ->willReturn($this->makeAsMetadata(self::AS2_ISSUER));
+
+        for ($attempt = 1; $attempt <= 2; $attempt++) {
+            try {
+                $client->handleUnauthorized(self::RESOURCE_URL, []);
+                $this->fail("Attempt {$attempt}: expected OAuthException");
+            } catch (OAuthException $e) {
+                $this->assertSame(
+                    OAuthException::REASON_AUTH_SERVER_MIGRATION,
+                    $e->getReasonCode(),
+                    "Attempt {$attempt} must still be blocked as a migration"
+                );
+            }
+        }
+
+        $this->assertNull(
+            $callback->capturedAuthUrl,
+            'The pre-registered credentials must never reach the new AS, even on retry'
+        );
+        $this->assertNull(
+            $storage->retrieve(self::RESOURCE_URL),
+            'Durable migration detection must not depend on retaining stale tokens'
+        );
+    }
+
+    /**
+     * SEP-2352 on the 403 insufficient_scope path (WS3 post-commit
+     * review): a migration must be detected here exactly like on the 401
+     * path — the PRM cache is bypassed, the AS1-bound tokens are
+     * discarded, and the step-up grant flow runs against AS2 with a fresh
+     * DCR registration, never the AS1 client_id.
+     */
+    public function test403MigrationRefetchesPrmDropsTokensAndRegistersFreshAtNewAs(): void
+    {
+        $callback = $this->makeHaltingCallback();
+        [$client, $mockDiscovery, $mockDcr, $storage] = $this->createClient($callback);
+
+        $current = $this->makeAs1Tokens();
+        $storage->store(self::RESOURCE_URL, $current);
+        $this->seedStalePrmCache($client);
+
+        // Seed cached AS1 dynamic credentials — these must NOT be reused at AS2.
+        $credsRef = new ReflectionProperty(OAuthClient::class, 'clientCredentialsCache');
+        $credsRef->setAccessible(true);
+        $credsRef->setValue($client, [
+            self::AS1_ISSUER => new ClientCredentials('as1-client-id', null, 'none'),
+        ]);
+
+        // Fresh PRM now lists AS2 — must be fetched despite the seeded cache.
+        $mockDiscovery->expects($this->once())
+            ->method('discoverResourceMetadata')
+            ->with(self::RESOURCE_URL)
+            ->willReturn(new ProtectedResourceMetadata(
+                resource: self::RESOURCE_URL,
+                authorizationServers: [self::AS2_ISSUER],
+            ));
+
+        $as2Metadata = $this->makeAsMetadata(self::AS2_ISSUER);
+        $mockDiscovery->method('discoverAuthorizationServerMetadata')
+            ->with(self::AS2_ISSUER)
+            ->willReturn($as2Metadata);
+
+        $mockDcr->expects($this->once())
+            ->method('register')
+            ->with($as2Metadata, $this->isType('array'))
+            ->willReturn(new ClientCredentials('as2-client-id', null, 'none'));
+
+        try {
+            $client->handleInsufficientScope(self::RESOURCE_URL, ['scope' => 'extra.scope'], $current);
+            $this->fail('Expected the halting callback to abort the flow');
+        } catch (RuntimeException $e) {
+            $this->assertSame('HALT_BEFORE_TOKEN_REQUEST', $e->getMessage());
+        }
+
+        $this->assertNull(
+            $storage->retrieve(self::RESOURCE_URL),
+            'Tokens bound to the previous authorization server must be discarded'
+        );
+        $this->assertNotNull($callback->capturedAuthUrl);
+        $this->assertStringContainsString('client_id=as2-client-id', $callback->capturedAuthUrl);
+        $this->assertStringNotContainsString('as1-client-id', $callback->capturedAuthUrl);
+        $this->assertStringStartsWith(self::AS2_ISSUER . '/authorize', $callback->capturedAuthUrl);
+    }
+
+    /**
+     * SEP-2352 on the 403 path with pre-registered credentials: the same
+     * clear migration error as the 401 path, before any grant flow could
+     * carry the old credentials to the new issuer (including via a hostile
+     * resource server answering 403 with a resource_metadata pointer at an
+     * attacker-controlled AS).
+     */
+    public function test403MigrationWithPreRegisteredCredentialsRaisesClearError(): void
+    {
+        $callback = $this->makeHaltingCallback();
+        [$client, $mockDiscovery] = $this->createClient(
+            $callback,
+            preRegistered: new ClientCredentials('pre-registered-id', 'secret', 'client_secret_basic')
+        );
+
+        $current = $this->makeAs1Tokens();
+
+        $mockDiscovery->method('discoverResourceMetadata')
+            ->willReturn(new ProtectedResourceMetadata(
+                resource: self::RESOURCE_URL,
+                authorizationServers: [self::AS2_ISSUER],
+            ));
+        $mockDiscovery->method('discoverAuthorizationServerMetadata')
+            ->willReturn($this->makeAsMetadata(self::AS2_ISSUER));
+
+        try {
+            $client->handleInsufficientScope(self::RESOURCE_URL, ['scope' => 'extra.scope'], $current);
+            $this->fail('Expected OAuthException');
+        } catch (OAuthException $e) {
+            $this->assertSame(OAuthException::REASON_AUTH_SERVER_MIGRATION, $e->getReasonCode());
+            $this->assertStringContainsString(self::AS1_ISSUER, $e->getMessage());
+            $this->assertStringContainsString(self::AS2_ISSUER, $e->getMessage());
+        }
+
+        $this->assertNull(
+            $callback->capturedAuthUrl ?? null,
+            'No authorization request may be started with credentials bound to the old AS'
+        );
     }
 
     /**

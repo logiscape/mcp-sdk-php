@@ -128,132 +128,172 @@ class HttpServerRunner extends ServerRunner
 
         // 2) Restore the session if one exists or create a new one
         $httpSession = $this->transport->getLastUsedSession();
-        if ($httpSession !== null) {
-            if ($this->transport->lastRequestSessionless()) {
-                // Modern 2026-07-28 request (SEP-2567): always a fresh MCP
-                // session — never restore saved state and never reuse the
-                // instance left over from a previous request, so no legacy
-                // session's negotiated state (or another modern request's
-                // adopted era) can leak in. The transport identified the
-                // era from per-request metadata; declare it so a modern
-                // request whose body lacks the _meta envelope is rejected
-                // with the spec's -32602 instead of misrouted to the
-                // legacy path.
-                $this->serverSession = new HttpServerSession(
-                    $this->transport,
-                    $this->initOptions,
-                    $this->logger
-                );
-                $this->serverSession->declareTransportModernEra(true);
-                // SEP-2243: hand the request's header map to the session so
-                // schema-aware validation (Mcp-Param-*) can run at dispatch.
-                $this->serverSession->setTransportHttpHeaders(
-                    $this->transport->lastRequestHeaders()
-                );
-                // SEP-2322: forward the authenticated principal so
-                // multi-round-trip requestState is bound to the user it
-                // was issued for.
-                $this->serverSession->setAuthenticatedPrincipal(
-                    $this->resolveAuthenticatedPrincipal($httpSession)
-                );
-            } elseif (is_array($savedState = $httpSession->getMetadata('mcp_server_session'))) {
-                // Rebuild the HttpServerSession from the array
-                $restored = HttpServerSession::fromArray(
-                    $savedState,
-                    $this->transport,
-                    $this->initOptions,
-                    $this->logger
-                );
-                $this->serverSession = $restored;
-            } else {
-                // No saved session; create a new one if we don't already have one
-                if ($this->serverSession === null) {
-                    $this->serverSession = new HttpServerSession(
-                        $this->transport,
-                        $this->initOptions,
-                        $this->logger
-                    );
-                }
-            }
+        if ($httpSession === null) {
+            // No valid session; return a 400 error
+            return HttpMessage::createJsonResponse(['error' => 'No valid session'], 400);
+        }
 
-            // 3) Register the session and handlers
-            $this->server->setSession($this->serverSession);
-            $this->serverSession->registerHandlers($this->server->getHandlers());
-            $this->serverSession->registerNotificationHandlers($this->server->getNotificationHandlers());
+        if ($this->transport->lastRequestSessionless()) {
+            // Modern 2026-07-28 request (SEP-2567): always a fresh MCP
+            // session — never restore saved state and never reuse the
+            // instance left over from a previous request, so no legacy
+            // session's negotiated state (or another modern request's
+            // adopted era) can leak in. The transport identified the
+            // era from per-request metadata; declare it so a modern
+            // request whose body lacks the _meta envelope is rejected
+            // with the spec's -32602 instead of misrouted to the
+            // legacy path.
+            $modernSession = new HttpServerSession(
+                $this->transport,
+                $this->initOptions,
+                $this->logger
+            );
+            $modernSession->declareTransportModernEra(true);
+            // SEP-2243: hand the request's header map to the session so
+            // schema-aware validation (Mcp-Param-*) can run at dispatch.
+            $modernSession->setTransportHttpHeaders(
+                $this->transport->lastRequestHeaders()
+            );
+            // SEP-2322: forward the authenticated principal so
+            // multi-round-trip requestState is bound to the user it
+            // was issued for.
+            $modernSession->setAuthenticatedPrincipal(
+                $this->resolveAuthenticatedPrincipal($httpSession)
+            );
 
-            // 4) Decide whether this POST should stream SSE frames as the
-            // handler runs. Streaming requires the transport to have chosen
-            // SSE mode (i.e. the client advertised text/event-stream AND
-            // server config has enable_sse=true) AND the request to be a
-            // good candidate per Config::shouldStream. Anything else falls
-            // through to the existing buffered/JSON paths.
-            $streaming = false;
-            if ($this->transport->lastResponseMode() === 'sse') {
-                $streaming = $this->transport->getConfig()->shouldStream(
-                    $request?->getBody()
-                );
-            }
-
-            if ($streaming) {
-                // Streaming path: begin the SSE response (headers + priming
-                // frame flushed to the wire) BEFORE the handler runs. Each
-                // writeMessage() during handler execution emits a frame
-                // directly, so progress notifications arrive live rather
-                // than after the handler returns.
-                $this->transport->beginStreamingSseOutput($httpSession);
-                if (!$this->serverSession->isInitialized()) {
-                    $this->serverSession->start();
-                }
-                $response = $this->transport->finalizeStreamingSse($httpSession);
-            } else {
-                try {
-                    if (!$this->serverSession->isInitialized()) {
-                        $this->serverSession->start();
-                    }
-                } catch (SubscriptionListenException $listen) {
-                    // SEP-2575 subscriptions/listen: the session validated
-                    // the request; the runner owns the SAPI adapter and
-                    // produces the long-lived notification stream. The
-                    // ephemeral modern session is discarded like any other
-                    // sessionless request.
-                    $response = $this->streamSubscriptionListen($listen);
-                    $this->transport->discardSession($httpSession);
-                    return $response;
-                }
-
-                // 5) Build the final HTTP response. When the transport selected
-                // SSE mode for this POST, drain the outgoing queue through the
-                // resumable SSE emitter; otherwise use the batched JSON path.
-                if ($this->transport->lastResponseMode() === 'sse') {
-                    $response = $this->transport->emitSseResponse($httpSession);
+            // The ephemeral session is exposed through getServerSession()
+            // only while this request dispatches (handlers reach the live
+            // session that way); the previous session is restored — on
+            // every exit path — once dispatch ends. Leaving it behind
+            // would hand a stale modern-declared session (still carrying
+            // this request's headers and authenticated principal) to the
+            // next legacy request served without saved state, misrouting
+            // it to modern envelope validation.
+            $previousSession = $this->serverSession;
+            $previousServerSession = $this->server->getSession();
+            $this->serverSession = $modernSession;
+            try {
+                return $this->dispatchToSession($modernSession, $httpSession, $request);
+            } finally {
+                $this->serverSession = $previousSession;
+                if ($previousServerSession !== null) {
+                    $this->server->setSession($previousServerSession);
                 } else {
-                    $response = $this->transport->createJsonResponse($httpSession);
+                    $this->server->clearSession();
                 }
             }
-            if ($this->transport->lastRequestSessionless()) {
-                // Sessionless 2026-07-28 lifecycle request (SEP-2567): no
-                // Mcp-Session-Id is echoed and nothing is persisted — the
-                // ephemeral processing context is deleted outright (its id
-                // was never disclosed, so no client could ever reach it).
-                // The SEP-2575 HTTP error statuses were already applied by
-                // the transport from the structured hint the session
-                // stamped on the response message.
+        }
+
+        if (is_array($savedState = $httpSession->getMetadata('mcp_server_session'))) {
+            // Rebuild the HttpServerSession from the array
+            $this->serverSession = HttpServerSession::fromArray(
+                $savedState,
+                $this->transport,
+                $this->initOptions,
+                $this->logger
+            );
+        } elseif ($this->serverSession === null) {
+            // No saved session; create a new one if we don't already have one
+            $this->serverSession = new HttpServerSession(
+                $this->transport,
+                $this->initOptions,
+                $this->logger
+            );
+        }
+
+        return $this->dispatchToSession($this->serverSession, $httpSession, $request);
+    }
+
+    /**
+     * Run the current request through the selected MCP session: register
+     * handlers, dispatch the queued messages, and build the HTTP response.
+     * Shared by the modern sessionless and legacy session-bound paths;
+     * $serverSession is the instance currently installed in
+     * $this->serverSession.
+     *
+     * @param HttpServerSession $serverSession The MCP session serving this request
+     * @param \Mcp\Server\Transport\Http\HttpSession $httpSession The transport-level HTTP session
+     * @param HttpMessage|null $request The incoming request (consulted for streaming candidacy)
+     */
+    private function dispatchToSession(
+        HttpServerSession $serverSession,
+        \Mcp\Server\Transport\Http\HttpSession $httpSession,
+        ?HttpMessage $request
+    ): HttpMessage {
+        // 3) Register the session and handlers
+        $this->server->setSession($serverSession);
+        $serverSession->registerHandlers($this->server->getHandlers());
+        $serverSession->registerNotificationHandlers($this->server->getNotificationHandlers());
+
+        // 4) Decide whether this POST should stream SSE frames as the
+        // handler runs. Streaming requires the transport to have chosen
+        // SSE mode (i.e. the client advertised text/event-stream AND
+        // server config has enable_sse=true) AND the request to be a
+        // good candidate per Config::shouldStream. Anything else falls
+        // through to the existing buffered/JSON paths.
+        $streaming = false;
+        if ($this->transport->lastResponseMode() === 'sse') {
+            $streaming = $this->transport->getConfig()->shouldStream(
+                $request?->getBody()
+            );
+        }
+
+        if ($streaming) {
+            // Streaming path: begin the SSE response (headers + priming
+            // frame flushed to the wire) BEFORE the handler runs. Each
+            // writeMessage() during handler execution emits a frame
+            // directly, so progress notifications arrive live rather
+            // than after the handler returns.
+            $this->transport->beginStreamingSseOutput($httpSession);
+            if (!$serverSession->isInitialized()) {
+                $serverSession->start();
+            }
+            $response = $this->transport->finalizeStreamingSse($httpSession);
+        } else {
+            try {
+                if (!$serverSession->isInitialized()) {
+                    $serverSession->start();
+                }
+            } catch (SubscriptionListenException $listen) {
+                // SEP-2575 subscriptions/listen: the session validated
+                // the request; the runner owns the SAPI adapter and
+                // produces the long-lived notification stream. The
+                // ephemeral modern session is discarded like any other
+                // sessionless request.
+                $response = $this->streamSubscriptionListen($listen);
                 $this->transport->discardSession($httpSession);
                 return $response;
             }
 
-            $response->setHeader('Mcp-Session-Id', $httpSession->getId());
-
-            // 6) Store the session
-            $httpSession->setMetadata('mcp_server_session', $this->serverSession->toArray());
-            $this->transport->saveSession($httpSession);
-
-            // 7) Return the final HTTP response
+            // 5) Build the final HTTP response. When the transport selected
+            // SSE mode for this POST, drain the outgoing queue through the
+            // resumable SSE emitter; otherwise use the batched JSON path.
+            if ($this->transport->lastResponseMode() === 'sse') {
+                $response = $this->transport->emitSseResponse($httpSession);
+            } else {
+                $response = $this->transport->createJsonResponse($httpSession);
+            }
+        }
+        if ($this->transport->lastRequestSessionless()) {
+            // Sessionless 2026-07-28 lifecycle request (SEP-2567): no
+            // Mcp-Session-Id is echoed and nothing is persisted — the
+            // ephemeral processing context is deleted outright (its id
+            // was never disclosed, so no client could ever reach it).
+            // The SEP-2575 HTTP error statuses were already applied by
+            // the transport from the structured hint the session
+            // stamped on the response message.
+            $this->transport->discardSession($httpSession);
             return $response;
         }
 
-        // No valid session; return a 400 error
-        return HttpMessage::createJsonResponse(['error' => 'No valid session'], 400);
+        $response->setHeader('Mcp-Session-Id', $httpSession->getId());
+
+        // 6) Store the session
+        $httpSession->setMetadata('mcp_server_session', $serverSession->toArray());
+        $this->transport->saveSession($httpSession);
+
+        // 7) Return the final HTTP response
+        return $response;
     }
     
     /**

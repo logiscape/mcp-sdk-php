@@ -169,9 +169,13 @@ This file was introduced during the v1.7.x series. Structured entries below cove
     claims carry no usable subject — so tampering, expiry, and
     cross-user replay are all rejected with `-32602`; consumed results
     are carried between rounds inside the state, and the
-    per-installation file-backed signing secret initializes atomically
-    (exclusive create) and fails loudly when no shared secret can be
-    established. The client side services `inputRequests` through
+    per-installation file-backed signing secret initializes race-safely
+    under an exclusive lock (reclaiming stubs left by crashed writers),
+    locks its permissions to 0600 before any secret byte is written,
+    refuses symlinks and foreign-owned or other-readable files at the
+    predictable default shared-temp path (POSIX), and fails loudly when
+    no shared secret can be established. The client side services
+    `inputRequests` through
     `onElicit`/`onSampling` (new)/roots handlers and retries with
     key-matched `inputResponses`, verbatim `requestState` echo, fresh
     request ids, a 16-round cap, and absent `resultType` treated as
@@ -183,9 +187,12 @@ This file was introduced during the v1.7.x series. Structured entries below cove
     when `iss` fails; new `AuthorizationCallbackResult` with
     backward compatibility for string-returning handlers), SEP-837
     `application_type` on dynamic registration (derived native/web),
-    SEP-2352 authorization-server migration (PRM re-fetched on 401,
-    tokens/credentials never reused across issuers, fresh registration at
-    the new AS), SEP-2207 `offline_access` gating on
+    SEP-2352 authorization-server migration (PRM re-fetched on 401 and on
+    403 `insufficient_scope`, tokens/credentials never reused across
+    issuers, fresh registration at the new AS, and an in-process
+    migration marker — one that survives retries within the client
+    instance without retaining stale bearer tokens — when pre-registered
+    credentials block automatic migration), SEP-2207 `offline_access` gating on
     `scopes_supported` — plus the `client_credentials` grant
     (private_key_jwt with ES256/RS256 assertions including DER→raw
     signature conversion, and client_secret_basic) and the SEP-990
@@ -263,6 +270,35 @@ This file was introduced during the v1.7.x series. Structured entries below cove
   declared client capabilities (e.g. a bare `elicitation: {}`) survive
   cross-request restoration on session stores that keep PHP values in
   memory — previously `fromArray()`'s array guards silently dropped them.
+- WS3 post-commit review (four findings, all with regression tests):
+  - `HttpServerRunner` no longer leaks the ephemeral modern session into a
+    later legacy request on a reused runner: the modern session is
+    installed only for the duration of its own dispatch and the previous
+    session is restored on both the runner and `Server` facade on every
+    exit path. Previously a legacy `initialize` following a modern request
+    on one runner instance
+    (long-running runtimes, embedding, tests) was served by the stale
+    modern-declared session — rejected `-32602` for lacking the `_meta`
+    envelope — which also carried the prior request's headers and
+    authenticated principal.
+  - The SEP-2352 migration block for pre-registered credentials now
+    survives retries within the client instance: the old issuer is
+    retained in an in-process migration marker, so rejected bearer tokens
+    are discarded immediately while a retried 401 still cannot skip the
+    guard and present old credentials to the new authorization server.
+    (The marker is per-instance; durable cross-process binding requires
+    issuer-bound pre-registered credentials, a planned follow-up.)
+  - The SEP-2352 migration guard also runs on the 403
+    `insufficient_scope` path (PRM cache bypassed, issuer change
+    detected) — previously only the 401 path checked, so a step-up flow
+    could carry credentials to a new issuer unchecked.
+  - `RequestStateCodec::withFileSecret()` hardened for multi-tenant
+    hosts: see the SEP-2322 entry above (flock-based initialization with
+    stub reclamation, verified 0600 before write, path/handle identity plus
+    symlink/ownership/permission refusal at the default path). Previously a
+    co-tenant could pre-plant a known secret at the predictable shared-temp
+    path, the secret was momentarily world-readable on creation, and a
+    crashed writer left a stub that permanently blocked initialization.
 
 ## [1.7.3]
 
