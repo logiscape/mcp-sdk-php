@@ -280,8 +280,8 @@ use.
   reason).
 - `composer check` green; `composer conformance` regression-free.
 
-**Status (2026-06-12):** implemented and verified (steps 1–2; human review
-pending). Research resolved the `DRAFT-2026-v1` question with a drift
+**Status (2026-06-12):** implemented, verified, and code-reviewed (step 3);
+Research resolved the `DRAFT-2026-v1` question with a drift
 finding: the spec repository renamed the draft wire identifier to the dated
 `2026-07-28` at RC lock and conformance `main` followed, but the pinned
 `0.2.0-alpha.2` tool still sends `DRAFT-2026-v1` on every stateless
@@ -324,9 +324,13 @@ are in `tests/Server/ServerEraDetectionTest`,
 stable conformance regression-free (291 passed, +4 from the typed-error
 fix); draft baseline curation: `sep-2164-resource-not-found` (3/3) and
 `caching` (7/7) pass and left the baseline, `server-stateless` passes
-16/17 and is re-attributed to WS3 (documented reason: the remaining check
-is SEP-2243's header/`_meta` mismatch `-32001`, plus `subscriptions/listen`
-SHOULD warnings), and `http-custom-header-server-validation` left the
+17/19 after the review round (the two capability checks only began
+executing once `McpServer` propagated `McpError` — see below) with two
+failing checks: SEP-2243's header/`_meta` mismatch `-32001` plus the
+`subscriptions/listen` SHOULD warnings (re-attributed to WS3), and the
+upstream tool's string-array `requiredCapabilities` assertion (a
+documented upstream tool bug, not pursued in the SDK — see the review
+spec question below); and `http-custom-header-server-validation` left the
 baseline as inactive (see the WS3 note below).
 **Review round (step 3):** all four findings assessed as WS2-scope and
 fixed with regression tests. (1) The era a modern request adopts is now
@@ -443,6 +447,25 @@ mode carries a single object, and WS2 ships no modern streaming. When
 this workstream adds request-scoped SSE, route handler-emitted
 notifications onto the request's stream and remove the drop (and its
 note in the WS2 status).
+**Added by WS2 post-commit review (2026-06-12):** two robustness/accuracy
+nits in code this workstream touches, to clean up alongside its work:
+(a) two WS2 code paths discriminate exceptions by message string —
+`ServerSession::answerMalformedRequest()` keys `-32601` vs `-32602` off
+`str_contains($e->getMessage(), 'Unknown client request method')`
+(coupled to the literal in `Types/ClientRequest.php`), and
+`ClientSession::negotiate()` detects stdio probe timeouts via
+`str_starts_with($e->getMessage(), 'Timed out waiting for response')`
+(coupled to `readNextMessage()`'s message). Both are SDK-internal and
+test-covered, but replace them with typed exceptions (an
+unknown-method exception from typed request construction; a typed stdio
+read-timeout mirroring the HTTP path's `HttpRequestTimeoutException`)
+while reworking these layers. (b) The
+`StreamableHttpTransport::receiveFromHttp()` docblock overclaims that
+every queued message carries a request id ("`enqueueJsonRpcPayload()`
+refuses id-less payloads") — `deliverServerInitiatedMessage()` falls
+back to the same pending queue for id-less notifications when no
+dispatcher is registered or dispatch fails; the behavior is correct,
+fix the comment when touching the transport.
 
 **Completion criteria**
 
@@ -601,6 +624,14 @@ execution error should throw any other exception type. Also:
 `initialize` by default (`protocolMode: 'auto'`) — operators of fragile
 legacy servers that mishandle unknown pre-initialize requests can pin
 `protocolMode: 'legacy'`.
+**Added by WS2 post-commit review (2026-06-12):** a fourth candidate for
+the v1→v2 API audit: `HttpServerTransport::start()` is now idempotent —
+it previously threw `RuntimeException('Transport already started')` on a
+second call, and now silently returns (required by the per-request
+ephemeral sessions of the 2026-07-28 sessionless lifecycle, which call
+`start()` on the same long-lived transport). Decide during the audit
+whether the old throw counts as supported v1 surface; if so, record the
+change in WS10's migration guide.
 
 **Completion criteria**
 

@@ -153,9 +153,11 @@ This file was introduced during the v1.7.x series. Structured entries below cove
   recorded for the WS10 migration guide.
 - Draft conformance baseline re-curated for the WS2 milestone:
   `sep-2164-resource-not-found` (3/3) and `caching` (7/7) pass and left the
-  baseline; `server-stateless` passes 16/17 and stays attributed to WS3 for
-  its remainder (the SEP-2243 header/`_meta` mismatch `-32001` check and
-  the `subscriptions/listen` list-changed SHOULD warnings);
+  baseline; `server-stateless` passes 17/19 with two failing checks — the
+  SEP-2243 header/`_meta` mismatch `-32001` check (attributed to WS3, along
+  with the `subscriptions/listen` list-changed SHOULD warnings) and the
+  upstream tool's string-array `requiredCapabilities` assertion (a
+  documented upstream tool bug; the SDK keeps the schema's object shape);
   `http-custom-header-server-validation` removed as inactive (its checks
   only engage once an `x-mcp-header` tool exists — a WS3 deliverable). The
   stable track stays regression-free (291 passed, up 4 from the typed-error
