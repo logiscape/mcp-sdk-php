@@ -180,8 +180,9 @@ This PHP SDK was developed by:
 - [Josh Abbott](https://joshabbott.com)
 - Claude 3.5 Sonnet
 - Claude Opus 4.5
+- Claude Fable 5
 
-Additional debugging and refactoring done by Josh Abbott using OpenAI ChatGPT o1 pro mode and OpenAI Codex.
+Code reviews and refactoring done by Josh Abbott originally using OpenAI ChatGPT o1 pro mode, and later by OpenAI Codex using GPT-5.5.
 
 Special acknowledgement to [Roman Pronskiy](https://github.com/pronskiy) for simplifying the server building process with his convenience wrapper project: [https://github.com/pronskiy/mcp](https://github.com/pronskiy/mcp)
 

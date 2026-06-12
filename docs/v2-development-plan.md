@@ -248,6 +248,24 @@ conformance tool sends `MCP-Protocol-Version: DRAFT-2026-v1` (header and
 decide whether/where the draft identifier is accepted alongside
 `2026-07-28` (check how the TypeScript SDK v2 handles it) without leaking it
 into the legacy negotiation surface.
+**Added by WS1 re-review:** implementation notes for the per-request
+detection work, from the post-commit review of the WS1 change set:
+(a) `HttpServerRunner::applyStatelessErrorStatus()` maps modern error codes
+to HTTP statuses by re-decoding the serialized response body — acceptable
+for the narrow discover-only path, but the general modern status mapping
+(400/404) landing here should use a structured signal between session and
+runner rather than extending body-sniffing; (b) a discover
+POST body is JSON-decoded three times on the transport path —
+`HttpServerTransport::isDiscoverRequest()`, then `isInitializeRequest()`
+(computed before the discover branch returns early), then again inside
+`handlePostRequest()` — if era detection also needs to inspect bodies,
+consolidate all of them to a single parse; (c) `ClientSession::discover()` duplicates the hardcoded
+client identity (`mcp-client`/`1.0.0`) from `initialize()` — extract a
+shared helper before the client-side probe builds on it; (d) cosmetic:
+`validateModernRequestMeta()` reports a required `_meta` field explicitly
+set to JSON `null` as "missing" rather than "invalid" (`isset()` semantics)
+— tighten the message while reworking envelope validation for per-request
+use.
 
 **Completion criteria**
 
@@ -304,6 +322,10 @@ and its interaction with request-scoped streams; the complete
 `InputRequiredResult` state machine including `requestState` round-tripping
 and timeout/abandonment semantics; the normative `Mcp-Param-*` encoding
 rules; final text of each auth SEP.
+**Added by WS1 re-review:** WS1 forward-declared
+`MetaKeys::SUBSCRIPTION_ID` (`io.modelcontextprotocol/subscriptionId`) for
+the `subscriptions/listen` correlation id — re-verify the key against the
+final SEP-2260 text before building on it.
 
 **Completion criteria**
 
@@ -428,6 +450,21 @@ that promise plus the spec's own deprecation bookkeeping.
 **Research focus:** the final deprecation-annotation mechanism (how a server
 marks a feature deprecated on the wire); any spec text on serving mixed-era
 traffic concurrently from one endpoint.
+**Added by WS1 re-review:** three items for this workstream from the
+post-commit review of the WS1 change set: (a)
+`ServerSession::adaptResponseForClient()` mutates the handler's `Result`
+in place on the legacy path (nulls `resultType`, clears cache hints) — the
+mixed-era same-server test should cover a handler-cached `Result` reused
+across eras, or the adaptation should clone before stripping; (b) the
+v1→v2 API audit must record the SEP-2106 behavior change in `McpServer`:
+with an `outputSchema` declared, a string return now produces JSON-encoded
+`TextContent` (`"hello"` with quotes) plus `structuredContent`, where v1
+emitted the raw string and no `structuredContent` — wire-visible to legacy
+clients of such tools, so it belongs in WS10's migration guide; (c) WS1
+forward-declared `MetaKeys::LOG_LEVEL`
+(`io.modelcontextprotocol/logLevel`, SEP-2577) — re-verify the key and its
+deprecation semantics against the final text when adopting the
+feature-lifecycle states.
 
 **Completion criteria**
 

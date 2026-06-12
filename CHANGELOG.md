@@ -34,6 +34,36 @@ This file was introduced during the v1.7.x series. Structured entries below cove
   close it). Includes a CI draft job and draft-track rules in the
   development plan (WS7) and `conformance/README.md`. The tracks converge
   to a single pin when the stable `0.2.0` tool ships.
+- **v2 WS1 — stateless foundation.** `2026-07-28` added to the supported
+  protocol versions with feature gating for the new behaviors
+  (`stateless_lifecycle`, `caching_hints`,
+  `resource_not_found_invalid_params`, `json_schema_2020_12`).
+- `server/discover` (SEP-2575) answered on stdio and HTTP without any prior
+  handshake: validates the required per-request `_meta` envelope
+  (protocol version / client info / client capabilities, keys in the new
+  `MetaKeys` class; malformed envelopes get `-32602`), answers an
+  unsupported version with `-32004` plus `data.supported`/`data.requested`,
+  and advertises capabilities wire-identical to the legacy `initialize`
+  result. On HTTP the request is fully sessionless (SEP-2567): any
+  `Mcp-Session-Id` is ignored, none is minted or echoed, the ephemeral
+  processing context is deleted rather than persisted, responses are plain
+  JSON (never SSE-framed), and the SEP-2575 error codes map to HTTP 400.
+  Client side: `ClientSession::discover()` sends the enveloped probe.
+- SEP-2549 caching hints: required `ttlMs`/`cacheScope` fields on the six
+  cacheable result types (four list results, `resources/read`,
+  `server/discover`) via the new `CacheableResult` interface/trait, plus
+  the `resultType` discriminator on every result — stamped with
+  conservative defaults for `2026-07-28` clients and stripped for legacy
+  clients in `adaptResponseForClient()`.
+- SEP-2106: full JSON Schema 2020-12 accepted in tool schemas (composition,
+  conditionals, `$ref` passed through without dereferencing), and
+  `structuredContent` may be any JSON value — including an explicit
+  `null` — when an `outputSchema` is declared; scalars, explicit `null`,
+  and non-empty list arrays are stripped for legacy clients (an empty PHP
+  array is preserved, as the established way to express an empty object).
+- SEP-414: W3C Trace Context pass-through — the reserved bare
+  `traceparent`/`tracestate`/`baggage` keys in `_meta` with a new
+  `TraceContext` accessor class, no OpenTelemetry dependency.
 
 ### Changed
 
@@ -41,6 +71,23 @@ This file was introduced during the v1.7.x series. Structured entries below cove
   support (aligned with the official TypeScript and Python SDK v2 timelines),
   and the MCP Apps extension (SEP-1865) promoted from long-term/conditional
   to a committed v2 release feature.
+- Update README to credit AI models used for v2 development.
+- Deliberate era split for version negotiation: the new
+  `Version::LATEST_LEGACY_PROTOCOL_VERSION` (`2025-11-25`) caps what the
+  `initialize` handshake can negotiate — the handshake itself is removed in
+  `2026-07-28` (SEP-2575), so the stateless revision is only selectable via
+  the per-request `_meta` envelope. The client's `initialize()` now
+  requests the latest legacy revision.
+- SEP-2164: a missing resource is reported as `-32602` (Invalid params) to
+  `2026-07-28` clients while legacy revisions keep `-32002`; both shapes
+  now carry the requested `uri` in `error.data`, and a missing resource is
+  always an error, never an empty `contents` array.
+- Draft conformance baseline re-curated for the WS1 milestone:
+  `json-schema-ref-no-deref` passes and left the baseline;
+  `sep-2164-resource-not-found` and `caching` re-attributed to WS2 with a
+  documented shared root cause (the draft tool's per-request stateless
+  lifecycle needs WS2's era detection). v2 development plan updated with
+  the WS1 status and spec-drift notes in the same change set.
 
 ## [1.7.3]
 
