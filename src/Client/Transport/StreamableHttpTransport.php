@@ -41,6 +41,7 @@ use Mcp\Types\JSONRPCResponse;
 use Mcp\Types\JSONRPCError;
 use Mcp\Types\JsonRpcErrorObject;
 use Mcp\Types\Meta;
+use Mcp\Types\MetaKeys;
 use Mcp\Types\NotificationParams;
 use Mcp\Types\RequestId;
 use Mcp\Types\RequestParams;
@@ -113,6 +114,17 @@ class StreamableHttpTransport
      * OAuth client for protected resources
      */
     private ?OAuthClientInterface $oauthClient = null;
+
+    /**
+     * Optional timeout (seconds) bounding requests that carry the modern
+     * SEP-2575 `_meta` envelope — i.e. the dual-era negotiation's
+     * `server/discover` probes (and their -32004 retries). Set by
+     * Client::connect() around negotiation and cleared afterwards, so the
+     * probe honors the configured probe timeout instead of the transport's
+     * full read timeout, while the legacy fallback `initialize` (which
+     * carries no envelope) keeps the normal timeout. Null = no override.
+     */
+    private ?float $probeTimeout = null;
 
     /**
      * Maximum number of OAuth retry attempts
@@ -328,10 +340,24 @@ class StreamableHttpTransport
             throw new RuntimeException('Failed to encode message: ' . json_last_error_msg());
         }
 
-        $headers = $this->prepareRequestHeaders([
+        $additionalHeaders = [
             'Content-Type' => 'application/json',
             'Accept' => 'application/json, text/event-stream'
-        ]);
+        ];
+
+        // SEP-2575: a modern request carries its protocol version in the
+        // _meta envelope, and the MCP-Protocol-Version header MUST match
+        // it. Mirroring the header from the outgoing message makes the two
+        // equal by construction — covering the discover probe (before any
+        // era is established) and every per-request envelope afterwards.
+        // Legacy requests have no envelope and keep the session manager's
+        // post-initialize header behavior.
+        $envelopeVersion = $this->extractEnvelopeProtocolVersion($message);
+        if ($envelopeVersion !== null) {
+            $additionalHeaders['MCP-Protocol-Version'] = $envelopeVersion;
+        }
+
+        $headers = $this->prepareRequestHeaders($additionalHeaders);
 
         $ch = curl_init($endpoint);
         if ($ch === false) {
@@ -339,6 +365,12 @@ class StreamableHttpTransport
         }
 
         $this->configureCurlHandle($ch, $headers);
+
+        // Bound enveloped (modern-era) requests by the probe timeout while
+        // negotiation is in progress — see setProbeTimeout().
+        if ($this->probeTimeout !== null && $envelopeVersion !== null) {
+            curl_setopt($ch, CURLOPT_TIMEOUT_MS, (int) ($this->probeTimeout * 1000));
+        }
 
         // Configure for POST request with the JSON payload
         curl_setopt($ch, CURLOPT_POST, true);
@@ -462,6 +494,13 @@ class StreamableHttpTransport
         // awaitResponseViaReconnect() as appropriate. Mirrors the tolerance in
         // performReconnectGet().
         if ($result === false && !$this->sseTransferIsSalvageable($sseActive, $sseCursor, $outboundRequestId)) {
+            if ($errno === CURLE_OPERATION_TIMEOUTED) {
+                // Typed so callers can distinguish "the server never
+                // answered" from other transport failures — the dual-era
+                // negotiation falls back to the legacy handshake on a
+                // timed-out discover probe (a silent legacy server).
+                throw new HttpRequestTimeoutException("HTTP request timed out: ({$errno}) {$error}");
+            }
             throw new RuntimeException("HTTP request failed: ({$errno}) {$error}");
         }
 
@@ -531,15 +570,31 @@ class StreamableHttpTransport
         }
 
         if ($statusCode >= 400) {
-            // Other 4xx/5xx errors - fail fast with status code
-            $this->logger->error("Server returned HTTP {$statusCode}", [
-                'statusCode' => $statusCode,
-                'body' => substr($responseBody, 0, 500) // Log first 500 chars for debugging
-            ]);
-            throw new RuntimeException(
-                "HTTP request failed with status {$statusCode}",
-                $statusCode
-            );
+            // SEP-2575: modern servers deliver JSON-RPC errors with real
+            // HTTP error statuses — 400 for UnsupportedProtocolVersionError
+            // (-32004), MissingRequiredClientCapabilityError (-32003), and
+            // header-validation failures (-32001); 404 with -32601 for
+            // unknown or removed methods. When such a body answers the
+            // in-flight request (its id matches), let it flow through the
+            // normal response path below so the caller receives a typed
+            // McpError carrying the code and data — the dual-era
+            // negotiation logic in ClientSession depends on seeing -32004
+            // rather than an opaque transport failure. Anything else
+            // (empty or unrecognized bodies, legacy servers' plain-object
+            // errors, 5xx) still fails fast exactly as before.
+            $isJsonRpcErrorForRequest = ($statusCode === 400 || $statusCode === 404)
+                && $this->bodyIsJsonRpcErrorForRequest($responseBody, $message);
+            if (!$isJsonRpcErrorForRequest) {
+                // Other 4xx/5xx errors - fail fast with status code
+                $this->logger->error("Server returned HTTP {$statusCode}", [
+                    'statusCode' => $statusCode,
+                    'body' => substr($responseBody, 0, 500) // Log first 500 chars for debugging
+                ]);
+                throw new RuntimeException(
+                    "HTTP request failed with status {$statusCode}",
+                    $statusCode
+                );
+            }
         }
 
         // Check if we should process the response differently based on content-type
@@ -1180,6 +1235,55 @@ class StreamableHttpTransport
      * @param JsonRpcMessage $message The message to check
      * @return bool True if it's an initialization message
      */
+    /**
+     * Extract the SEP-2575 protocol version from an outgoing message's
+     * `_meta` envelope, if it carries one. Used to mirror the value into
+     * the MCP-Protocol-Version header so header and envelope can never
+     * disagree.
+     */
+    private function extractEnvelopeProtocolVersion(JsonRpcMessage $message): ?string
+    {
+        $inner = $message->message;
+        if (!($inner instanceof JSONRPCRequest || $inner instanceof JSONRPCNotification)) {
+            return null;
+        }
+        $meta = $inner->params?->_meta ?? null;
+        if ($meta === null) {
+            return null;
+        }
+        $version = $meta->getExtraFields()[MetaKeys::PROTOCOL_VERSION] ?? null;
+        return (is_string($version) && $version !== '') ? $version : null;
+    }
+
+    /**
+     * Whether an HTTP error response body is a JSON-RPC error answering
+     * the in-flight request: a `jsonrpc: "2.0"` object whose `error.code`
+     * is an integer and whose `id` matches the outbound request id. Only
+     * such bodies are routed to the session as typed errors — anything
+     * else (legacy servers' plain `{"error": "..."}` objects, empty
+     * bodies, id-less transport-level errors) keeps the fail-fast
+     * RuntimeException behavior.
+     */
+    private function bodyIsJsonRpcErrorForRequest(string $responseBody, JsonRpcMessage $message): bool
+    {
+        $outboundId = $this->extractOutboundRequestId($message);
+        if ($outboundId === null) {
+            return false;
+        }
+        $decoded = json_decode($responseBody, true);
+        if (!is_array($decoded)) {
+            return false;
+        }
+        if (($decoded['jsonrpc'] ?? null) !== '2.0') {
+            return false;
+        }
+        if (!is_int($decoded['error']['code'] ?? null)) {
+            return false;
+        }
+        $id = $decoded['id'] ?? null;
+        return $id !== null && $this->idsEqual($id, $outboundId);
+    }
+
     private function isInitializationMessage(JsonRpcMessage $message): bool
     {
         // Examine the inner message to see if it's an initialize request
@@ -1338,6 +1442,23 @@ class StreamableHttpTransport
     }
 
     /**
+     * Bound requests that carry the modern `_meta` envelope by the given
+     * timeout (seconds), or remove the bound with null.
+     *
+     * Used by Client::connect() around era negotiation (SEP-2575, WS2):
+     * the spec's fallback rules require detecting a server that never
+     * answers the `server/discover` probe within the configured probe
+     * timeout, but a synchronous HTTP POST otherwise blocks in cURL for
+     * the transport's full read timeout. Scoping the override to enveloped
+     * requests keeps the legacy fallback `initialize` — and everything
+     * after negotiation — on the normal timeout.
+     */
+    public function setProbeTimeout(?float $seconds): void
+    {
+        $this->probeTimeout = $seconds;
+    }
+
+    /**
      * Receives a message from the SSE connection, if available.
      *
      * @return JsonRpcMessage|null The received message or null if none available
@@ -1363,27 +1484,22 @@ class StreamableHttpTransport
     /**
      * Receives a message from the HTTP JSON-RPC response queue.
      *
+     * Error responses are DELIVERED to the session like any other message:
+     * BaseSession routes them to the pending request's response handler,
+     * which surfaces them as typed McpError with code and data intact —
+     * the same contract the stdio transport has always provided. The
+     * dual-era negotiation (WS2) depends on this: the client must be able
+     * to classify -32004/-32003/-32001 versus a legacy server's
+     * -32601/-32602 from the typed error, not from an opaque transport
+     * exception. (Every message in this queue carries a request id —
+     * enqueueJsonRpcPayload() refuses id-less payloads — so there is no
+     * unroutable-error case left to treat as a transport failure.)
+     *
      * @return JsonRpcMessage|null The received message or null if none available
-     * @throws RuntimeException When there are persistent errors and no more messages
      */
     public function receiveFromHttp(): ?JsonRpcMessage
     {
-        $message = array_shift($this->pendingMessages);
-
-        if ($message !== null) {
-            // Check if this is an error message
-            $innerMessage = $message->message;
-            if ($innerMessage instanceof \Mcp\Types\JSONRPCError) {
-                $error = $innerMessage->error;
-                // If it's a critical error throw an exception
-                $this->logger->error("Critical MCP error: {$error->message} (code: {$error->code})");
-                throw new RuntimeException("Critical MCP error: {$error->message} (code: {$error->code})");
-            }
-
-            return $message;
-        } else {
-            return null;
-        }
+        return array_shift($this->pendingMessages);
     }
 
     /**

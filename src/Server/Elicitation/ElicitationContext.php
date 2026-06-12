@@ -123,6 +123,10 @@ class ElicitationContext
     public function form(string $message, array $requestedSchema, ?Meta $_meta = null, ?TaskRequestParams $task = null): ?ElicitationCreateResult
     {
         if (!$this->supportsForm()) {
+            // Modern path (SEP-2575): a request whose envelope did not
+            // declare the elicitation capability fails with -32003 instead
+            // of degrading silently. No-op on legacy revisions.
+            $this->session->raiseMissingClientCapabilityIfModern(['elicitation']);
             return null;
         }
 
@@ -185,6 +189,8 @@ class ElicitationContext
     public function url(string $message, string $url, ?string $elicitationId = null, ?Meta $_meta = null, ?TaskRequestParams $task = null): ?ElicitationCreateResult
     {
         if (!$this->supportsUrl()) {
+            // Modern path (SEP-2575): see form().
+            $this->session->raiseMissingClientCapabilityIfModern(['elicitation']);
             return null;
         }
 

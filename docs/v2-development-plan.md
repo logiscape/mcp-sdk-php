@@ -280,6 +280,102 @@ use.
   reason).
 - `composer check` green; `composer conformance` regression-free.
 
+**Status (2026-06-12):** implemented and verified (steps 1–2; human review
+pending). Research resolved the `DRAFT-2026-v1` question with a drift
+finding: the spec repository renamed the draft wire identifier to the dated
+`2026-07-28` at RC lock and conformance `main` followed, but the pinned
+`0.2.0-alpha.2` tool still sends `DRAFT-2026-v1` on every stateless
+request — so the SDK accepts it as an RC-window alias for `2026-07-28` on
+the per-request path only (`Version::DRAFT_MODERN_PROTOCOL_VERSION`,
+canonicalized for all feature gating, advertised in
+`DiscoverResult.supportedVersions` and `-32004 data.supported`, never
+negotiable via `initialize`; it retires at WS7's tool convergence). The
+TypeScript SDK v2 has types only — no stateless runtime or probe logic —
+so the spec's normative text (the new Modern/Legacy/Dual-era terminology
+and compatibility matrix on the draft versioning page) was the authority.
+Server side: per-request era detection in `ServerSession::handleRequest()`
+(envelope or transport-declared header signal; modern `_meta` wins over
+the `initialize` method name), per-request adoption of version/clientInfo/
+clientCapabilities (capabilities are provably not inferred from prior
+requests), removed-method and unknown-method `-32601`→404, the
+400-mapping for `-32602`/`-32003`/`-32004` via a structured
+`httpStatusHint` on `JsonRpcMessage` (replacing body re-decoding, WS1
+re-review item a), one POST body parse in the HTTP transport (item b),
+every modern request served sessionless on a fresh `HttpServerSession`,
+and `-32003` `MissingRequiredClientCapabilityError` raised from the
+sampling/elicitation entry points (everything-server gained the
+`test_missing_capability` tool the draft suite calls). Client side:
+`ClientSession::negotiate()` implements the spec's probe/fallback rules
+(retry-on-`-32004`, never-fallback on recognized modern errors, fallback
+on any other error/timeout/malformed discover result), a shared
+`clientIdentity()` helper (item c), envelope stamping on every modern
+request with the `MCP-Protocol-Version` header mirrored from `_meta`, and
+`Client::connect()` `protocolMode`/`probeTimeout` options; the legacy
+GET-SSE stream is not opened on the modern path. `validateModernRequestMeta()`
+distinguishes null from missing fields (item d). Two latent client
+transport bugs surfaced by the four-way matrix and conformance were fixed:
+`readTimeout` now fires against a fully silent peer, and HTTP-delivered
+JSON-RPC error responses surface as typed `McpError` instead of an opaque
+"Critical MCP error" `RuntimeException` (recorded for WS6's API audit).
+Completion criteria met: the four-pairing matrix and fallback-safety tests
+are in `tests/Server/ServerEraDetectionTest`,
+`tests/Server/HttpModernRequestTest`, and
+`tests/Client/ClientNegotiationTest`; `composer check` green;
+stable conformance regression-free (291 passed, +4 from the typed-error
+fix); draft baseline curation: `sep-2164-resource-not-found` (3/3) and
+`caching` (7/7) pass and left the baseline, `server-stateless` passes
+16/17 and is re-attributed to WS3 (documented reason: the remaining check
+is SEP-2243's header/`_meta` mismatch `-32001`, plus `subscriptions/listen`
+SHOULD warnings), and `http-custom-header-server-validation` left the
+baseline as inactive (see the WS3 note below).
+**Review round (step 3):** all four findings assessed as WS2-scope and
+fixed with regression tests. (1) The era a modern request adopts is now
+request-scoped — session state (initialization, negotiated version,
+client params) is snapshotted and restored around modern dispatch, so a
+modern stdio request can no longer mark the session initialized for later
+bare requests, and no longer clobbers a legacy-initialized stdio
+session's negotiated state. (2) The SEP-2575 pre-dispatch checks
+(envelope `-32602`, version `-32004`) were extracted into
+`modernEnvelopePreDispatchError()` shared with the malformed-request
+answer path, so unknown/removed methods with a broken envelope are
+rejected 400/`-32602` before any `-32601` routing. (3)
+`createJsonResponse()` keeps the SEP-2575 status when a handler emits a
+notification before its response — and (follow-up review finding) the
+modern JSON response is now always the single JSON object the Streamable
+HTTP spec requires, never a `[notification, error]` array: interleaved
+notifications are dropped on the modern JSON path, with WS3's
+request-scoped SSE and `subscriptions/listen` as their carriers (see the
+WS3 note). Legacy multi-message behavior is unchanged. (4) HTTP probes are bounded by the
+probe timeout: `StreamableHttpTransport::setProbeTimeout()` caps cURL for
+requests carrying the modern envelope (set by `Client::connect()` around
+negotiation, so the legacy fallback `initialize` keeps the normal
+timeout), and a cURL operation timeout now throws the typed
+`HttpRequestTimeoutException`, which `negotiate()` classifies as a silent
+legacy server (fallback) rather than a transport failure.
+**Review spec question (resolved per "official text wins"):** the review
+flagged that the SDK emitted `-32003`'s `data.requiredCapabilities` as a
+string array matching the pinned conformance tool, while SEP-2575
+describes it as a ClientCapabilities object. Verified accurate: the SEP
+final text, the draft `schema.ts` (with the canonical example
+`{"requiredCapabilities": {"elicitation": {}}}`), the TypeScript SDK v2
+types, and even the conformance repo's own vendored draft types all
+specify the OBJECT shape — while the tool's check asserts a string array
+on the pinned 0.2.0-alpha.2 *and* on conformance `main` (an unreconciled
+upstream tool bug, contradicting types in its own repository). The SDK
+now emits the schema's object shape; the resulting
+`sep-2575-server-rejects-undeclared-capability` failure is documented in
+the draft baseline as the upstream bug (re-checked at every draft-pin
+bump; candidate for an upstream issue per SEP-2484). Chasing the
+end-to-end repro also uncovered that `McpServer`'s tools/call wrapper had
+been converting SDK-raised `McpError`s into `isError` tool results — the
+`-32003` never actually reached the wire and the tool's capability checks
+were silently skipping. The wrapper now propagates `McpError` as protocol
+errors (consistent with its existing `McpServerException` handling), so
+`sep-2575-missing-capability-http-400` genuinely passes; this is a
+client-visible behavior change for tool handlers that deliberately throw
+`McpError` (JSON-RPC error instead of `isError` result) — added to WS6's
+v1→v2 API audit list.
+
 ## WS3 — Transport changes
 
 The HTTP-layer and streaming changes of the stateless revision, plus the
@@ -326,6 +422,27 @@ rules; final text of each auth SEP.
 `MetaKeys::SUBSCRIPTION_ID` (`io.modelcontextprotocol/subscriptionId`) for
 the `subscriptions/listen` correlation id — re-verify the key against the
 final SEP-2260 text before building on it.
+**Added by WS2 (2026-06-12):** (a) the one remaining `server-stateless`
+check is SEP-2243's version-header/`_meta` mismatch — must answer `-32001`
+HeaderMismatch + 400 (WS2's era detection currently answers from the
+envelope, yielding `-32004`); wire it into the same header-validation
+layer as `Mcp-Method`/`Mcp-Name`. (b)
+`http-custom-header-server-validation` left the draft baseline reporting
+0 checks: its checks only engage once the everything-server exposes a tool
+with `x-mcp-header` annotations — add one with the SEP-2243 work and
+re-baseline honestly if its checks then fail. (c) The alpha.2 run surfaced
+two additional `input-required-result-*` scenarios
+(`-unsupported-methods`, `-validate-input`) that already pass — confirm
+they stay green when SEP-2322 lands. (d) Note for the draft-pin bump: the
+next conformance release sends the dated `2026-07-28` instead of
+`DRAFT-2026-v1`; the SDK already accepts both, and the alias constant
+retires at WS7 convergence. (e) Notifications emitted while serving a
+modern request are currently DROPPED by
+`HttpServerTransport::createJsonResponse()` — the modern JSON response
+mode carries a single object, and WS2 ships no modern streaming. When
+this workstream adds request-scoped SSE, route handler-emitted
+notifications onto the request's stream and remove the drop (and its
+note in the WS2 status).
 
 **Completion criteria**
 
@@ -464,7 +581,26 @@ clients of such tools, so it belongs in WS10's migration guide; (c) WS1
 forward-declared `MetaKeys::LOG_LEVEL`
 (`io.modelcontextprotocol/logLevel`, SEP-2577) — re-verify the key and its
 deprecation semantics against the final text when adopting the
-feature-lifecycle states.
+feature-lifecycle states; WS2's research found SEP-2577 already deprecates
+the Roots, Sampling, and Logging features wholesale upstream, so treat
+the `logLevel` key as deprecated-at-birth.
+**Added by WS2 (2026-06-12):** the v1→v2 API audit must record three
+behavior changes shipped with WS2: (a) JSON-RPC error responses on
+the HTTP transport now surface as typed `Mcp\Shared\McpError` (code/data
+intact) where v1 threw `RuntimeException("Critical MCP error: …")` —
+v1 code catching `RuntimeException` around HTTP tool calls needs
+updating; (b) a configured client `readTimeout` now also fires against a
+peer that sends nothing at all (previously it only fired between
+messages), so very slow legacy servers that relied on the dead timeout
+may need a larger explicit `readTimeout`; (c) `McpServer` tool handlers
+that deliberately throw `Mcp\Shared\McpError` now produce a JSON-RPC
+protocol error (matching the long-standing `McpServerException`
+behavior) instead of an `isError` tool result — handlers wanting a tool
+execution error should throw any other exception type. Also:
+`Client::connect()` now probes `server/discover` before falling back to
+`initialize` by default (`protocolMode: 'auto'`) — operators of fragile
+legacy servers that mishandle unknown pre-initialize requests can pin
+`protocolMode: 'legacy'`.
 
 **Completion criteria**
 

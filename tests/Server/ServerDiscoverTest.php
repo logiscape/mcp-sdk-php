@@ -111,7 +111,9 @@ final class ServerDiscoverTest extends TestCase
         /** @var DiscoverResult $result */
         $result = $inner->result;
         $this->assertInstanceOf(DiscoverResult::class, $result);
-        $this->assertSame(Version::SUPPORTED_PROTOCOL_VERSIONS, $result->supportedVersions);
+        // The advertised list covers every negotiable revision plus the
+        // RC-window draft alias for the stateless revision (WS2).
+        $this->assertSame(Version::advertisedSupportedVersions(), $result->supportedVersions);
         $this->assertSame('discover-test-server', $result->serverInfo->name);
         $this->assertSame('3.2.1', $result->serverInfo->version);
         $this->assertSame('complete', $result->resultType);
@@ -287,7 +289,7 @@ final class ServerDiscoverTest extends TestCase
         $data = (array) $inner->error->data;
         $this->assertSame('v999.0.0', $data['requested']);
         $this->assertNotEmpty($data['supported']);
-        $this->assertSame(Version::SUPPORTED_PROTOCOL_VERSIONS, $data['supported']);
+        $this->assertSame(Version::advertisedSupportedVersions(), $data['supported']);
     }
 
     /**

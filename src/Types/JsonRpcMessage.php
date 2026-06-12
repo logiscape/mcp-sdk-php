@@ -41,6 +41,19 @@ class JsonRpcMessage implements McpModel {
     use ExtraFieldsTrait;
 
     /**
+     * Transport-layer HTTP status hint (SEP-2575).
+     *
+     * On the 2026-07-28 stateless path certain JSON-RPC errors must be
+     * delivered with a specific HTTP status (400 for -32602/-32003/-32004/
+     * -32001, 404 for -32601). The server session stamps this hint when it
+     * writes such an error, and the HTTP transport applies it when it
+     * builds the response — a structured signal between the two layers
+     * that replaces re-decoding the serialized body. The hint is never
+     * serialized onto the wire and is ignored by non-HTTP transports.
+     */
+    public ?int $httpStatusHint = null;
+
+    /**
      * We store one of the four possible variants.
      */
     public function __construct(

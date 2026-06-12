@@ -127,9 +127,23 @@ class HttpServerRunner extends ServerRunner
         // 2) Restore the session if one exists or create a new one
         $httpSession = $this->transport->getLastUsedSession();
         if ($httpSession !== null) {
-            // Attempt to restore the higher-level MCP session from the stored array
-            $savedState = $httpSession->getMetadata('mcp_server_session');
-            if (is_array($savedState)) {
+            if ($this->transport->lastRequestSessionless()) {
+                // Modern 2026-07-28 request (SEP-2567): always a fresh MCP
+                // session — never restore saved state and never reuse the
+                // instance left over from a previous request, so no legacy
+                // session's negotiated state (or another modern request's
+                // adopted era) can leak in. The transport identified the
+                // era from per-request metadata; declare it so a modern
+                // request whose body lacks the _meta envelope is rejected
+                // with the spec's -32602 instead of misrouted to the
+                // legacy path.
+                $this->serverSession = new HttpServerSession(
+                    $this->transport,
+                    $this->initOptions,
+                    $this->logger
+                );
+                $this->serverSession->declareTransportModernEra(true);
+            } elseif (is_array($savedState = $httpSession->getMetadata('mcp_server_session'))) {
                 // Rebuild the HttpServerSession from the array
                 $restored = HttpServerSession::fromArray(
                     $savedState,
@@ -197,8 +211,10 @@ class HttpServerRunner extends ServerRunner
                 // Mcp-Session-Id is echoed and nothing is persisted — the
                 // ephemeral processing context is deleted outright (its id
                 // was never disclosed, so no client could ever reach it).
+                // The SEP-2575 HTTP error statuses were already applied by
+                // the transport from the structured hint the session
+                // stamped on the response message.
                 $this->transport->discardSession($httpSession);
-                $this->applyStatelessErrorStatus($response);
                 return $response;
             }
 
@@ -216,43 +232,6 @@ class HttpServerRunner extends ServerRunner
         return HttpMessage::createJsonResponse(['error' => 'No valid session'], 400);
     }
     
-    /**
-     * Map modern JSON-RPC error codes onto the HTTP status SEP-2575
-     * mandates for the sessionless lifecycle: a malformed `_meta` envelope
-     * (-32602), a missing required client capability (-32003), and an
-     * unsupported protocol version (-32004) are all 400 Bad Request.
-     *
-     * Applied only on the sessionless (server/discover) path in WS1; the
-     * status mapping for the general per-request modern path (including the
-     * 404 for removed methods) lands with WS2's era detection.
-     */
-    private function applyStatelessErrorStatus(HttpMessage $response): void
-    {
-        if ($response->getStatusCode() !== 200) {
-            return;
-        }
-
-        $body = $response->getBody();
-        if ($body === null || $body === '') {
-            return;
-        }
-
-        $decoded = json_decode($body, true);
-        if (!is_array($decoded)) {
-            return;
-        }
-
-        $code = $decoded['error']['code'] ?? null;
-        $badRequestCodes = [
-            -32602, // Invalid params (malformed _meta envelope)
-            \Mcp\Shared\McpError::MISSING_REQUIRED_CLIENT_CAPABILITY,
-            \Mcp\Shared\McpError::UNSUPPORTED_PROTOCOL_VERSION,
-        ];
-        if (in_array($code, $badRequestCodes, true)) {
-            $response->setStatusCode(400);
-        }
-    }
-
     /**
      * Send an HTTP response.
      *

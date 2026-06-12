@@ -146,6 +146,18 @@ class Client {
      * @param array<string, mixed>|null    $env          Environment variables for the command (if using STDIO transport)
      *                                                   or HTTP configuration options (if using HTTP transport).
      * @param float|null                   $readTimeout  Timeout for reading messages.
+     * @param string                       $protocolMode Era negotiation mode (SEP-2575): 'auto' probes
+     *                                                   `server/discover` first and falls back to the legacy
+     *                                                   initialize handshake when the server is legacy;
+     *                                                   'legacy' skips the probe (for servers known to
+     *                                                   predate 2026-07-28, or fragile ones that mishandle
+     *                                                   unknown pre-initialize requests); 'modern' forbids
+     *                                                   the legacy fallback. For HTTP, may also be supplied
+     *                                                   as $env['protocolMode'], which takes precedence.
+     * @param float|null                   $probeTimeout Seconds to wait for the discover probe before
+     *                                                   concluding the server is a silent legacy server
+     *                                                   (defaults to $readTimeout, or 10s when unset). For
+     *                                                   HTTP, may also be supplied as $env['probeTimeout'].
      *
      * @throws InvalidArgumentException If the command or URL is invalid.
      * @throws RuntimeException         If the connection fails.
@@ -156,7 +168,9 @@ class Client {
         string $commandOrUrl,
         array $args = [],
         ?array $env = null,
-        ?float $readTimeout = null
+        ?float $readTimeout = null,
+        string $protocolMode = 'auto',
+        ?float $probeTimeout = null
     ): ClientSession {
         $urlParts = parse_url($commandOrUrl);
 
@@ -257,13 +271,49 @@ class Client {
                 );
             }
 
-            // Initialize the session (e.g., perform handshake if necessary)
-            $this->session->initialize();
-            $this->logger->info('Session initialized successfully');
-
-            // For HTTP transports, feed the negotiated protocol version back to
-            // the session manager so it's included in subsequent request headers
+            // Negotiate the protocol era (SEP-2575): probe server/discover
+            // first and fall back to the legacy initialize handshake when
+            // the server is legacy, honoring the requested protocol mode.
+            // HTTP options may override the mode/timeout parameters.
+            //
+            // On HTTP the probe timeout must also bound the transport: a
+            // synchronous POST blocks in cURL for the transport's full read
+            // timeout, so a server that never answers the probe would
+            // otherwise stall negotiation far past the configured probe
+            // timeout. The bound applies only to requests carrying the
+            // modern _meta envelope (the probes), so the legacy fallback
+            // initialize keeps the normal timeout; a timed-out probe throws
+            // HttpRequestTimeoutException, which negotiate() classifies as
+            // a silent legacy server.
             if ($this->transport instanceof StreamableHttpTransport) {
+                $httpOptions = $env ?? [];
+                $protocolMode = $httpOptions['protocolMode'] ?? $protocolMode;
+                $probeTimeout = $httpOptions['probeTimeout'] ?? $probeTimeout;
+                if ($protocolMode !== 'legacy') {
+                    $this->transport->setProbeTimeout(
+                        $probeTimeout ?? $readTimeout ?? ClientSession::DEFAULT_PROBE_TIMEOUT
+                    );
+                }
+            }
+            try {
+                $era = $this->session->negotiate($protocolMode, $probeTimeout);
+            } finally {
+                if ($this->transport instanceof StreamableHttpTransport) {
+                    $this->transport->setProbeTimeout(null);
+                }
+            }
+            $this->logger->info("Session negotiated successfully (era: {$era})");
+
+            // For HTTP transports on the LEGACY era, feed the negotiated
+            // protocol version back to the session manager so it's included
+            // in subsequent request headers, and open the standalone GET SSE
+            // stream. On the modern era neither applies: the
+            // MCP-Protocol-Version header is mirrored per-request from the
+            // _meta envelope by the transport, there is no session id, and
+            // the standalone GET stream does not exist on the 2026-07-28
+            // path (its replacement, subscriptions/listen, arrives with the
+            // WS3 transport changes).
+            if ($this->transport instanceof StreamableHttpTransport && $era === 'legacy') {
                 $this->transport->getSessionManager()->setProtocolVersion(
                     $this->session->getNegotiatedProtocolVersion()
                 );

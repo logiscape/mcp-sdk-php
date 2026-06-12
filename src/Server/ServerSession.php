@@ -95,6 +95,55 @@ class ServerSession extends BaseSession {
     /** Whether sendRequest() should be allowed to wait for client responses (used for elicitation in stdio mode). */
     protected bool $allowClientResponses = false;
 
+    /**
+     * Whether the transport identified the current request as modern-era
+     * from its own version metadata (the MCP-Protocol-Version header,
+     * SEP-2575). Lets the session reject a header-declared modern request
+     * whose body lacks the required `_meta` envelope with the spec's
+     * -32602 instead of misrouting it down the legacy path. Set per
+     * request by the HTTP runner; stdio has no out-of-band metadata, so
+     * detection there rests on the envelope alone.
+     */
+    protected bool $transportDeclaredModern = false;
+
+    /** Whether the request currently being handled selected the modern era. */
+    protected bool $currentRequestModern = false;
+
+    /**
+     * The raw wire-level `_meta` of the message currently being processed,
+     * captured before typed request/notification construction. Era
+     * detection falls back to it because some typed families (e.g.
+     * InitializedNotification) do not carry params at all — the envelope
+     * must still select the era even when the typed object dropped it.
+     */
+    protected ?Meta $currentRawMeta = null;
+
+    /**
+     * Methods removed from the protocol surface by the 2026-07-28
+     * revision (SEP-2575 "Deprecated and Removed RPCs"). On the modern
+     * path they are answered with -32601 Method not found (HTTP 404),
+     * never dispatched — even though legacy handlers for them remain
+     * registered. `roots/list` is also removed but is a server→client
+     * request and can never arrive here.
+     */
+    protected const MODERN_REMOVED_METHODS = [
+        'initialize',
+        'ping',
+        'logging/setLevel',
+        'resources/subscribe',
+        'resources/unsubscribe',
+    ];
+
+    /**
+     * Notifications removed by the 2026-07-28 revision. A notification
+     * cannot be answered, so on the modern path these are ignored with a
+     * log line instead of dispatched.
+     */
+    protected const MODERN_REMOVED_NOTIFICATIONS = [
+        'notifications/initialized',
+        'notifications/roots/list_changed',
+    ];
+
     public function __construct(
         protected readonly Transport $transport,
         protected readonly InitializationOptions $initOptions,
@@ -210,8 +259,102 @@ class ServerSession extends BaseSession {
     }
 
     /**
-     * Handle incoming requests. If it's the initialize request, handle it specially.
-     * Otherwise, ensure initialization is complete before handling other requests.
+     * Intake override: capture the raw wire `_meta` for era detection
+     * before typed construction can drop it, and convert typed-construction
+     * failures into proper JSON-RPC answers instead of crashes.
+     *
+     * Typed request construction throws InvalidArgumentException for
+     * unknown methods and for known methods missing required params. The
+     * spec requires answering those — -32601 Method not found for unknown
+     * (and, on the modern path, removed) methods; -32602 Invalid params
+     * for malformed known methods — with the original request id, on both
+     * eras. Letting the exception escape the read loop would tear down the
+     * request with no JSON-RPC response at all.
+     */
+    protected function handleIncomingMessage(JsonRpcMessage $message): void {
+        $inner = $message->message;
+
+        if ($inner instanceof JSONRPCNotification) {
+            $this->currentRawMeta = $inner->params?->_meta;
+            try {
+                parent::handleIncomingMessage($message);
+            } finally {
+                $this->currentRawMeta = null;
+            }
+            return;
+        }
+
+        if (!($inner instanceof \Mcp\Types\JSONRPCRequest)) {
+            parent::handleIncomingMessage($message);
+            return;
+        }
+
+        $this->currentRawMeta = $inner->params?->_meta;
+        try {
+            parent::handleIncomingMessage($message);
+        } catch (InvalidArgumentException $e) {
+            $this->answerMalformedRequest($inner, $e);
+        } finally {
+            $this->currentRawMeta = null;
+        }
+    }
+
+    /**
+     * Answer a request whose typed construction failed: -32601 for
+     * unknown methods (and removed methods on the modern path, whatever
+     * params they carried), -32602 for known methods with invalid params.
+     * On the modern path the SEP-2575 pre-dispatch checks run FIRST, so a
+     * broken envelope or unsupported version is rejected as malformed
+     * (-32602/-32004, HTTP 400) before any method routing — the same
+     * ordering handleModernRequest applies to well-formed requests. The
+     * modern-era flag is set from the raw wire metadata so the HTTP
+     * status hints (404/400) ride along on the stateless path.
+     */
+    private function answerMalformedRequest(\Mcp\Types\JSONRPCRequest $inner, InvalidArgumentException $e): void {
+        $method = $inner->method;
+        $isModern = $this->transportDeclaredModern
+            || $method === 'server/discover'
+            || self::metaCarriesModernEnvelope($inner->params?->_meta);
+        $isUnknownMethod = str_contains($e->getMessage(), 'Unknown client request method');
+        $isRemovedModern = $isModern && in_array($method, self::MODERN_REMOVED_METHODS, true);
+
+        $this->currentRequestModern = $isModern;
+        try {
+            if ($isModern) {
+                $preDispatchError = $this->modernEnvelopePreDispatchError($inner->params?->_meta, $method);
+                if ($preDispatchError !== null) {
+                    $this->sendResponse($inner->id, $preDispatchError);
+                    return;
+                }
+            }
+            if ($isUnknownMethod || $isRemovedModern) {
+                $this->sendResponse($inner->id, new \Mcp\Shared\ErrorData(
+                    code: -32601,
+                    message: "Method not found: {$method}"
+                        . ($isRemovedModern ? ' (removed in the 2026-07-28 revision)' : '')
+                ));
+            } else {
+                $this->sendResponse($inner->id, new \Mcp\Shared\ErrorData(
+                    code: -32602,
+                    message: 'Invalid params: ' . $e->getMessage()
+                ));
+            }
+        } finally {
+            $this->currentRequestModern = false;
+        }
+    }
+
+    /**
+     * Handle incoming requests, selecting the protocol era per request
+     * (SEP-2575 dual-era detection).
+     *
+     * A request carrying the modern per-request `_meta` envelope — or
+     * arriving on a transport that declared the modern era from its own
+     * version metadata (the MCP-Protocol-Version header) — is served
+     * statelessly under the 2026-07-28 rules, even when its method names a
+     * legacy construct like `initialize` (which is a removed method on
+     * that path). An `initialize` request without modern metadata selects
+     * legacy semantics. The session id is never part of this decision.
      *
      * @param RequestResponder $responder The request responder wrapping the client request.
      */
@@ -221,17 +364,34 @@ class ServerSession extends BaseSession {
         $method = $actualRequest->method;
         $params = $actualRequest->params ?? null;
 
-        if ($method === 'initialize') {
-            $respond = fn($result) => $responder->sendResponse($result);
-            $this->handleInitialize($request, $respond);
+        if ($this->isModernEraRequest($method, $params)) {
+            // The era a modern request adopts (negotiated version, client
+            // info/capabilities, readiness) holds for exactly this
+            // request's processing and is restored afterwards (SEP-2567:
+            // nothing persists across requests). Without the restore, a
+            // modern request would leave the session marked initialized,
+            // letting a later bare (unenveloped, never-initialized) legacy
+            // request through the handshake gate — and a modern request on
+            // a legacy-initialized stdio session would clobber that
+            // session's negotiated state.
+            $savedState = $this->initializationState;
+            $savedVersion = $this->negotiatedProtocolVersion;
+            $savedClientParams = $this->clientParams;
+            $this->currentRequestModern = true;
+            try {
+                $this->handleModernRequest($method, $params, $responder);
+            } finally {
+                $this->currentRequestModern = false;
+                $this->initializationState = $savedState;
+                $this->negotiatedProtocolVersion = $savedVersion;
+                $this->clientParams = $savedClientParams;
+            }
             return;
         }
 
-        // server/discover (SEP-2575) is self-contained: it carries its own
-        // _meta envelope and is answered regardless of legacy initialization
-        // state — the 2026-07-28 lifecycle has no handshake to wait for.
-        if ($method === 'server/discover') {
-            $this->handleDiscover($params, fn($result) => $responder->sendResponse($result));
+        if ($method === 'initialize') {
+            $respond = fn($result) => $responder->sendResponse($result);
+            $this->handleInitialize($request, $respond);
             return;
         }
 
@@ -239,7 +399,15 @@ class ServerSession extends BaseSession {
             throw new \RuntimeException('Received request before initialization was complete');
         }
 
-        // Now we integrate the method-specific handlers:
+        $this->dispatchRegisteredHandler($method, $params, $responder);
+    }
+
+    /**
+     * Dispatch a request to the method-keyed handlers registered via
+     * registerHandlers(). Shared by the legacy and modern dispatch paths;
+     * HttpServerSession extends it with the HTTP suspend/resume catches.
+     */
+    protected function dispatchRegisteredHandler(string $method, ?RequestParams $params, RequestResponder $responder): void {
         if (isset($this->methodRequestHandlers[$method])) {
             $this->logger->info("Calling handler for method: $method");
             $handler = $this->methodRequestHandlers[$method];
@@ -277,6 +445,23 @@ class ServerSession extends BaseSession {
         // 2) Retrieve the method from the typed notification
         $method = $actualNotification->method;
 
+        // SEP-2575 era detection mirrors handleRequest(): a notification
+        // carrying the modern envelope (or arriving on a transport that
+        // declared the modern era) is processed statelessly — no handshake
+        // gate, and the notifications the revision removed are ignored
+        // (a notification cannot be answered with an error).
+        $isModern = $this->transportDeclaredModern
+            || self::metaCarriesModernEnvelope($actualNotification->params?->_meta ?? null)
+            || self::metaCarriesModernEnvelope($this->currentRawMeta);
+        if ($isModern) {
+            if (in_array($method, self::MODERN_REMOVED_NOTIFICATIONS, true)) {
+                $this->logger->warning("Ignoring notification removed in the 2026-07-28 revision: $method");
+                return;
+            }
+            $this->dispatchRegisteredNotificationHandler($method, $actualNotification);
+            return;
+        }
+
         if ($method === 'notifications/initialized') {
             $this->initializationState = InitializationState::Initialized;
             $this->logger->info('Client has completed initialization.');
@@ -287,7 +472,14 @@ class ServerSession extends BaseSession {
             throw new RuntimeException('Received notification before initialization was complete');
         }
 
-        // Dispatch to registered notification handlers
+        $this->dispatchRegisteredNotificationHandler($method, $actualNotification);
+    }
+
+    /**
+     * Dispatch a notification to the method-keyed handlers registered via
+     * registerNotificationHandlers(). Shared by the legacy and modern paths.
+     */
+    protected function dispatchRegisteredNotificationHandler(string $method, Notification $actualNotification): void {
         if (isset($this->methodNotificationHandlers[$method])) {
             $this->logger->info("Calling notification handler for method: $method");
             $handler = $this->methodNotificationHandlers[$method];
@@ -372,41 +564,159 @@ class ServerSession extends BaseSession {
     }
 
     /**
-     * Handle the `server/discover` request (SEP-2575, revision 2026-07-28).
+     * Whether a request selects the 2026-07-28 modern era (SEP-2575).
      *
-     * The capabilities advertised here are the same object the legacy
-     * initialize result advertises (InitializationOptions::capabilities,
-     * built from Server::getCapabilities()), so the two discovery surfaces
-     * can never disagree.
-     *
-     * @param RequestParams|null $params The request params (carrying the _meta envelope)
-     * @param callable $respond Responder receiving a DiscoverResult or ErrorData
+     * Modern iff: the transport declared the era from its version
+     * metadata, the method is `server/discover` (a modern-only construct,
+     * self-contained by design), or the params carry any of the modern
+     * `_meta` envelope keys. Envelope detection is per-key rather than
+     * requiring the full envelope so a *partial* envelope is routed to
+     * modern validation (yielding the spec's precise -32602) instead of
+     * the legacy path. The bare trace-context keys (SEP-414) are not
+     * envelope keys and never trigger detection.
      */
-    protected function handleDiscover(?RequestParams $params, callable $respond): void {
-        $envelopeError = $this->validateModernRequestMeta($params);
-        if ($envelopeError !== null) {
-            $respond($envelopeError);
+    protected function isModernEraRequest(string $method, ?RequestParams $params): bool {
+        if ($this->transportDeclaredModern || $method === 'server/discover') {
+            return true;
+        }
+        return self::metaCarriesModernEnvelope($params?->_meta)
+            || self::metaCarriesModernEnvelope($this->currentRawMeta);
+    }
+
+    /**
+     * Whether a _meta payload carries any SEP-2575 envelope key.
+     */
+    protected static function metaCarriesModernEnvelope(?Meta $meta): bool {
+        if ($meta === null) {
+            return false;
+        }
+        $fields = $meta->getExtraFields();
+        return array_key_exists(MetaKeys::PROTOCOL_VERSION, $fields)
+            || array_key_exists(MetaKeys::CLIENT_INFO, $fields)
+            || array_key_exists(MetaKeys::CLIENT_CAPABILITIES, $fields);
+    }
+
+    /**
+     * Serve a request under the 2026-07-28 stateless rules (SEP-2575).
+     *
+     * Order of checks follows the spec: the `_meta` envelope must be
+     * complete and well-formed (-32602), its protocol version must be one
+     * the server can serve on this path (-32004 with data.supported/
+     * requested), and only then is the method routed — removed-method and
+     * unknown-method requests get -32601. The era, client info, and
+     * client capabilities adopted from the envelope hold for exactly this
+     * request's processing; nothing is persisted across requests
+     * (SEP-2567).
+     */
+    protected function handleModernRequest(string $method, ?RequestParams $params, RequestResponder $responder): void {
+        $respond = fn($result) => $responder->sendResponse($result);
+
+        // Validate against the typed params' _meta, falling back to the
+        // raw wire _meta for typed families that do not carry params.
+        $meta = $params?->_meta ?? $this->currentRawMeta;
+
+        $preDispatchError = $this->modernEnvelopePreDispatchError($meta, $method);
+        if ($preDispatchError !== null) {
+            $respond($preDispatchError);
             return;
         }
 
         /** @var Meta $meta */
-        $meta = $params->_meta;
         $requestedVersion = $meta->getExtraFields()[MetaKeys::PROTOCOL_VERSION];
 
-        if (!in_array($requestedVersion, Version::SUPPORTED_PROTOCOL_VERSIONS, true)) {
+        $this->adoptModernRequestState($requestedVersion, $meta);
+
+        if ($method === 'server/discover') {
+            $this->handleDiscover($respond);
+            return;
+        }
+
+        if (in_array($method, self::MODERN_REMOVED_METHODS, true)) {
             $respond(new \Mcp\Shared\ErrorData(
-                code: \Mcp\Shared\McpError::UNSUPPORTED_PROTOCOL_VERSION,
-                message: 'Unsupported protocol version',
-                data: [
-                    'supported' => Version::SUPPORTED_PROTOCOL_VERSIONS,
-                    'requested' => $requestedVersion,
-                ],
+                code: -32601,
+                message: "Method not found: {$method} (removed in the 2026-07-28 revision)"
             ));
             return;
         }
 
+        $this->dispatchRegisteredHandler($method, $params, $responder);
+    }
+
+    /**
+     * Adopt the era a modern request declared in its envelope for the
+     * duration of this request's processing: the canonical negotiated
+     * version (the RC-window draft alias maps onto 2026-07-28 for all
+     * internal feature gating), readiness (the stateless lifecycle has no
+     * handshake to wait for), and the request's own client info and
+     * capabilities — the spec forbids inferring capabilities from prior
+     * requests, so each request's envelope fully replaces the previous
+     * state.
+     */
+    protected function adoptModernRequestState(string $wireVersion, Meta $meta): void {
+        if (!Version::isModernVersion($wireVersion)) {
+            // server/discover may carry a legacy revision in its envelope;
+            // there is no era to adopt from it.
+            return;
+        }
+        $fields = $meta->getExtraFields();
+        $this->negotiatedProtocolVersion = Version::canonicalizeVersion($wireVersion);
+        $this->initializationState = InitializationState::Initialized;
+        $this->clientParams = new InitializeRequestParams(
+            protocolVersion: $this->negotiatedProtocolVersion,
+            capabilities: self::clientCapabilitiesFromEnvelopeValue($fields[MetaKeys::CLIENT_CAPABILITIES]),
+            clientInfo: self::implementationFromEnvelopeValue($fields[MetaKeys::CLIENT_INFO]),
+        );
+    }
+
+    /**
+     * Coerce a validated _meta clientInfo value into an Implementation.
+     */
+    private static function implementationFromEnvelopeValue(mixed $value): Implementation {
+        if ($value instanceof Implementation) {
+            return $value;
+        }
+        if ($value instanceof \stdClass) {
+            $value = (array) $value;
+        }
+        return new Implementation(
+            name: (string) ($value['name'] ?? ''),
+            version: (string) ($value['version'] ?? '')
+        );
+    }
+
+    /**
+     * Coerce a validated _meta clientCapabilities value into a
+     * ClientCapabilities instance.
+     */
+    private static function clientCapabilitiesFromEnvelopeValue(mixed $value): ClientCapabilities {
+        if ($value instanceof ClientCapabilities) {
+            return $value;
+        }
+        if ($value instanceof \stdClass) {
+            // Normalize nested stdClass (in-process callers) to arrays.
+            $value = json_decode(json_encode($value), true);
+        }
+        if (!is_array($value)) {
+            return new ClientCapabilities();
+        }
+        return ClientCapabilities::fromArray($value);
+    }
+
+    /**
+     * Handle the `server/discover` request (SEP-2575, revision 2026-07-28).
+     *
+     * Reached only through handleModernRequest(), which has already
+     * validated the _meta envelope and the requested version. The
+     * capabilities advertised here are the same object the legacy
+     * initialize result advertises (InitializationOptions::capabilities,
+     * built from Server::getCapabilities()), so the two discovery surfaces
+     * can never disagree.
+     *
+     * @param callable $respond Responder receiving a DiscoverResult or ErrorData
+     */
+    protected function handleDiscover(callable $respond): void {
         $result = new DiscoverResult(
-            supportedVersions: Version::SUPPORTED_PROTOCOL_VERSIONS,
+            supportedVersions: Version::advertisedSupportedVersions(),
             capabilities: $this->initOptions->capabilities,
             serverInfo: new Implementation(
                 name: $this->initOptions->serverName,
@@ -426,14 +736,53 @@ class ServerSession extends BaseSession {
     }
 
     /**
+     * The SEP-2575 checks that precede method routing on the modern path:
+     * the `_meta` envelope must be complete and well-formed (-32602), and
+     * its protocol version must be one the server can serve on this path
+     * (-32004 with data.supported/requested). Shared by the typed dispatch
+     * (handleModernRequest) and the malformed-request answer path
+     * (answerMalformedRequest), so an unknown or removed method with a
+     * broken envelope is still rejected as malformed (400) rather than
+     * answered -32601 (404) — envelope validation comes first for every
+     * method.
+     *
+     * server/discover answers for every advertised revision — it is the
+     * discovery surface for both eras. Every other modern request is
+     * servable only under a modern wire identifier (including the
+     * RC-window draft alias).
+     */
+    protected function modernEnvelopePreDispatchError(?Meta $meta, string $method): ?\Mcp\Shared\ErrorData {
+        $envelopeError = $this->validateModernRequestMeta($meta);
+        if ($envelopeError !== null) {
+            return $envelopeError;
+        }
+
+        $requestedVersion = $meta->getExtraFields()[MetaKeys::PROTOCOL_VERSION];
+        $acceptedVersions = $method === 'server/discover'
+            ? Version::advertisedSupportedVersions()
+            : Version::MODERN_PROTOCOL_VERSIONS;
+        if (!in_array($requestedVersion, $acceptedVersions, true)) {
+            return new \Mcp\Shared\ErrorData(
+                code: \Mcp\Shared\McpError::UNSUPPORTED_PROTOCOL_VERSION,
+                message: 'Unsupported protocol version',
+                data: [
+                    'supported' => $acceptedVersions,
+                    'requested' => $requestedVersion,
+                ],
+            );
+        }
+
+        return null;
+    }
+
+    /**
      * Validate the SEP-2575 per-request `_meta` envelope.
      *
      * @return \Mcp\Shared\ErrorData|null An InvalidParams (-32602) error
      *         naming the missing/invalid field, or null when the envelope
      *         is valid.
      */
-    protected function validateModernRequestMeta(?RequestParams $params): ?\Mcp\Shared\ErrorData {
-        $meta = $params?->_meta;
+    protected function validateModernRequestMeta(?Meta $meta): ?\Mcp\Shared\ErrorData {
         if ($meta === null) {
             return new \Mcp\Shared\ErrorData(
                 code: -32602,
@@ -446,16 +795,21 @@ class ServerSession extends BaseSession {
             MetaKeys::CLIENT_INFO,
             MetaKeys::CLIENT_CAPABILITIES,
         ];
+        $fields = $meta->getExtraFields();
         foreach ($required as $key) {
-            if (!isset($meta->{$key})) {
+            if (!array_key_exists($key, $fields)) {
                 return new \Mcp\Shared\ErrorData(
                     code: -32602,
                     message: "Invalid params: missing required _meta field: {$key}"
                 );
             }
+            if ($fields[$key] === null) {
+                return new \Mcp\Shared\ErrorData(
+                    code: -32602,
+                    message: "Invalid params: _meta field {$key} must not be null"
+                );
+            }
         }
-
-        $fields = $meta->getExtraFields();
 
         $version = $fields[MetaKeys::PROTOCOL_VERSION];
         if (!is_string($version) || $version === '') {
@@ -573,6 +927,7 @@ class ServerSession extends BaseSession {
         // Check that the client supports elicitation at all
         $requiredCap = new ClientCapabilities(elicitation: new ElicitationCapability());
         if (!$this->checkClientCapability($requiredCap)) {
+            $this->raiseMissingClientCapabilityIfModern(['elicitation']);
             $this->logger->info('Client does not support elicitation');
             return null;
         }
@@ -686,6 +1041,7 @@ class ServerSession extends BaseSession {
         // Client must declare the sampling capability.
         $requiredCap = new ClientCapabilities(sampling: new SamplingCapability());
         if (!$this->checkClientCapability($requiredCap)) {
+            $this->raiseMissingClientCapabilityIfModern(['sampling']);
             $this->logger->info('Client does not support sampling');
             return null;
         }
@@ -881,6 +1237,46 @@ class ServerSession extends BaseSession {
     }
 
     /**
+     * Enforce SEP-2575's missing-capability rule for the modern path: a
+     * server MUST NOT rely on capabilities the request's `_meta` envelope
+     * did not declare — when processing requires one, the request fails
+     * with MissingRequiredClientCapabilityError (-32003, listing the
+     * capabilities in data.requiredCapabilities; HTTP 400) rather than
+     * degrading silently. On legacy revisions this is a no-op: the
+     * pre-2026 contract is "MUST NOT send without capability", which the
+     * callers honor by returning null so handlers can fall back.
+     *
+     * Wire shape: `data.requiredCapabilities` is a ClientCapabilities
+     * OBJECT (e.g. `{"sampling": {}}`), per the SEP-2575 final text, the
+     * draft schema's canonical example
+     * (`MissingRequiredClientCapabilityError/missing-elicitation-capability.json`),
+     * and the TypeScript SDK v2 types. Note: the pinned draft conformance
+     * tool (0.2.0-alpha.2, and its `main` as of 2026-06-12) asserts a
+     * string array instead — a known upstream tool bug, documented in
+     * conformance/conformance-draft-baseline.yml; the official text wins.
+     *
+     * @param string[] $requiredCapabilities Capability names (e.g. ['sampling'])
+     * @throws \Mcp\Shared\McpError When the current request selected the modern era.
+     */
+    public function raiseMissingClientCapabilityIfModern(array $requiredCapabilities): void {
+        if (!$this->currentRequestModern) {
+            return;
+        }
+        // Each required capability becomes an empty capability object,
+        // mirroring how a client would have declared it (stdClass so empty
+        // objects serialize as {} rather than []).
+        $capabilitiesObject = [];
+        foreach ($requiredCapabilities as $capability) {
+            $capabilitiesObject[$capability] = new \stdClass();
+        }
+        throw new \Mcp\Shared\McpError(new \Mcp\Shared\ErrorData(
+            code: \Mcp\Shared\McpError::MISSING_REQUIRED_CLIENT_CAPABILITY,
+            message: 'Missing required client capability: ' . implode(', ', $requiredCapabilities),
+            data: ['requiredCapabilities' => (object) $capabilitiesObject],
+        ));
+    }
+
+    /**
      * Set the negotiated protocol version directly, without a handshake.
      *
      * This is the seam for the 2026-07-28 stateless path, where there is no
@@ -893,6 +1289,7 @@ class ServerSession extends BaseSession {
      * @internal Intended for the SDK's own era detection and for tests.
      */
     public function setNegotiatedProtocolVersion(string $version): void {
+        $version = Version::canonicalizeVersion($version);
         if (!in_array($version, Version::SUPPORTED_PROTOCOL_VERSIONS, true)) {
             throw new InvalidArgumentException("Unsupported protocol version: {$version}");
         }
@@ -900,6 +1297,20 @@ class ServerSession extends BaseSession {
         if (Version::supportsFeature($version, 'stateless_lifecycle')) {
             $this->initializationState = InitializationState::Initialized;
         }
+    }
+
+    /**
+     * Declare that the transport identified the current request as
+     * modern-era from its own version metadata (SEP-2575) — for HTTP, an
+     * MCP-Protocol-Version header carrying a modern wire identifier. Set
+     * per request by the HTTP runner so a modern request whose body lacks
+     * the `_meta` envelope still reaches modern validation (-32602)
+     * instead of the legacy path.
+     *
+     * @internal Intended for the SDK's own runners and for tests.
+     */
+    public function declareTransportModernEra(bool $modern = true): void {
+        $this->transportDeclaredModern = $modern;
     }
 
     /**
@@ -913,6 +1324,14 @@ class ServerSession extends BaseSession {
         // requires on every result instead of stripping anything.
         if (Version::supportsFeature($this->negotiatedProtocolVersion, 'stateless_lifecycle')) {
             return $this->adaptResultForModernClient($response);
+        }
+
+        // DiscoverResult is a modern-only construct: its resultType and
+        // cache hints are required wire fields regardless of what legacy
+        // revision this session happens to have negotiated (e.g. a probe
+        // arriving on an already-initialized stdio session). Never strip it.
+        if ($response instanceof DiscoverResult) {
+            return $response;
         }
 
         // Legacy path: remove fields that did not exist before 2026-07-28.
@@ -1131,7 +1550,16 @@ class ServerSession extends BaseSession {
 
     protected function writeMessage(JsonRpcMessage $message): void {
         $innerMessage = $message->message;
-        
+
+        // SEP-2575 HTTP status mapping: on the modern stateless path,
+        // certain JSON-RPC errors must ride specific HTTP statuses. Stamp
+        // the structured hint here — the single choke point every modern
+        // error response passes through — and let the HTTP transport apply
+        // it when building the response. Non-HTTP transports ignore it.
+        if ($this->currentRequestModern && $innerMessage instanceof JSONRPCError) {
+            $message->httpStatusHint = self::modernErrorHttpStatus($innerMessage->error->code);
+        }
+
         // Apply adapters for responses based on client protocol version
         if ($innerMessage instanceof JSONRPCResponse && $this->initializationState === InitializationState::Initialized) {
             $responseResult = $innerMessage->result;
@@ -1149,6 +1577,25 @@ class ServerSession extends BaseSession {
         }
         
         $this->transport->writeMessage($message);
+    }
+
+    /**
+     * The HTTP status SEP-2575 mandates for a JSON-RPC error code on the
+     * modern stateless path: malformed envelope (-32602), header mismatch
+     * (-32001), missing required client capability (-32003), and
+     * unsupported protocol version (-32004) are 400 Bad Request; an
+     * unknown or removed method (-32601) is 404 Not Found. Every other
+     * error rides the default 200.
+     */
+    protected static function modernErrorHttpStatus(int $code): ?int {
+        return match ($code) {
+            -32601 => 404,
+            -32602,
+            \Mcp\Shared\McpError::HEADER_MISMATCH,
+            \Mcp\Shared\McpError::MISSING_REQUIRED_CLIENT_CAPABILITY,
+            \Mcp\Shared\McpError::UNSUPPORTED_PROTOCOL_VERSION => 400,
+            default => null,
+        };
     }
 
     protected function waitForResponse(int $requestIdValue, string $resultType, ?\Mcp\Types\Result &$futureResult): \Mcp\Types\Result {

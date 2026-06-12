@@ -977,8 +977,17 @@ class McpServer
                 $result = $handler($arguments, $meta);
             } catch (ClientRequestSuspendException $e) {
                 throw $e; // Must propagate to HttpServerSession for suspend/resume
-            } catch (McpServerException $e) {
-                throw $e; // Programming errors should propagate
+            } catch (\Mcp\Shared\McpError $e) {
+                // Protocol-level errors must surface as JSON-RPC errors,
+                // never as isError tool results: McpServerException
+                // (programming errors, -32042 URL elicitation) and the
+                // SDK-raised SEP-2575 errors alike — e.g. the -32003
+                // MissingRequiredClientCapabilityError thrown by the
+                // sampling/elicitation capability guards on the modern
+                // path, which the spec requires on the wire with HTTP 400.
+                // Only tool EXECUTION failures below become isError
+                // results.
+                throw $e;
             } catch (\Throwable $e) {
                 return new CallToolResult(
                     content: [new TextContent(text: 'Error: ' . $e->getMessage())],

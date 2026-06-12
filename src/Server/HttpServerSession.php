@@ -178,38 +178,19 @@ class HttpServerSession extends ServerSession
     }
 
     /**
-     * Override handleRequest to catch ElicitationSuspendException in HTTP mode.
+     * Override the registered-handler dispatch to catch the HTTP
+     * suspend/resume exceptions. Era detection, the initialize/discover
+     * routing, and the modern stateless path all live in the parent's
+     * handleRequest(), which delegates here for both eras' handler
+     * dispatch.
      *
      * When a tool handler throws ElicitationSuspendException, we:
      * 1. Save the pending state so the next HTTP request can resume
      * 2. Write the elicitation/create request to the outgoing queue
      * 3. Do NOT respond to the original tools/call request (deferred)
      */
-    public function handleRequest(RequestResponder $responder): void
+    protected function dispatchRegisteredHandler(string $method, ?RequestParams $params, RequestResponder $responder): void
     {
-        $request = $responder->getRequest();
-        $actualRequest = $request->getRequest();
-        $method = $actualRequest->method;
-        $params = $actualRequest->params ?? null;
-
-        if ($method === 'initialize') {
-            $respond = fn($result) => $responder->sendResponse($result);
-            $this->handleInitialize($request, $respond);
-            return;
-        }
-
-        // server/discover (SEP-2575) is self-contained: it carries its own
-        // _meta envelope and is answered regardless of legacy initialization
-        // state — the 2026-07-28 lifecycle has no handshake to wait for.
-        if ($method === 'server/discover') {
-            $this->handleDiscover($params, fn($result) => $responder->sendResponse($result));
-            return;
-        }
-
-        if ($this->initializationState !== InitializationState::Initialized) {
-            throw new \RuntimeException('Received request before initialization was complete');
-        }
-
         if (isset($this->methodRequestHandlers[$method])) {
             $this->logger->info("Calling handler for method: $method");
             $handler = $this->methodRequestHandlers[$method];

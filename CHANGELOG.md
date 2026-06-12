@@ -64,6 +64,59 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 - SEP-414: W3C Trace Context pass-through — the reserved bare
   `traceparent`/`tracestate`/`baggage` keys in `_meta` with a new
   `TraceContext` accessor class, no OpenTelemetry dependency.
+- **v2 WS2 — client/server negotiation.** Dual-era interoperability per
+  SEP-2575's detection rules. Server side: per-request era detection — a
+  request carrying the modern `_meta` envelope (or a modern
+  `MCP-Protocol-Version` header) is served statelessly under `2026-07-28`
+  semantics on a fresh ephemeral context (`Mcp-Session-Id` ignored, never
+  echoed), adopting protocol version, client info, and client capabilities
+  from that request's envelope; an `initialize` without modern metadata
+  selects legacy semantics unchanged. Removed methods (`initialize`,
+  `ping`, `logging/setLevel`, `resources/subscribe`/`unsubscribe`) and
+  unknown methods answer `-32601` with HTTP 404; envelope/version/
+  capability errors map to HTTP 400 via a structured status hint carried
+  on the response message (replacing the WS1 body-re-decoding shim);
+  missing client capabilities now fail modern requests with `-32003` and
+  `data.requiredCapabilities` instead of degrading silently. The RC-window
+  `DRAFT-2026-v1` identifier is accepted as an alias for `2026-07-28` on
+  the per-request path only (advertised in `supportedVersions` and
+  `-32004 data.supported`; never negotiable via `initialize`; retires at
+  the WS7 tool convergence). Client side:
+  `ClientSession::negotiate()`/`Client::connect()` probe
+  `server/discover` first and fall back to the legacy handshake per the
+  spec's rules — retry with an advertised version on `-32004` (never
+  falling back), no fallback on the other recognized modern errors, and
+  fallback on any other error or probe timeout; modern sessions stamp the
+  `_meta` envelope on every request with the `MCP-Protocol-Version` header
+  mirrored from it. `connect()` gains `protocolMode`
+  (`auto`/`legacy`/`modern`) and `probeTimeout` options. Covered by a
+  four-way era test matrix plus fallback-safety tests
+  (`tests/Server/ServerEraDetectionTest`, `tests/Server/HttpModernRequestTest`,
+  `tests/Client/ClientNegotiationTest`). Code-review hardening: the
+  adopted era is request-scoped (no modern state leaking into later bare
+  stdio requests, no clobbering of a legacy session's negotiated state);
+  envelope/version validation precedes method routing for unknown and
+  removed methods too; the modern HTTP response is always the single JSON
+  object the Streamable HTTP spec requires — the SEP-2575 status survives
+  an interleaved notification, and the notification itself is dropped
+  until WS3's request-scoped SSE / `subscriptions/listen` provide its
+  carrier (legacy multi-message behavior unchanged); and HTTP discover
+  probes are bounded by the probe timeout,
+  with cURL timeouts surfacing as the typed `HttpRequestTimeoutException`
+  that negotiation treats as a silent legacy server. Spec-shape
+  reconciliation (official text wins): `-32003`'s
+  `data.requiredCapabilities` is emitted as the ClientCapabilities OBJECT
+  the SEP-2575 final text and draft schema specify (e.g.
+  `{"sampling": {}}`), not the string array the pinned conformance tool
+  asserts — that divergence persists on conformance `main` (contradicting
+  its own vendored types) and is documented in the draft baseline as an
+  upstream tool bug. Investigating it also revealed `McpServer`'s
+  tools/call wrapper was converting SDK-raised `McpError`s into `isError`
+  tool results; it now propagates them as JSON-RPC protocol errors
+  (matching the existing `McpServerException` handling), so the SEP-2575
+  missing-capability error genuinely reaches the wire with HTTP 400 — an
+  API-visible change for tool handlers that deliberately throw `McpError`,
+  recorded for the WS10 migration guide.
 
 ### Changed
 
@@ -88,6 +141,25 @@ This file was introduced during the v1.7.x series. Structured entries below cove
   documented shared root cause (the draft tool's per-request stateless
   lifecycle needs WS2's era detection). v2 development plan updated with
   the WS1 status and spec-drift notes in the same change set.
+- HTTP client error handling brought to parity with stdio (WS2): JSON-RPC
+  error responses — including those delivered with the modern HTTP 400/404
+  statuses — now surface to callers as typed `Mcp\Shared\McpError` with
+  code and data intact, where the HTTP transport previously threw an opaque
+  `RuntimeException("Critical MCP error: …")`. A configured client
+  `readTimeout` is now also enforced against a peer that sends nothing at
+  all (previously the timeout could only fire between messages). Both are
+  wire-compatible behavior fixes; the `McpError` change is API-visible to
+  v1 code that caught `RuntimeException` from HTTP tool calls and is
+  recorded for the WS10 migration guide.
+- Draft conformance baseline re-curated for the WS2 milestone:
+  `sep-2164-resource-not-found` (3/3) and `caching` (7/7) pass and left the
+  baseline; `server-stateless` passes 16/17 and stays attributed to WS3 for
+  its remainder (the SEP-2243 header/`_meta` mismatch `-32001` check and
+  the `subscriptions/listen` list-changed SHOULD warnings);
+  `http-custom-header-server-validation` removed as inactive (its checks
+  only engage once an `x-mcp-header` tool exists — a WS3 deliverable). The
+  stable track stays regression-free (291 passed, up 4 from the typed-error
+  fix).
 
 ## [1.7.3]
 

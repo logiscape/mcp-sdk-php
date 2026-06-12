@@ -216,6 +216,29 @@ $server->tool('test_sampling', 'Requests LLM sampling via sampling/createMessage
     );
 });
 
+// Capability-requirement tool — exercised by the draft suite's SEP-2575
+// missing-capability checks: the stateless connector calls this tool with a
+// request envelope that deliberately omits the sampling capability and
+// expects MissingRequiredClientCapabilityError (-32003 with
+// data.requiredCapabilities, HTTP 400). The handler goes through the
+// ordinary SamplingContext SDK path — the error is raised inside the SDK
+// when the modern request's envelope lacks the capability, not fabricated
+// here; legacy clients keep the pre-2026 graceful-fallback contract.
+$server->tool('test_missing_capability', 'Requires the sampling client capability', function (SamplingContext $sampling): CallToolResult {
+    $response = $sampling->prompt('Capability check', maxTokens: 10);
+
+    if ($response === null) {
+        return new CallToolResult(
+            content: [new TextContent(text: 'Sampling is not supported by this client')],
+            isError: true,
+        );
+    }
+
+    return new CallToolResult(
+        content: [new TextContent(text: 'Sampling capability available')]
+    );
+});
+
 // Elicitation tool — uses ElicitationContext, which is the SDK's public API
 // for requesting user input. If it doesn't work in HTTP mode, the test fails.
 $server->tool('test_elicitation', 'Requests elicitation from the client', function (string $message, ElicitationContext $elicit): CallToolResult {

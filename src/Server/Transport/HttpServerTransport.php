@@ -31,6 +31,7 @@ use Mcp\Types\JSONRPCRequest;
 use Mcp\Types\JSONRPCNotification;
 use Mcp\Types\JSONRPCResponse;
 use Mcp\Types\JSONRPCError;
+use Mcp\Types\MetaKeys;
 use Mcp\Types\RequestId;
 use Mcp\Types\JsonRpcErrorObject;
 use Mcp\Shared\McpError;
@@ -248,9 +249,14 @@ class HttpServerTransport implements Transport
     public function start(): void
     {
         if ($this->isStarted) {
-            throw new \RuntimeException('Transport already started');
+            // Idempotent: the transport is owned by the runner and outlives
+            // individual MCP sessions. The 2026-07-28 sessionless lifecycle
+            // creates a fresh ephemeral session per modern request
+            // (SEP-2567), and each one's start() reaches here on the same
+            // already-started transport.
+            return;
         }
-        
+
         $this->isStarted = true;
         $this->lastSessionCleanup = time();
     }
@@ -384,21 +390,46 @@ class HttpServerTransport implements Transport
             return $rejection;
         }
 
-        // server/discover (SEP-2575) bypasses the legacy version-header gate:
-        // it carries its own _meta envelope, and the session answers an
-        // unsupported version with the spec's UnsupportedProtocolVersionError
-        // (-32004, original request id, data.supported/requested) instead of
-        // the transport's generic -32600/id:null. Mapping that error onto
-        // HTTP 400 and validating header-vs-_meta mismatch (-32001) are the
-        // WS2/WS3 milestones.
-        $isDiscoverPost = $this->isDiscoverRequest($request);
+        $method = strtoupper($request->getMethod() ?? '');
+
+        // Parse a POST body exactly once; every later consumer of the
+        // body's structure (era detection, initialize detection, the
+        // JSON-RPC processing in handlePostRequest) works from this single
+        // decode. A malformed body decodes to null here and is rejected
+        // with the 400 parse error inside handlePostRequest on the legacy
+        // path, exactly as before.
+        $decodedPostBody = null;
+        if ($method === 'POST') {
+            $body = $request->getBody();
+            if ($body !== null && $body !== '') {
+                $decoded = json_decode($body, true, 512);
+                if (is_array($decoded)) {
+                    $decodedPostBody = $decoded;
+                }
+            }
+        }
+
+        // SEP-2575 per-request era detection. A POST is modern when its
+        // MCP-Protocol-Version header carries a modern wire identifier
+        // (including the RC-window draft alias), when its body carries any
+        // modern _meta envelope key, or when it is a server/discover
+        // request (a modern-only construct). Modern requests bypass the
+        // legacy version-header gate — the session answers an unsupported
+        // version with the spec's UnsupportedProtocolVersionError (-32004,
+        // original request id, data.supported/requested) instead of the
+        // transport's generic -32600/id:null. Validating header-vs-_meta
+        // mismatch (-32001) is the WS3 milestone.
+        $headerVersion = $request->getHeader('MCP-Protocol-Version');
+        $headerDeclaresModern = $headerVersion !== null && Version::isModernVersion($headerVersion);
+        $isModernPost = $method === 'POST'
+            && ($headerDeclaresModern || $this->bodyCarriesModernSignal($decodedPostBody));
 
         // Spec 2025-11-25 §Transports: an invalid or unsupported
         // MCP-Protocol-Version header MUST be answered with 400 Bad Request.
         // Absence is handled leniently per the spec's backwards-compatibility
         // clause — the SDK's session already carries the negotiated version,
         // so there is no need to fabricate a fallback here.
-        if (!$isDiscoverPost && ($rejection = $this->validateProtocolVersionHeader($request))) {
+        if (!$isModernPost && ($rejection = $this->validateProtocolVersionHeader($request))) {
             return $rejection;
         }
 
@@ -410,29 +441,32 @@ class HttpServerTransport implements Transport
         // Extract session ID from request headers
         $sessionId = $request->getHeader('Mcp-Session-Id');
         $session = null;
-        $method = strtoupper($request->getMethod() ?? '');
-        $isInitializePost = $method === 'POST' && $this->isInitializeRequest($request);
+        $isInitializePost = $method === 'POST'
+            && $decodedPostBody !== null
+            && $this->isInitializeMessage($decodedPostBody);
 
-        // server/discover (SEP-2575) is part of the sessionless 2026-07-28
-        // lifecycle: it is processed on a fresh ephemeral context, any
-        // Mcp-Session-Id header on it is ignored rather than validated, and
-        // no session id is minted or echoed back (SEP-2567). The runner
-        // checks lastRequestSessionless() to skip the session-id header and
-        // to discard the ephemeral session instead of persisting it.
-        if ($isDiscoverPost) {
+        // Every modern request belongs to the sessionless 2026-07-28
+        // lifecycle (SEP-2567): it is processed on a fresh ephemeral
+        // context, any Mcp-Session-Id header on it is ignored rather than
+        // validated, and no session id is minted or echoed back. The
+        // runner checks lastRequestSessionless() to skip the session-id
+        // header and to discard the ephemeral session instead of
+        // persisting it.
+        if ($isModernPost) {
             $this->currentRequestSessionless = true;
             $session = $this->createSession();
             $this->currentSessionId = $session->getId();
             $this->lastUsedSession = $session;
 
-            $response = $this->handlePostRequest($request, $session);
+            $response = $this->handlePostRequest($request, $session, $decodedPostBody);
 
-            // Discover responses are never SSE-framed, even when the client
-            // accepts text/event-stream and SSE is enabled: the result is a
-            // single self-contained (and cacheable) document with no
-            // mid-request notifications, and the SEP-2575 error statuses
-            // (HTTP 400) can only be applied to a plain JSON response —
+            // Modern stateless responses are never SSE-framed in this
+            // milestone, even when the client accepts text/event-stream
+            // and SSE is enabled: the SEP-2575 error statuses (HTTP
+            // 400/404) can only be applied to a plain JSON response —
             // once an SSE stream commits to 200, the status is unfixable.
+            // Request-scoped SSE streams for the modern path land with
+            // WS3's transport changes.
             $this->lastResponseMode = null;
             $this->currentStreamId = null;
             $this->currentOriginatingRequestId = null;
@@ -527,7 +561,7 @@ class HttpServerTransport implements Transport
         
         // Process request based on HTTP method
         $response = match (strtoupper($request->getMethod())) {
-            'POST' => $this->handlePostRequest($request, $session),
+            'POST' => $this->handlePostRequest($request, $session, $decodedPostBody),
             'GET' => $this->handleGetRequest($request, $session),
             'DELETE' => $this->handleDeleteRequest($request, $session),
             default => HttpMessage::createJsonResponse(
@@ -549,9 +583,13 @@ class HttpServerTransport implements Transport
      *
      * @param HttpMessage $request Request message
      * @param HttpSession $session Session
+     * @param array<string, mixed>|null $decodedBody The body already decoded
+     *        by handleRequest()'s single up-front parse; null when that
+     *        parse did not produce an array (the decode below then reports
+     *        the precise JSON error)
      * @return HttpMessage Response message
      */
-    private function handlePostRequest(HttpMessage $request, HttpSession $session): HttpMessage
+    private function handlePostRequest(HttpMessage $request, HttpSession $session, ?array $decodedBody = null): HttpMessage
     {
         if ($auth = $this->authorizeRequest($request, $session)) {
             return $auth;
@@ -564,7 +602,7 @@ class HttpServerTransport implements Transport
                 415
             );
         }
-        
+
         // Get and validate body
         $body = $request->getBody();
         if ($body === null || $body === '') {
@@ -573,11 +611,13 @@ class HttpServerTransport implements Transport
                 400
             );
         }
-        
+
         try {
-            // Decode JSON
-            $jsonData = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
-            
+            // Use the single up-front decode when available; only a body
+            // that failed that parse is decoded again, to surface the
+            // exact JSON error message.
+            $jsonData = $decodedBody ?? json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+
             // Process JSON-RPC message
             $containsRequests = $this->processJsonRpcData($jsonData, $session);
             
@@ -1828,6 +1868,42 @@ class HttpServerTransport implements Transport
             return HttpMessage::createEmptyResponse(202);
         }
 
+        // Modern stateless request (SEP-2567/2575): the Streamable HTTP
+        // JSON response mode carries exactly ONE JSON object — the
+        // response (or error) to the request; an array body is not a
+        // valid response shape on the modern revision. Notifications a
+        // handler emitted during execution have no channel on this
+        // response and are dropped (the transport has no logging
+        // facility; the limitation is documented in the development
+        // plan) — WS3's request-scoped SSE and subscriptions/listen are
+        // their carriers. The session's HTTP status hint (SEP-2575: 400
+        // for envelope/version/capability errors, 404 for unknown or
+        // removed methods) rides on the surviving response.
+        if ($this->currentRequestSessionless) {
+            $response = null;
+            foreach ($pendingMessages as $msg) {
+                $inner = $msg->message;
+                if ($inner instanceof JSONRPCResponse || $inner instanceof JSONRPCError) {
+                    // A modern POST carries exactly one request, so at
+                    // most one queued message is its response.
+                    $response = $msg;
+                }
+            }
+            if ($response === null) {
+                // Only notifications were queued (e.g. a notification-only
+                // POST whose handler emitted more notifications).
+                return HttpMessage::createEmptyResponse(202);
+            }
+            return HttpMessage::createJsonResponse(
+                $response->message,
+                $response->httpStatusHint ?? 200
+            );
+        }
+
+        // Legacy path below: unchanged pre-WS2 behavior. Modern requests
+        // never reach it (every modern request is sessionless), so the
+        // status hint never applies here.
+
         // Single message — return it directly
         if (count($pendingMessages) === 1) {
             return HttpMessage::createJsonResponse($pendingMessages[0]->message, 200);
@@ -2110,7 +2186,12 @@ class HttpServerTransport implements Transport
         if ($version === null || $version === '') {
             return null;
         }
-        if (in_array($version, Version::SUPPORTED_PROTOCOL_VERSIONS, true)) {
+        // Accept every identifier this server can serve anywhere, including
+        // the RC-window draft alias for the stateless revision. Accepting
+        // the alias here does not leak it into legacy negotiation: the
+        // initialize handshake caps at LATEST_LEGACY_PROTOCOL_VERSION, and
+        // modern-identifier POSTs never reach this gate at all.
+        if (in_array($version, Version::advertisedSupportedVersions(), true)) {
             return null;
         }
         return HttpMessage::createJsonResponse(
@@ -2158,35 +2239,6 @@ class HttpServerTransport implements Transport
     }
     
     /**
-     * Check if a request is an initialize request.
-     *
-     * @param HttpMessage $request Request message
-     * @return bool True if the request is an initialize request
-     */
-    private function isInitializeRequest(HttpMessage $request): bool
-    {
-        // Only POST requests can be initialize requests
-        if ($request->getMethod() !== 'POST') {
-            return false;
-        }
-        
-        // Get and validate body
-        $body = $request->getBody();
-        if ($body === null || $body === '') {
-            return false;
-        }
-        
-        try {
-            // Decode JSON
-            $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
-            
-            return $this->isInitializeMessage($data);
-        } catch (\Exception $e) {
-            return false;
-        }
-    }
-    
-    /**
      * Check if a message is an initialize message.
      *
      * @param array<string, mixed> $message Message data
@@ -2198,30 +2250,35 @@ class HttpServerTransport implements Transport
     }
 
     /**
-     * Check if a request is a server/discover request (SEP-2575).
+     * Whether a decoded POST body signals the 2026-07-28 modern era
+     * (SEP-2575): a `server/discover` request (a modern-only construct),
+     * or any modern `_meta` envelope key on the message's params.
+     * Detection is per-key rather than full-envelope so a partial
+     * envelope reaches the session's modern validation (yielding the
+     * spec's precise -32602) instead of the legacy path. The bare
+     * trace-context keys (SEP-414) are not envelope keys and never
+     * trigger detection.
      *
-     * @param HttpMessage $request Request message
-     * @return bool True if the request is a server/discover request
+     * @param array<string, mixed>|null $decoded The decoded POST body
      */
-    private function isDiscoverRequest(HttpMessage $request): bool
+    private function bodyCarriesModernSignal(?array $decoded): bool
     {
-        if ($request->getMethod() !== 'POST') {
+        if ($decoded === null) {
             return false;
         }
-
-        $body = $request->getBody();
-        if ($body === null || $body === '') {
+        if (($decoded['method'] ?? null) === 'server/discover') {
+            return true;
+        }
+        $meta = $decoded['params']['_meta'] ?? null;
+        if (!is_array($meta)) {
             return false;
         }
-
-        try {
-            $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
-            return isset($data['method']) && $data['method'] === 'server/discover';
-        } catch (\Exception $e) {
-            return false;
-        }
+        return array_key_exists(MetaKeys::PROTOCOL_VERSION, $meta)
+            || array_key_exists(MetaKeys::CLIENT_INFO, $meta)
+            || array_key_exists(MetaKeys::CLIENT_CAPABILITIES, $meta);
     }
-    
+
+
     /**
      * Whether the request handled by the last handleRequest() call belongs to
      * the sessionless 2026-07-28 lifecycle (SEP-2567). When true, the runner

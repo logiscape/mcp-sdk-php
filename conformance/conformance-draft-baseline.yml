@@ -14,60 +14,65 @@
 # complete. The no-shortcut rule in conformance/README.md applies to this
 # file exactly as it does to the stable baseline.
 #
-# Last updated: 2026-06-12 (WS1 milestone)
+# Last updated: 2026-06-12 (WS2 milestone)
 # Conformance tool version: 0.2.0-alpha.2 (draft pin)
 
 server:
-  # --- WS2 (negotiation; WS1 types half complete) ---
-  # WS1 delivered the types and server/discover: the _meta envelope is
-  # validated (-32602 per missing field), unsupported versions get -32004
-  # with supported/requested data, DiscoverResult carries
-  # supportedVersions/capabilities/serverInfo + resultType/ttlMs/cacheScope,
-  # and SEP-2164/SEP-2549 behavior is implemented behind version gating —
-  # all unit-tested at the session layer (tests/Server/ServerDiscoverTest,
-  # HttpDiscoverTest, ModernResultAdaptationTest).
-  #
-  # These scenarios still fail with one shared root cause: the draft
-  # tool's stateless connector sends MCP-Protocol-Version: DRAFT-2026-v1
-  # (the RC's draft identifier) with the matching _meta on EVERY request,
-  # and the transport's header validation rejects unknown versions with 400
-  # before the session sees the request (server/discover itself is exempt
-  # and answers correctly). Accepting the draft identifier and selecting
-  # the modern era per-request (instead of per-session) is exactly WS2's
-  # detection milestone, so these are re-attributed to WS2.
-  #
+  # (WS2's per-request era detection landed 2026-06-12: the server accepts
+  # the DRAFT-2026-v1 identifier as an alias for 2026-07-28 on the
+  # per-request stateless path, serves every modern request sessionless
+  # with the SEP-2575 status mapping (400 for -32602/-32003/-32004, 404 +
+  # -32601 for unknown/removed methods), and adopts version/clientInfo/
+  # clientCapabilities from each request's _meta envelope. WS2 entries
+  # removed as now passing: `sep-2164-resource-not-found` (3/3) and
+  # `caching` (7/7). Also removed `http-custom-header-server-validation`:
+  # its checks only activate when the server exposes a tool with
+  # x-mcp-header annotations, which none does yet — the tool reports the
+  # scenario as passing with 0 checks, and the baseline gate flags the
+  # entry as stale. WS3's SEP-2243 work adds such a tool and re-baselines
+  # honestly if its checks then fail.)
+
+  # --- WS3 (transport changes) + one upstream tool bug ---
   - server-stateless
-    # Remaining checks additionally need per-request era detection, the
-    # 400/404 HTTP status mapping for the general modern path (discover
-    # already maps its errors to 400), the removed-method 404s, and
-    # subscriptions/listen (WS2/WS3).
+    # 17/19 checks pass after WS2 (era detection, discover, removed-method
+    # 404s, -32004/-32602 statuses, missing-capability -32003 with HTTP
+    # 400, no session-id echo). Note: the two capability checks were
+    # silently SKIPPED in earlier WS2 runs — McpServer's tools/call
+    # wrapper converted the SDK-raised McpError into an isError tool
+    # result, so no -32003 reached the wire; the wrapper now propagates
+    # McpError as protocol errors, and both checks actually execute.
+    # The two failing checks:
+    #
+    # 1. sep-2575-http-server-header-mismatch-400 (WS3): a request whose
+    #    MCP-Protocol-Version header disagrees with the _meta value must
+    #    be rejected -32001 HeaderMismatch (we currently answer from the
+    #    envelope, yielding -32004) — that validation is SEP-2243, a WS3
+    #    deliverable per the plan.
+    #
+    # 2. sep-2575-server-rejects-undeclared-capability (UPSTREAM TOOL
+    #    BUG, not pursued in the SDK): the SDK emits
+    #    data.requiredCapabilities as a ClientCapabilities OBJECT
+    #    ({"sampling": {}}), which is what the SEP-2575 final text, the
+    #    draft schema.ts, its canonical example
+    #    (MissingRequiredClientCapabilityError/missing-elicitation-capability.json),
+    #    and the TypeScript SDK v2 types all specify. The conformance
+    #    tool asserts a string array (["sampling"]) — on the pinned
+    #    0.2.0-alpha.2 AND on conformance main as of 2026-06-12, where
+    #    the check contradicts the repo's own vendored draft types.
+    #    Official text wins (guiding principle; see conformance/README.md
+    #    no-shortcuts rule): the SDK keeps the schema shape and this
+    #    check stays an expected failure until the tool is fixed
+    #    upstream. Re-check at every draft-pin bump; candidate for an
+    #    upstream issue/PR per SEP-2484. The companion check
+    #    sep-2575-missing-capability-http-400 (status only) passes.
+    #
+    # Two SHOULD-level warnings also remain (prompts/tools list_changed
+    # notifications on an open subscriptions/listen stream), which need
+    # WS3's subscriptions/listen channel.
 
-  - sep-2164-resource-not-found
-    # State as of 2026-06-12: the scenario's only hard check (MUST NOT
-    # return empty contents for a missing resource) PASSES — the
-    # per-scenario summary shows "1 passed, 0 failed" — but its two
-    # SHOULD checks (-32602 error code, data.uri) report WARNINGS because
-    # the stateless connector's resources/read still 400s at the
-    # version-header gate, and tool 0.2.0-alpha.2's baseline gate counts a
-    # warned scenario as failing (removing this entry yields "Unexpected
-    # failures"). The SDK behavior itself is implemented and unit-tested
-    # (tests/Server/ModernResultAdaptationTest); the warnings clear when
-    # WS2's per-request era detection lands, and this entry leaves the
-    # baseline then.
-
-  - caching
-    # ttlMs/cacheScope implemented (required-on-modern, stamped defaults,
-    # stripped for legacy) and unit-tested; scenario needs the stateless
-    # request path (WS2) to exercise it.
-
-  # --- WS3 (transport changes: SEP-2243 request-metadata headers) ---
   - http-header-validation
     # Mcp-Method/Mcp-Name header validation and HeaderMismatch (-32001)
-    # rejection not yet implemented.
-
-  - http-custom-header-server-validation
-    # x-mcp-header schema annotation / Mcp-Param-* validation not yet
-    # implemented.
+    # rejection not yet implemented (3/8 checks pass after WS2).
 
   # --- WS3 (transport changes: SEP-2322 InputRequiredResult) ---
   # The multi-round-trip input mechanism replacing server-initiated

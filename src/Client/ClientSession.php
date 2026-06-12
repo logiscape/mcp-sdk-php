@@ -29,6 +29,9 @@ declare(strict_types=1);
 
 namespace Mcp\Client;
 
+use Mcp\Client\Auth\Exception\AuthorizationRedirectException;
+use Mcp\Client\Transport\HttpAuthenticationException;
+use Mcp\Client\Transport\HttpRequestTimeoutException;
 use Mcp\Shared\BaseSession;
 use Mcp\Shared\ErrorData;
 use Mcp\Shared\RequestResponder;
@@ -107,6 +110,28 @@ class ClientSession extends BaseSession {
 
     /** @var string|null */
     private ?string $negotiatedProtocolVersion = null;
+
+    /**
+     * The wire identifier this session speaks on the modern (2026-07-28)
+     * per-request path — either the dated revision or the RC-window draft
+     * alias the server advertised. Null while the session is legacy-era
+     * (or not yet negotiated). When set, every outgoing request and
+     * notification is stamped with the SEP-2575 `_meta` envelope carrying
+     * this identifier, and {@see $negotiatedProtocolVersion} holds its
+     * canonical form for feature gating.
+     */
+    private ?string $modernWireVersion = null;
+
+    /**
+     * Default probe timeout (seconds) for {@see negotiate()} when neither
+     * a probe timeout nor a session read timeout was configured. The spec
+     * requires falling back to the legacy handshake when a server does
+     * not answer `server/discover` "within a reasonable timeout" — legacy
+     * servers may answer unknown pre-initialize requests with nothing at
+     * all. Public so Client::connect() applies the same default when
+     * bounding the HTTP transport's probe requests.
+     */
+    public const DEFAULT_PROBE_TIMEOUT = 10.0;
 
     /** @var callable|null User-registered elicitation handler (one per session). */
     private $elicitationHandler = null;
@@ -248,10 +273,7 @@ class ClientSession extends BaseSession {
             new InitializeRequestParams(
                 protocolVersion: Version::LATEST_LEGACY_PROTOCOL_VERSION,
                 capabilities: $this->buildClientCapabilities(),
-                clientInfo: new Implementation(
-                    name: 'mcp-client',
-                    version: '1.0.0'
-                )
+                clientInfo: $this->clientIdentity()
             )
         );
 
@@ -297,16 +319,228 @@ class ClientSession extends BaseSession {
     public function discover(?string $protocolVersion = null): DiscoverResult {
         $meta = new Meta();
         $meta->setField(MetaKeys::PROTOCOL_VERSION, $protocolVersion ?? Version::LATEST_PROTOCOL_VERSION);
-        $meta->setField(MetaKeys::CLIENT_INFO, new Implementation(
-            name: 'mcp-client',
-            version: '1.0.0'
-        ));
+        $meta->setField(MetaKeys::CLIENT_INFO, $this->clientIdentity());
         $meta->setField(MetaKeys::CLIENT_CAPABILITIES, $this->buildClientCapabilities());
 
         $request = new DiscoverRequest(new RequestParams($meta));
 
         /** @var DiscoverResult */
         return $this->sendRequest($request, DiscoverResult::class);
+    }
+
+    /**
+     * Negotiate the protocol era with the server (SEP-2575 dual-era
+     * client detection), establishing this session as either modern
+     * (2026-07-28 per-request lifecycle) or legacy (initialize handshake).
+     *
+     * Sequencing follows the spec's normative detection rules:
+     *
+     * 1. Probe with `server/discover`, preferring the latest modern
+     *    revision. Success → modern; the session is immediately ready and
+     *    every subsequent request carries the per-request `_meta` envelope.
+     * 2. On UnsupportedProtocolVersionError (-32004), the server is
+     *    modern: retry with a version from its advertised
+     *    `data.supported` list. Never fall back to `initialize` — when no
+     *    advertised version is mutually supported, fail.
+     * 3. On the other recognized modern errors (-32001 HeaderMismatch,
+     *    -32003 MissingRequiredClientCapability), the server is modern;
+     *    the error is re-thrown rather than treated as an era signal.
+     * 4. On any *other* error — a legacy server's implementation-defined
+     *    rejection (commonly -32601 or -32602, or an HTTP 400 whose body
+     *    is not a recognized modern JSON-RPC error) — or on probe
+     *    timeout, fall back to the legacy `initialize` handshake. Per
+     *    spec, the fallback is deliberately not keyed to one specific
+     *    error code.
+     *
+     * Authentication failures propagate unchanged: they are not era
+     * signals, and both eras require the same credentials.
+     *
+     * @param string $mode 'auto' (probe, fall back to legacy — the
+     *        default), 'legacy' (skip the probe, initialize directly), or
+     *        'modern' (probe only; failure to negotiate modern throws).
+     * @param float|null $probeTimeout Seconds to wait for the probe
+     *        response before concluding the server is a silent legacy
+     *        server. Defaults to the session read timeout, or 10s when
+     *        none is set. Ignored for mode 'legacy'.
+     * @return string The negotiated era: 'modern' or 'legacy'.
+     * @throws \Mcp\Shared\McpError When a modern server rejects the probe
+     *         with a recognized modern error that retrying cannot fix.
+     * @throws RuntimeException When mode 'modern' cannot be satisfied, or
+     *         the server advertises no mutually supported modern version.
+     */
+    public function negotiate(string $mode = 'auto', ?float $probeTimeout = null): string {
+        if (!in_array($mode, ['auto', 'legacy', 'modern'], true)) {
+            throw new InvalidArgumentException("Invalid protocol mode: {$mode} (expected 'auto', 'legacy', or 'modern')");
+        }
+
+        if ($mode === 'legacy') {
+            $this->initialize();
+            return 'legacy';
+        }
+
+        $fallbackReason = null;
+        $attempted = [];
+        $version = Version::LATEST_PROTOCOL_VERSION;
+
+        while (true) {
+            $attempted[] = $version;
+            try {
+                $discovery = $this->probeDiscover($version, $probeTimeout);
+                $this->enterModernMode($version, $discovery);
+                $this->logger->info("Negotiated modern era (wire version: {$version})");
+                return 'modern';
+            } catch (HttpAuthenticationException | AuthorizationRedirectException $e) {
+                // Not an era signal: both eras need the same credentials.
+                throw $e;
+            } catch (\Mcp\Shared\McpError $e) {
+                $code = $e->error->code;
+                if ($code === \Mcp\Shared\McpError::UNSUPPORTED_PROTOCOL_VERSION) {
+                    $retry = $this->pickAdvertisedModernVersion($e->error->data, $attempted);
+                    if ($retry !== null) {
+                        $this->logger->info("Server rejected version {$version} (-32004); retrying with advertised version {$retry}");
+                        $version = $retry;
+                        continue;
+                    }
+                    // A modern server with no mutually supported version:
+                    // the spec forbids falling back to initialize here.
+                    throw new RuntimeException(
+                        'Server speaks a modern MCP revision but supports none of this client\'s versions ('
+                        . implode(', ', Version::MODERN_PROTOCOL_VERSIONS) . '): ' . $e->getMessage(),
+                        0,
+                        $e
+                    );
+                }
+                if ($code === \Mcp\Shared\McpError::HEADER_MISMATCH
+                    || $code === \Mcp\Shared\McpError::MISSING_REQUIRED_CLIENT_CAPABILITY
+                ) {
+                    // Recognized modern errors: the server is modern, the
+                    // probe failed for a non-era reason. Never fall back.
+                    throw $e;
+                }
+                // Any other JSON-RPC error (commonly -32601 / -32602) is a
+                // legacy server's implementation-defined rejection.
+                $fallbackReason = "JSON-RPC error {$code}";
+                break;
+            } catch (InvalidArgumentException | \TypeError $e) {
+                // The server answered the probe with something that does not
+                // parse as a DiscoverResult — e.g. a legacy server that
+                // returns a generic 200 result for unknown methods. Not a
+                // modern server; fall back ("any other error" per spec).
+                $fallbackReason = 'malformed discover result: ' . $e->getMessage();
+                break;
+            } catch (RuntimeException $e) {
+                $status = (int) $e->getCode();
+                $isTimeout = $e instanceof HttpRequestTimeoutException
+                    || str_starts_with($e->getMessage(), 'Timed out waiting for response');
+                if (($status >= 400 && $status < 500) || $isTimeout) {
+                    // HTTP 4xx without a recognized modern error body, or a
+                    // silent server: legacy per the spec's fallback rules.
+                    $fallbackReason = $isTimeout ? 'probe timeout' : "HTTP {$status} without a modern error body";
+                    break;
+                }
+                // Transport-level failures (connection refused, TLS, 5xx)
+                // are not era signals; surface them to the caller.
+                throw $e;
+            }
+        }
+
+        if ($mode === 'modern') {
+            throw new RuntimeException(
+                "Server did not answer the modern probe ({$fallbackReason}) and protocol mode 'modern' forbids the legacy fallback"
+            );
+        }
+
+        $this->logger->info("Modern probe fell back to legacy ({$fallbackReason}); initializing");
+        $this->initialize();
+        return 'legacy';
+    }
+
+    /**
+     * Send the discover probe with a bounded wait. The session read
+     * timeout is temporarily replaced so a legacy stdio server that never
+     * answers an unknown pre-initialize request cannot hang connect().
+     */
+    private function probeDiscover(string $version, ?float $probeTimeout): DiscoverResult {
+        $savedTimeout = $this->readTimeout;
+        $this->readTimeout = $probeTimeout ?? $savedTimeout ?? self::DEFAULT_PROBE_TIMEOUT;
+        try {
+            return $this->discover($version);
+        } finally {
+            $this->readTimeout = $savedTimeout;
+        }
+    }
+
+    /**
+     * Pick the retry version after a -32004: the first identifier from
+     * this client's modern list (in preference order) that the server
+     * advertised in data.supported and that has not been attempted yet.
+     *
+     * @param string[] $attempted Wire identifiers already probed
+     */
+    private function pickAdvertisedModernVersion(mixed $errorData, array $attempted): ?string {
+        if ($errorData instanceof \stdClass) {
+            $errorData = (array) $errorData;
+        }
+        $supported = is_array($errorData) ? ($errorData['supported'] ?? null) : null;
+        if (!is_array($supported)) {
+            return null;
+        }
+        foreach (Version::MODERN_PROTOCOL_VERSIONS as $candidate) {
+            if (in_array($candidate, $supported, true) && !in_array($candidate, $attempted, true)) {
+                return $candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Establish this session as modern-era (2026-07-28): no handshake, no
+     * initialized notification — the session is ready immediately, and
+     * every subsequent outgoing request and notification is stamped with
+     * the SEP-2575 `_meta` envelope (see writeMessage()). The discover
+     * result doubles as the initialization result so existing
+     * capability-inspection code keeps working.
+     */
+    private function enterModernMode(string $wireVersion, DiscoverResult $discovery): void {
+        $this->modernWireVersion = $wireVersion;
+        $this->negotiatedProtocolVersion = Version::canonicalizeVersion($wireVersion);
+        $this->initResult = new InitializeResult(
+            capabilities: $discovery->capabilities,
+            serverInfo: $discovery->serverInfo,
+            protocolVersion: $this->negotiatedProtocolVersion,
+            instructions: $discovery->instructions,
+        );
+        $this->initialized = true;
+        $this->startMessageProcessing();
+    }
+
+    /**
+     * Whether this session negotiated the modern (2026-07-28) per-request
+     * era.
+     */
+    public function isModernMode(): bool {
+        return $this->modernWireVersion !== null;
+    }
+
+    /**
+     * The wire identifier carried in this modern session's per-request
+     * envelopes (the dated revision or the RC-window draft alias), or
+     * null for legacy sessions.
+     */
+    public function getModernWireVersion(): ?string {
+        return $this->modernWireVersion;
+    }
+
+    /**
+     * The client identity advertised in the legacy initialize handshake
+     * and in every modern `_meta` envelope — one definition, so the two
+     * surfaces can never disagree.
+     */
+    private function clientIdentity(): Implementation {
+        return new Implementation(
+            name: 'mcp-client',
+            version: '1.0.0'
+        );
     }
 
     /**
@@ -931,8 +1165,49 @@ class ClientSession extends BaseSession {
      * @return void
      */
     protected function writeMessage(JsonRpcMessage $message): void {
+        // Modern era (SEP-2575): every request and notification carries the
+        // per-request _meta envelope — protocol version, client info, and
+        // client capabilities are all required on every message; servers
+        // MUST NOT infer them from prior requests.
+        if ($this->modernWireVersion !== null) {
+            $this->stampModernEnvelope($message);
+        }
         $this->logger->debug('Sending message to server: ' . json_encode($message, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
         $this->writeStream->send($message);
+    }
+
+    /**
+     * Stamp the SEP-2575 `_meta` envelope onto an outgoing request or
+     * notification. Fields already present (e.g. on a hand-built discover
+     * request) are left untouched; trace-context and other _meta entries
+     * are preserved.
+     */
+    private function stampModernEnvelope(JsonRpcMessage $message): void {
+        $inner = $message->message;
+        if (!($inner instanceof \Mcp\Types\JSONRPCRequest || $inner instanceof \Mcp\Types\JSONRPCNotification)) {
+            return;
+        }
+
+        if ($inner->params === null) {
+            $inner->params = $inner instanceof \Mcp\Types\JSONRPCRequest
+                ? new RequestParams()
+                : new \Mcp\Types\NotificationParams();
+        }
+        if ($inner->params->_meta === null) {
+            $inner->params->_meta = new Meta();
+        }
+
+        $meta = $inner->params->_meta;
+        $fields = $meta->getExtraFields();
+        if (!array_key_exists(MetaKeys::PROTOCOL_VERSION, $fields)) {
+            $meta->setField(MetaKeys::PROTOCOL_VERSION, $this->modernWireVersion);
+        }
+        if (!array_key_exists(MetaKeys::CLIENT_INFO, $fields)) {
+            $meta->setField(MetaKeys::CLIENT_INFO, $this->clientIdentity());
+        }
+        if (!array_key_exists(MetaKeys::CLIENT_CAPABILITIES, $fields)) {
+            $meta->setField(MetaKeys::CLIENT_CAPABILITIES, $this->buildClientCapabilities());
+        }
     }
 
     /**
@@ -971,16 +1246,29 @@ class ClientSession extends BaseSession {
      * Read the next message from the read stream.
      *
      * Blocks until a valid JsonRpcMessage is received or an exception occurs.
+     * When a read timeout is configured, an idle stream aborts the read —
+     * without this, the timeout in waitForResponse() could never fire
+     * against a peer that sends nothing at all (its check only runs
+     * between messages), and the negotiate() probe could not detect a
+     * silent legacy server.
      *
-     * @throws RuntimeException If an invalid message type is received.
+     * @throws RuntimeException If an invalid message type is received, or
+     *         the configured read timeout elapses with no message.
      *
      * @return JsonRpcMessage The received JSON-RPC message.
      */
     protected function readNextMessage(): JsonRpcMessage {
+        $timeout = $this->getReadTimeout();
+        $startTime = microtime(true);
         while (true) {
             $msg = $this->readStream->receive();
 
             if ($msg === null) {
+                if ($timeout !== null && (microtime(true) - $startTime) >= $timeout) {
+                    throw new RuntimeException(
+                        "Timed out waiting for response: no message received within {$timeout}s"
+                    );
+                }
                 // No message available, wait briefly to prevent busy waiting
                 usleep(10000);
                 continue;
