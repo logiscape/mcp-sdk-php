@@ -36,6 +36,11 @@ use Mcp\Shared\Version;
 use Mcp\Shared\MemoryStream;
 use Mcp\Types\ClientRequest;
 use Mcp\Types\ClientNotification;
+use Mcp\Types\DiscoverRequest;
+use Mcp\Types\DiscoverResult;
+use Mcp\Types\Meta;
+use Mcp\Types\MetaKeys;
+use Mcp\Types\RequestParams;
 use Mcp\Types\ElicitationCapability;
 use Mcp\Types\ElicitationCreateRequest;
 use Mcp\Types\ElicitationCreateResult;
@@ -234,10 +239,14 @@ class ClientSession extends BaseSession {
     public function initialize(): void {
         $this->logger->info('Initializing client session');
 
-        // Create and send InitializeRequest
+        // Create and send InitializeRequest. The handshake itself is a
+        // legacy-era construct: the 2026-07-28 revision removes initialize
+        // (SEP-2575), so the highest version it makes sense to request here
+        // is the latest legacy revision. The modern per-request path is
+        // selected via server/discover instead (see discover()).
         $initRequest = new InitializeRequest(
             new InitializeRequestParams(
-                protocolVersion: Version::LATEST_PROTOCOL_VERSION,
+                protocolVersion: Version::LATEST_LEGACY_PROTOCOL_VERSION,
                 capabilities: $this->buildClientCapabilities(),
                 clientInfo: new Implementation(
                     name: 'mcp-client',
@@ -269,6 +278,35 @@ class ClientSession extends BaseSession {
 
         // Start message processing if necessary
         $this->startMessageProcessing();
+    }
+
+    /**
+     * Send a `server/discover` request (SEP-2575, revision 2026-07-28).
+     *
+     * Discover is self-contained: it carries the per-request `_meta` envelope
+     * (protocol version, client info, client capabilities) and may be sent
+     * without — or before — the legacy initialize handshake. Calling it does
+     * not change this session's negotiated protocol version; the dual-era
+     * probe/fallback logic that acts on its result is the WS2 milestone.
+     *
+     * @param string|null $protocolVersion Protocol revision to advertise in
+     *        the envelope (defaults to the latest supported revision)
+     * @throws \Mcp\Shared\McpError If the server rejects the request (e.g.
+     *         -32601 from a legacy server, -32004 for an unsupported version)
+     */
+    public function discover(?string $protocolVersion = null): DiscoverResult {
+        $meta = new Meta();
+        $meta->setField(MetaKeys::PROTOCOL_VERSION, $protocolVersion ?? Version::LATEST_PROTOCOL_VERSION);
+        $meta->setField(MetaKeys::CLIENT_INFO, new Implementation(
+            name: 'mcp-client',
+            version: '1.0.0'
+        ));
+        $meta->setField(MetaKeys::CLIENT_CAPABILITIES, $this->buildClientCapabilities());
+
+        $request = new DiscoverRequest(new RequestParams($meta));
+
+        /** @var DiscoverResult */
+        return $this->sendRequest($request, DiscoverResult::class);
     }
 
     /**

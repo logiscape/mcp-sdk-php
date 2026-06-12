@@ -32,7 +32,7 @@ namespace Mcp\Types;
  * Request to list available prompts
  */
 class ListPromptsRequest extends PaginatedRequest {
-    public function __construct(?string $cursor = null) {
-        parent::__construct('prompts/list', $cursor);
+    public function __construct(?string $cursor = null, ?Meta $_meta = null) {
+        parent::__construct('prompts/list', $cursor, $_meta);
     }
 }

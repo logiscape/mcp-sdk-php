@@ -29,7 +29,9 @@ declare(strict_types=1);
 
 namespace Mcp\Types;
 
-class ListToolsResult extends PaginatedResult {
+class ListToolsResult extends PaginatedResult implements CacheableResult {
+    use CacheableResultTrait;
+
     /**
      * @param Tool[] $tools
      */
@@ -71,6 +73,7 @@ class ListToolsResult extends PaginatedResult {
 
     public function validate(): void {
         parent::validate();
+        $this->validateCacheHints();
         foreach ($this->tools as $tool) {
             if (!$tool instanceof Tool) {
                 throw new \InvalidArgumentException('Tools must be instances of Tool');

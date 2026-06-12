@@ -14,24 +14,51 @@
 # complete. The no-shortcut rule in conformance/README.md applies to this
 # file exactly as it does to the stable baseline.
 #
-# Last updated: 2026-06-11
+# Last updated: 2026-06-12 (WS1 milestone)
 # Conformance tool version: 0.2.0-alpha.2 (draft pin)
 
 server:
-  # --- WS1 + WS2 (stateless foundation, negotiation) ---
+  # --- WS2 (negotiation; WS1 types half complete) ---
+  # WS1 delivered the types and server/discover: the _meta envelope is
+  # validated (-32602 per missing field), unsupported versions get -32004
+  # with supported/requested data, DiscoverResult carries
+  # supportedVersions/capabilities/serverInfo + resultType/ttlMs/cacheScope,
+  # and SEP-2164/SEP-2549 behavior is implemented behind version gating —
+  # all unit-tested at the session layer (tests/Server/ServerDiscoverTest,
+  # HttpDiscoverTest, ModernResultAdaptationTest).
+  #
+  # These scenarios still fail with one shared root cause: the draft
+  # tool's stateless connector sends MCP-Protocol-Version: DRAFT-2026-v1
+  # (the RC's draft identifier) with the matching _meta on EVERY request,
+  # and the transport's header validation rejects unknown versions with 400
+  # before the session sees the request (server/discover itself is exempt
+  # and answers correctly). Accepting the draft identifier and selecting
+  # the modern era per-request (instead of per-session) is exactly WS2's
+  # detection milestone, so these are re-attributed to WS2.
+  #
   - server-stateless
-    # SEP-2575/SEP-2567 stateless lifecycle (per-request _meta, no
-    # initialize handshake, server/discover) not yet implemented; spans
-    # WS1 (types, server/discover) and WS2 (per-request era detection).
+    # Remaining checks additionally need per-request era detection, the
+    # 400/404 HTTP status mapping for the general modern path (discover
+    # already maps its errors to 400), the removed-method 404s, and
+    # subscriptions/listen (WS2/WS3).
 
-  # --- WS1 (stateless foundation) ---
   - sep-2164-resource-not-found
-    # SEP-2164 error-code change (-32002 -> -32602 under 2026-07-28) not
-    # yet implemented; scenario runs against the legacy lifecycle.
+    # State as of 2026-06-12: the scenario's only hard check (MUST NOT
+    # return empty contents for a missing resource) PASSES — the
+    # per-scenario summary shows "1 passed, 0 failed" — but its two
+    # SHOULD checks (-32602 error code, data.uri) report WARNINGS because
+    # the stateless connector's resources/read still 400s at the
+    # version-header gate, and tool 0.2.0-alpha.2's baseline gate counts a
+    # warned scenario as failing (removing this entry yields "Unexpected
+    # failures"). The SDK behavior itself is implemented and unit-tested
+    # (tests/Server/ModernResultAdaptationTest); the warnings clear when
+    # WS2's per-request era detection lands, and this entry leaves the
+    # baseline then.
 
   - caching
-    # SEP-2549 ttlMs/cacheScope fields on list/read results not yet
-    # implemented.
+    # ttlMs/cacheScope implemented (required-on-modern, stamped defaults,
+    # stripped for legacy) and unit-tested; scenario needs the stateless
+    # request path (WS2) to exercise it.
 
   # --- WS3 (transport changes: SEP-2243 request-metadata headers) ---
   - http-header-validation
@@ -60,10 +87,9 @@ server:
   - input-required-result-ignore-extra-params
 
 client:
-  # --- WS1 (stateless foundation) ---
-  - json-schema-ref-no-deref
-    # SEP-2106 JSON Schema 2020-12 handling ($ref passed through without
-    # dereferencing) not yet implemented on the client.
+  # (WS1's json-schema-ref-no-deref entry removed 2026-06-12: the client
+  # passes 2020-12 schemas through verbatim and never dereferences network
+  # $refs — scenario passing.)
 
   # --- WS3 (transport changes: SEP-2243 request-metadata headers) ---
   - request-metadata

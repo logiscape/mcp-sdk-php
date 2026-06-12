@@ -29,7 +29,9 @@ declare(strict_types=1);
 
 namespace Mcp\Types;
 
-class ListPromptsResult extends PaginatedResult {
+class ListPromptsResult extends PaginatedResult implements CacheableResult {
+    use CacheableResultTrait;
+
     /**
      * @param Prompt[] $prompts
      */
@@ -71,6 +73,7 @@ class ListPromptsResult extends PaginatedResult {
 
     public function validate(): void {
         parent::validate();
+        $this->validateCacheHints();
         foreach ($this->prompts as $prompt) {
             if (!$prompt instanceof Prompt) {
                 throw new \InvalidArgumentException('Prompts must be instances of Prompt');

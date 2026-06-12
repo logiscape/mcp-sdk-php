@@ -37,12 +37,22 @@ namespace Mcp\Shared;
  * SUPPORTED_PROTOCOL_VERSIONS = [1, LATEST_PROTOCOL_VERSION]
  */
 class Version {
-    public const LATEST_PROTOCOL_VERSION = '2025-11-25';
+    public const LATEST_PROTOCOL_VERSION = '2026-07-28';
+
+    /**
+     * The newest protocol revision that still uses the legacy
+     * initialize / notifications-initialized handshake. The 2026-07-28
+     * revision removes the handshake entirely (SEP-2575), so an `initialize`
+     * exchange can never negotiate anything newer than this.
+     */
+    public const LATEST_LEGACY_PROTOCOL_VERSION = '2025-11-25';
+
     public const SUPPORTED_PROTOCOL_VERSIONS = [
         '2024-11-05',
         '2025-03-26',
         '2025-06-18',
         '2025-11-25',
+        '2026-07-28',
     ];
 
     /**
@@ -67,6 +77,15 @@ class Version {
         'url_elicitation' => '2025-11-25',
         'sampling_with_tools' => '2025-11-25',
         'cimd' => '2025-11-25',
+        // 2026-07-28
+        // SEP-2575/SEP-2567: per-request _meta envelope, server/discover, no sessions
+        'stateless_lifecycle' => '2026-07-28',
+        // SEP-2549: ttlMs/cacheScope on cacheable results
+        'caching_hints' => '2026-07-28',
+        // SEP-2164: resource-not-found is -32602 (legacy revisions use -32002)
+        'resource_not_found_invalid_params' => '2026-07-28',
+        // SEP-2106: full JSON Schema 2020-12 in tool schemas, structuredContent may be any JSON value
+        'json_schema_2020_12' => '2026-07-28',
     ];
 
     /**

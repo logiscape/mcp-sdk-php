@@ -39,6 +39,25 @@ use Exception;
 class McpError extends Exception {
     public const URL_ELICITATION_REQUIRED = -32042;
 
+    /**
+     * 2026-07-28 (SEP-2243): a request-metadata header does not match the
+     * request body (also covers MCP-Protocol-Version vs _meta mismatches).
+     */
+    public const HEADER_MISMATCH = -32001;
+
+    /**
+     * 2026-07-28 (SEP-2575): the client lacks a capability the request
+     * requires. error.data carries `requiredCapabilities`. HTTP 400.
+     */
+    public const MISSING_REQUIRED_CLIENT_CAPABILITY = -32003;
+
+    /**
+     * 2026-07-28 (SEP-2575): the protocol version requested in _meta is not
+     * supported. error.data carries `supported` (string[]) and `requested`
+     * (string). HTTP 400.
+     */
+    public const UNSUPPORTED_PROTOCOL_VERSION = -32004;
+
     public function __construct(
         public readonly ErrorData $error,
         ?\Throwable $previous = null

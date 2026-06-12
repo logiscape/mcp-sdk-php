@@ -50,12 +50,14 @@ final class NewTypesTest extends TestCase
     // -----------------------------------------------------------------------
 
     public function testVersionConstants(): void {
-        $this->assertEquals('2025-11-25', Version::LATEST_PROTOCOL_VERSION);
+        $this->assertEquals('2026-07-28', Version::LATEST_PROTOCOL_VERSION);
+        $this->assertEquals('2025-11-25', Version::LATEST_LEGACY_PROTOCOL_VERSION);
         $this->assertContains('2024-11-05', Version::SUPPORTED_PROTOCOL_VERSIONS);
         $this->assertContains('2025-03-26', Version::SUPPORTED_PROTOCOL_VERSIONS);
         $this->assertContains('2025-06-18', Version::SUPPORTED_PROTOCOL_VERSIONS);
         $this->assertContains('2025-11-25', Version::SUPPORTED_PROTOCOL_VERSIONS);
-        $this->assertCount(4, Version::SUPPORTED_PROTOCOL_VERSIONS);
+        $this->assertContains('2026-07-28', Version::SUPPORTED_PROTOCOL_VERSIONS);
+        $this->assertCount(5, Version::SUPPORTED_PROTOCOL_VERSIONS);
     }
 
     // -----------------------------------------------------------------------

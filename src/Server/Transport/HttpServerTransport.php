@@ -103,6 +103,15 @@ class HttpServerTransport implements Transport
     private bool $isStarted = false;
     
     /**
+     * Whether the request currently being handled is part of the sessionless
+     * 2026-07-28 lifecycle (e.g. server/discover), meaning no Mcp-Session-Id
+     * may be minted/echoed and no session state persisted (SEP-2567).
+     *
+     * @var bool
+     */
+    private bool $currentRequestSessionless = false;
+
+    /**
      * Last session cleanup time.
      *
      * @var int
@@ -375,12 +384,21 @@ class HttpServerTransport implements Transport
             return $rejection;
         }
 
+        // server/discover (SEP-2575) bypasses the legacy version-header gate:
+        // it carries its own _meta envelope, and the session answers an
+        // unsupported version with the spec's UnsupportedProtocolVersionError
+        // (-32004, original request id, data.supported/requested) instead of
+        // the transport's generic -32600/id:null. Mapping that error onto
+        // HTTP 400 and validating header-vs-_meta mismatch (-32001) are the
+        // WS2/WS3 milestones.
+        $isDiscoverPost = $this->isDiscoverRequest($request);
+
         // Spec 2025-11-25 §Transports: an invalid or unsupported
         // MCP-Protocol-Version header MUST be answered with 400 Bad Request.
         // Absence is handled leniently per the spec's backwards-compatibility
         // clause — the SDK's session already carries the negotiated version,
         // so there is no need to fabricate a fallback here.
-        if ($rejection = $this->validateProtocolVersionHeader($request)) {
+        if (!$isDiscoverPost && ($rejection = $this->validateProtocolVersionHeader($request))) {
             return $rejection;
         }
 
@@ -394,6 +412,41 @@ class HttpServerTransport implements Transport
         $session = null;
         $method = strtoupper($request->getMethod() ?? '');
         $isInitializePost = $method === 'POST' && $this->isInitializeRequest($request);
+
+        // server/discover (SEP-2575) is part of the sessionless 2026-07-28
+        // lifecycle: it is processed on a fresh ephemeral context, any
+        // Mcp-Session-Id header on it is ignored rather than validated, and
+        // no session id is minted or echoed back (SEP-2567). The runner
+        // checks lastRequestSessionless() to skip the session-id header and
+        // to discard the ephemeral session instead of persisting it.
+        if ($isDiscoverPost) {
+            $this->currentRequestSessionless = true;
+            $session = $this->createSession();
+            $this->currentSessionId = $session->getId();
+            $this->lastUsedSession = $session;
+
+            $response = $this->handlePostRequest($request, $session);
+
+            // Discover responses are never SSE-framed, even when the client
+            // accepts text/event-stream and SSE is enabled: the result is a
+            // single self-contained (and cacheable) document with no
+            // mid-request notifications, and the SEP-2575 error statuses
+            // (HTTP 400) can only be applied to a plain JSON response —
+            // once an SSE stream commits to 200, the status is unfixable.
+            $this->lastResponseMode = null;
+            $this->currentStreamId = null;
+            $this->currentOriginatingRequestId = null;
+
+            $statusCode = $response->getStatusCode();
+            if ($statusCode !== 200 && $statusCode !== 202) {
+                // Error responses return through the runner's early-exit
+                // path, which never reaches its sessionless discard step —
+                // drop the ephemeral context here so it cannot accumulate.
+                $this->discardSession($session);
+            }
+            return $response;
+        }
+        $this->currentRequestSessionless = false;
         // Spec §5.8.2: servers that require a session id SHOULD respond to
         // non-initialization requests lacking Mcp-Session-Id with 400. The
         // strict path engages when SSE is enabled (the only mode in which an
@@ -2143,7 +2196,59 @@ class HttpServerTransport implements Transport
     {
         return isset($message['method']) && $message['method'] === 'initialize';
     }
+
+    /**
+     * Check if a request is a server/discover request (SEP-2575).
+     *
+     * @param HttpMessage $request Request message
+     * @return bool True if the request is a server/discover request
+     */
+    private function isDiscoverRequest(HttpMessage $request): bool
+    {
+        if ($request->getMethod() !== 'POST') {
+            return false;
+        }
+
+        $body = $request->getBody();
+        if ($body === null || $body === '') {
+            return false;
+        }
+
+        try {
+            $data = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
+            return isset($data['method']) && $data['method'] === 'server/discover';
+        } catch (\Exception $e) {
+            return false;
+        }
+    }
     
+    /**
+     * Whether the request handled by the last handleRequest() call belongs to
+     * the sessionless 2026-07-28 lifecycle (SEP-2567). When true, the runner
+     * must not echo an Mcp-Session-Id header or persist session state.
+     */
+    public function lastRequestSessionless(): bool
+    {
+        return $this->currentRequestSessionless;
+    }
+
+    /**
+     * Discard an ephemeral sessionless-lifecycle session entirely: remove it
+     * from the in-memory map, the session store, and the message queue.
+     *
+     * Used by the runner after serving a server/discover request. The
+     * session was only a processing context — its id is never returned to
+     * the client (SEP-2567), so leaving it behind would just accumulate
+     * unreachable entries in file-backed stores.
+     */
+    public function discardSession(HttpSession $session): void
+    {
+        $sessionId = $session->getId();
+        unset($this->sessions[$sessionId]);
+        $this->sessionStore->delete($sessionId);
+        $this->messageQueue->cleanupExpiredSessions([$sessionId]);
+    }
+
     /**
      * Get configuration.
      *

@@ -103,7 +103,9 @@ class ClientSessionInitializeTest extends TestCase
         // Verify params contain required fields
         $params = $firstMessageData['params'];
         $this->assertArrayHasKey('protocolVersion', $params, 'Params must include protocolVersion');
-        $this->assertEquals(Version::LATEST_PROTOCOL_VERSION, $params['protocolVersion'], 'Should request latest protocol version');
+        // The initialize handshake is legacy-era (SEP-2575 removes it in
+        // 2026-07-28), so the client requests the latest LEGACY revision here.
+        $this->assertEquals(Version::LATEST_LEGACY_PROTOCOL_VERSION, $params['protocolVersion'], 'Should request latest legacy protocol version');
         $this->assertArrayHasKey('capabilities', $params, 'Params must include capabilities');
         $this->assertArrayHasKey('clientInfo', $params, 'Params must include clientInfo');
 

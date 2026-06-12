@@ -37,11 +37,9 @@ namespace Mcp\Types;
  */
 class PaginatedRequestParams extends RequestParams
 {
-    public function __construct(?string $cursor = null)
+    public function __construct(?string $cursor = null, ?Meta $_meta = null)
     {
-        // If you want to allow `_meta`, pass it to parent.
-        // For now, we assume there's no special Meta usage, so pass nothing.
-        parent::__construct(); 
+        parent::__construct($_meta);
         $this->cursor = $cursor;
     }
 

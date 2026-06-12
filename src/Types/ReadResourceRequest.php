@@ -34,8 +34,9 @@ namespace Mcp\Types;
 class ReadResourceRequest extends Request {
     public function __construct(
         string $uri,
+        ?Meta $_meta = null,
     ) {
-        parent::__construct('resources/read', new ReadResourceRequestParams($uri));
+        parent::__construct('resources/read', new ReadResourceRequestParams($uri, $_meta));
     }
 
     public function validate(): void {

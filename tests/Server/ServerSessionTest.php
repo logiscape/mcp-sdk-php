@@ -169,8 +169,10 @@ final class ServerSessionTest extends TestCase
         $transport = new InMemoryTransport();
         $session = $this->createSession($transport);
 
-        // Client requests the latest protocol version
-        $clientRequestedVersion = Version::LATEST_PROTOCOL_VERSION;
+        // Client requests the latest legacy protocol version — the newest
+        // revision negotiable via initialize (2026-07-28 removes the
+        // handshake per SEP-2575).
+        $clientRequestedVersion = Version::LATEST_LEGACY_PROTOCOL_VERSION;
 
         // Create mock initialize request
         $request = $this->createInitializeClientRequest($clientRequestedVersion);
@@ -200,16 +202,16 @@ final class ServerSessionTest extends TestCase
         $this->assertInstanceOf(InitializeResult::class, $responseMessage->message->result);
 
         $this->assertSame(
-            Version::LATEST_PROTOCOL_VERSION,
+            Version::LATEST_LEGACY_PROTOCOL_VERSION,
             $responseMessage->message->result->protocolVersion,
-            'Server should accept and return latest protocol version'
+            'Server should accept and return latest legacy protocol version'
         );
 
         // Verify internal state
         $this->assertSame(
-            Version::LATEST_PROTOCOL_VERSION,
+            Version::LATEST_LEGACY_PROTOCOL_VERSION,
             $this->readProperty($session, 'negotiatedProtocolVersion'),
-            'Server should store latest protocol version'
+            'Server should store latest legacy protocol version'
         );
 
         $this->assertSame(
@@ -276,16 +278,16 @@ final class ServerSessionTest extends TestCase
         $this->assertInstanceOf(InitializeResult::class, $responseMessage->message->result);
 
         $this->assertSame(
-            Version::LATEST_PROTOCOL_VERSION,
+            Version::LATEST_LEGACY_PROTOCOL_VERSION,
             $responseMessage->message->result->protocolVersion,
-            'Server should fallback to latest supported version for unsupported client version'
+            'Server should fallback to latest legacy version for unsupported client version'
         );
 
         // Verify internal state uses fallback version
         $this->assertSame(
-            Version::LATEST_PROTOCOL_VERSION,
+            Version::LATEST_LEGACY_PROTOCOL_VERSION,
             $this->readProperty($session, 'negotiatedProtocolVersion'),
-            'Server should store latest protocol version as fallback'
+            'Server should store latest legacy protocol version as fallback'
         );
 
         $this->assertSame(
@@ -393,7 +395,7 @@ final class ServerSessionTest extends TestCase
                 id: new RequestId(9),
                 method: 'initialize',
                 params: new RawInitializeParams(
-                    protocolVersion: Version::LATEST_PROTOCOL_VERSION,
+                    protocolVersion: Version::LATEST_LEGACY_PROTOCOL_VERSION,
                     capabilities: ['roots' => null],
                     clientInfo: ['name' => 'test-client', 'version' => '1.2.3']
                 )
@@ -409,7 +411,7 @@ final class ServerSessionTest extends TestCase
             'Initialization should advance state through BaseSession path'
         );
         $this->assertSame(
-            Version::LATEST_PROTOCOL_VERSION,
+            Version::LATEST_LEGACY_PROTOCOL_VERSION,
             $this->readProperty($session, 'negotiatedProtocolVersion'),
             'Negotiated version should be recorded after BaseSession dispatch'
         );

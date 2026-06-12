@@ -101,12 +101,29 @@ class McpServerException extends McpError
 
     /**
      * Create a new exception for an unknown resource.
+     *
+     * SEP-2164: under the 2026-07-28 revision a missing resource is an
+     * Invalid Params error (-32602); earlier revisions use -32002. Both
+     * shapes carry the requested URI in error.data per the spec's examples.
+     *
+     * @param bool $modernErrorCode True when the negotiated protocol revision
+     *        is 2026-07-28 or newer (see Version feature
+     *        'resource_not_found_invalid_params')
      */
-    public static function unknownResource(string $uri): self
+    public static function unknownResource(string $uri, bool $modernErrorCode = false): self
     {
+        if ($modernErrorCode) {
+            return new self(new ErrorData(
+                code: -32602,
+                message: 'Resource not found',
+                data: ['uri' => $uri]
+            ));
+        }
+
         return new self(new ErrorData(
             code: -32002,
-            message: "Unknown resource: {$uri}"
+            message: "Unknown resource: {$uri}",
+            data: ['uri' => $uri]
         ));
     }
 

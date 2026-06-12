@@ -304,18 +304,30 @@ class McpServer
                 return $result;
             }
 
+            // SEP-2106 (2026-07-28): when an outputSchema is declared, the
+            // callback's return value IS the structured output and may be
+            // any JSON value — object, array, string, number, boolean, or
+            // null. The serialized JSON always rides along as a TextContent
+            // block (spec back-compat SHOULD), and the server session strips
+            // non-object structuredContent for legacy clients.
+            if ($outputSchema !== null) {
+                $jsonValue = is_object($result) ? (array) $result : $result;
+                if ($jsonValue !== null && !is_array($jsonValue) && !is_scalar($jsonValue)) {
+                    throw McpServerException::invalidToolResult($result);
+                }
+                $callResult = new CallToolResult(
+                    content: [new TextContent(text: json_encode($jsonValue, JSON_UNESCAPED_SLASHES))],
+                    structuredContent: $jsonValue
+                );
+                if ($jsonValue === null) {
+                    $callResult->setStructuredContentNull();
+                }
+                return $callResult;
+            }
+
             if (is_string($result)) {
                 return new CallToolResult(
                     content: [new TextContent(text: $result)]
-                );
-            }
-
-            // When outputSchema is set and callback returns array/object, populate both content and structuredContent
-            if ($outputSchema !== null && (is_array($result) || is_object($result))) {
-                $jsonResult = is_object($result) ? (array)$result : $result;
-                return new CallToolResult(
-                    content: [new TextContent(text: json_encode($jsonResult, JSON_UNESCAPED_SLASHES))],
-                    structuredContent: $jsonResult
                 );
             }
 
@@ -1021,7 +1033,11 @@ class McpServer
                 }
             }
 
-            throw McpServerException::unknownResource($uri);
+            // SEP-2164: -32602 under 2026-07-28, -32002 on legacy revisions.
+            // Never an empty contents array — a missing resource is always
+            // an error.
+            $modernErrorCode = $this->server->clientSupportsFeature('resource_not_found_invalid_params');
+            throw McpServerException::unknownResource($uri, $modernErrorCode);
         });
     }
 

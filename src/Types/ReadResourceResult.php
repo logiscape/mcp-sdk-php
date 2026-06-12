@@ -29,7 +29,9 @@ declare(strict_types=1);
 
 namespace Mcp\Types;
 
-class ReadResourceResult extends Result {
+class ReadResourceResult extends Result implements CacheableResult {
+    use CacheableResultTrait;
+
     /**
      * @param mixed[] $contents Validated by validate() to contain TextResourceContents|BlobResourceContents
      */
@@ -87,6 +89,7 @@ class ReadResourceResult extends Result {
 
     public function validate(): void {
         parent::validate();
+        $this->validateCacheHints();
         foreach ($this->contents as $content) {
             if (!($content instanceof TextResourceContents || $content instanceof BlobResourceContents)) {
                 throw new \InvalidArgumentException('Contents must be TextResourceContents or BlobResourceContents');

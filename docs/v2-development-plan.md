@@ -118,9 +118,22 @@ version, the per-request `_meta` envelope, and the type-system changes.
   (`ServerSession::clientSupportsFeature()`,
   `ClientSession::supportsFeature()`, `ServerSession::adaptResponseForClient()`).
 - **SEP-2575 (types half):** carry protocol version, client info, and
-  capabilities in `_meta` on every request; implement the `server/discover`
-  method reusing `Server::getCapabilities()`. (The handshake-removal and
-  detection logic is WS2; the GET-SSE replacement is WS3.)
+  capabilities in `_meta` on every request — the merged draft schema fixes
+  the keys as `io.modelcontextprotocol/protocolVersion` / `clientInfo` /
+  `clientCapabilities`, all three **required** on every modern request;
+  implement the `server/discover` method reusing `Server::getCapabilities()`.
+  Its result is `InitializeResult` minus negotiation plus caching:
+  `supportedVersions: string[]`, `capabilities`, `serverInfo`,
+  `instructions?`, **plus** the required `resultType` discriminator (a
+  SEP-2322 ripple on *every* modern result; `"complete"` outside MRTR) and
+  required `ttlMs`/`cacheScope` (the schema makes `DiscoverResult` a sixth
+  SEP-2549 carrier). Error surfaces fixed by the schema:
+  `UnsupportedProtocolVersionError` is `-32004` with
+  `data: {supported: string[], requested: string}`; missing-capability is
+  `-32003` with `data.requiredCapabilities`. Nothing replaces
+  `notifications/initialized` — readiness is implicit per-request. (The
+  handshake-removal and detection logic is WS2; the GET-SSE replacement is
+  WS3.)
 - **SEP-2567 (types half):** the protocol-level session disappears from the
   `2026-07-28` code path — internal state must not assume a session identity.
   (Header emission/acceptance changes are WS3.)
@@ -129,13 +142,22 @@ version, the per-request `_meta` envelope, and the type-system changes.
   keeps a root `type: "object"`, `outputSchema` is unrestricted,
   `structuredContent` may be any JSON value conforming to it.
 - **SEP-2164:** missing-resource error changes from `-32002` to `-32602`
-  under `2026-07-28` (legacy revisions keep `-32002`).
-- **SEP-2549:** `ttlMs` / `cacheScope` fields on list and resource-read
-  result types.
-- **SEP-414:** preserve and expose W3C Trace Context fields
-  (`traceparent` / `tracestate`) in `_meta` — pass-through and accessor
-  surface only, no OpenTelemetry dependency
-  ([docs/dependency-policy.md](dependency-policy.md)).
+  under `2026-07-28` (legacy revisions keep `-32002`). The final text adds:
+  `error.data` SHOULD carry the requested `uri`, servers MUST NOT return an
+  empty `contents` array for a nonexistent resource, and clients SHOULD keep
+  accepting `-32002` from legacy servers.
+- **SEP-2549:** `ttlMs` / `cacheScope` fields — both **required** in the
+  final schema (`ttlMs` integer ≥ 0, `cacheScope` exactly
+  `"public" | "private"`, no default scope) — on **six** result types:
+  the four list results, `resources/read`, and `server/discover`.
+  `CallToolResult` / `GetPromptResult` do not carry them.
+- **SEP-414:** preserve and expose W3C Trace Context fields in `_meta` —
+  pass-through and accessor surface only, no OpenTelemetry dependency
+  ([docs/dependency-policy.md](dependency-policy.md)). **Drift note:** the
+  reserved keys are the *bare* `traceparent`, `tracestate`, and `baggage`
+  (three keys, not two) — an explicit documented exception to the `_meta`
+  DNS-prefix convention; they must never be namespaced or stripped. Carried
+  on requests and notifications; MCP imposes no generation obligation.
 
 **Research focus (step 1):** final SEP-2575 `_meta` field names and the
 `server/discover` request/response schema; exact SEP-2106 validation
@@ -156,6 +178,42 @@ fields appear on additional result types in the final schema.
   pass and leave the draft baseline (or are re-attributed with a documented
   reason).
 - `composer check` green; `composer conformance` regression-free.
+
+**Status (2026-06-12):** implemented, verified, and code-reviewed (step 3);
+all six review findings were assessed as WS1-scope and fixed: ephemeral
+discover sessions are now deleted from the session store rather than
+persisted unreachable; discover requests bypass the transport's legacy
+version-header gate so an unsupported version yields the spec's `-32004`
+with the original request id and `data.supported`/`data.requested`, and the
+sessionless path maps the modern error codes (`-32602`/`-32003`/`-32004`)
+onto HTTP 400 as SEP-2575 mandates — discover responses are deliberately
+never SSE-framed, even on SSE-enabled servers, because the result is a
+single self-contained cacheable document and only a plain JSON response
+can carry those statuses (the status mapping for the *general*
+per-request modern path — including the removed-method 404s — lands with
+WS2's era detection; header/`_meta` mismatch `-32001` remains WS3); legacy clients now also get JSON-array
+(PHP list) `structuredContent` stripped, not just scalars; the `_meta`
+envelope validation type-checks `clientInfo` (Implementation shape) and
+`clientCapabilities` (object, not array/scalar); explicit
+`structuredContent: null` is representable end-to-end and any-JSON returns
+(including strings) from tools with an `outputSchema` produce conforming
+structured output; and `completion/complete` preserves `_meta` like every
+other request family. Version constants and feature gating
+(`stateless_lifecycle`, `caching_hints`, `resource_not_found_invalid_params`,
+`json_schema_2020_12`), the `_meta` envelope types (`MetaKeys`),
+`server/discover` answering on stdio and HTTP with envelope validation and
+`-32004`, the `resultType`/`ttlMs`/`cacheScope` result surface with
+modern-stamping/legacy-stripping in `adaptResponseForClient()`, version-gated
+SEP-2164 error codes, SEP-2106 schema pass-through plus any-JSON
+`structuredContent`, and SEP-414 trace-context accessors (`TraceContext`)
+are in place with unit coverage. A deliberate era split was introduced:
+`LATEST_LEGACY_PROTOCOL_VERSION` (`2025-11-25`) caps what the initialize
+handshake can negotiate, since the handshake itself is removed in
+`2026-07-28`. Draft-baseline curation: `json-schema-ref-no-deref` passes and
+left the baseline; `sep-2164-resource-not-found` and `caching` were
+re-attributed to WS2 with a documented shared root cause (the draft tool
+speaks the per-request stateless lifecycle with the `DRAFT-2026-v1`
+identifier, which requires WS2's per-request era detection to serve).
 
 ## WS2 — Client/server negotiation
 
@@ -183,6 +241,13 @@ following the spec's documented detection rules rather than guessing.
 **Research focus:** the final spec's normative detection language (the RC text
 may tighten); the exact wire shape of `UnsupportedProtocolVersionError` and
 its advertised-versions payload; how the reference SDKs sequence the probe.
+**Added by WS1 (2026-06-12):** how implementations should treat the
+`DRAFT-2026-v1` identifier during the RC window — the pinned draft
+conformance tool sends `MCP-Protocol-Version: DRAFT-2026-v1` (header and
+`_meta`) on every stateless request, so WS2's per-request era detection must
+decide whether/where the draft identifier is accepted alongside
+`2026-07-28` (check how the TypeScript SDK v2 handles it) without leaking it
+into the legacy negotiation surface.
 
 **Completion criteria**
 

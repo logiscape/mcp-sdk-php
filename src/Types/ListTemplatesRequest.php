@@ -32,7 +32,7 @@ namespace Mcp\Types;
  * Request to list available templates
  */
 class ListTemplatesRequest extends PaginatedRequest {
-    public function __construct(?string $cursor = null) {
-        parent::__construct('resources/templates/list', $cursor);
+    public function __construct(?string $cursor = null, ?Meta $_meta = null) {
+        parent::__construct('resources/templates/list', $cursor, $_meta);
     }
 } 

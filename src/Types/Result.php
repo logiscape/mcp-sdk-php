@@ -35,6 +35,21 @@ namespace Mcp\Types;
 class Result implements McpModel {
     use ExtraFieldsTrait;
 
+    /** Discriminator value for an ordinary, complete result. */
+    public const RESULT_TYPE_COMPLETE = 'complete';
+
+    /**
+     * Result-type discriminator (2026-07-28 revision).
+     *
+     * The draft schema requires `resultType` on every result; a missing field
+     * means the response came from a legacy peer and is treated as
+     * "complete". The server session stamps this on the modern path and
+     * strips it for legacy clients, so handlers normally leave it null.
+     * (The "input_required" variant arrives with the SEP-2322 multi-round-trip
+     * work in WS3.)
+     */
+    public ?string $resultType = null;
+
     public function __construct(
         public ?Meta $_meta = null,
     ) {}

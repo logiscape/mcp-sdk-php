@@ -36,16 +36,52 @@ namespace Mcp\Types;
  */
 class CallToolResult extends Result {
     /**
+     * Tracks an EXPLICIT JSON null structuredContent (SEP-2106 allows any
+     * JSON value, including null, when the outputSchema accepts it). The
+     * base Result serializer omits null properties, so without this marker
+     * "structuredContent: null" could not be put on the wire at all.
+     */
+    private bool $structuredContentIsNull = false;
+
+    /**
      * @param mixed[] $content Validated by validate() to contain TextContent|ImageContent|AudioContent|EmbeddedResource|ResourceLinkContent
-     * @param array<mixed>|null $structuredContent Structured output matching the tool's outputSchema
+     * @param mixed $structuredContent Structured output matching the tool's outputSchema.
+     *        Under the 2026-07-28 revision (SEP-2106) this may be ANY JSON value;
+     *        legacy revisions restrict it to an object (the server session strips
+     *        non-object values when adapting for legacy clients).
      */
     public function __construct(
         public readonly array $content,
         public ?bool $isError = false,
         ?Meta $_meta = null,
-        public ?array $structuredContent = null,
+        public mixed $structuredContent = null,
     ) {
         parent::__construct($_meta);
+    }
+
+    /**
+     * Mark this result as carrying an explicit `structuredContent: null`
+     * (2026-07-28 / SEP-2106). Distinct from leaving the property unset,
+     * which omits the field from the wire entirely.
+     */
+    public function setStructuredContentNull(): void {
+        $this->structuredContent = null;
+        $this->structuredContentIsNull = true;
+    }
+
+    public function hasExplicitNullStructuredContent(): bool {
+        return $this->structuredContentIsNull;
+    }
+
+    public function jsonSerialize(): mixed {
+        $data = parent::jsonSerialize();
+        if ($data instanceof \stdClass) {
+            $data = (array) $data;
+        }
+        if ($this->structuredContentIsNull) {
+            $data['structuredContent'] = null;
+        }
+        return $data;
     }
 
     /**
@@ -67,8 +103,9 @@ class CallToolResult extends Result {
         /** @var list<mixed> $contentData */
         $contentData = $data['content'] ?? [];
         $isError = $data['isError'] ?? false;
-        /** @var array<mixed>|null $structuredContent */
         $structuredContent = $data['structuredContent'] ?? null;
+        $hasExplicitNullStructuredContent = array_key_exists('structuredContent', $data)
+            && $data['structuredContent'] === null;
         unset($data['content'], $data['isError'], $data['structuredContent']);
 
         $content = [];
@@ -90,6 +127,9 @@ class CallToolResult extends Result {
 
         /** @var (TextContent|ImageContent|AudioContent|EmbeddedResource|ResourceLinkContent)[] $content */
         $obj = new self($content, (bool)$isError, $meta, $structuredContent);
+        if ($hasExplicitNullStructuredContent) {
+            $obj->setStructuredContentNull();
+        }
 
         // Extra fields
         foreach ($data as $k => $v) {

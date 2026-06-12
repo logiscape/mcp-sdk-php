@@ -192,6 +192,16 @@ class HttpServerRunner extends ServerRunner
                     $response = $this->transport->createJsonResponse($httpSession);
                 }
             }
+            if ($this->transport->lastRequestSessionless()) {
+                // Sessionless 2026-07-28 lifecycle request (SEP-2567): no
+                // Mcp-Session-Id is echoed and nothing is persisted — the
+                // ephemeral processing context is deleted outright (its id
+                // was never disclosed, so no client could ever reach it).
+                $this->transport->discardSession($httpSession);
+                $this->applyStatelessErrorStatus($response);
+                return $response;
+            }
+
             $response->setHeader('Mcp-Session-Id', $httpSession->getId());
 
             // 6) Store the session
@@ -206,6 +216,43 @@ class HttpServerRunner extends ServerRunner
         return HttpMessage::createJsonResponse(['error' => 'No valid session'], 400);
     }
     
+    /**
+     * Map modern JSON-RPC error codes onto the HTTP status SEP-2575
+     * mandates for the sessionless lifecycle: a malformed `_meta` envelope
+     * (-32602), a missing required client capability (-32003), and an
+     * unsupported protocol version (-32004) are all 400 Bad Request.
+     *
+     * Applied only on the sessionless (server/discover) path in WS1; the
+     * status mapping for the general per-request modern path (including the
+     * 404 for removed methods) lands with WS2's era detection.
+     */
+    private function applyStatelessErrorStatus(HttpMessage $response): void
+    {
+        if ($response->getStatusCode() !== 200) {
+            return;
+        }
+
+        $body = $response->getBody();
+        if ($body === null || $body === '') {
+            return;
+        }
+
+        $decoded = json_decode($body, true);
+        if (!is_array($decoded)) {
+            return;
+        }
+
+        $code = $decoded['error']['code'] ?? null;
+        $badRequestCodes = [
+            -32602, // Invalid params (malformed _meta envelope)
+            \Mcp\Shared\McpError::MISSING_REQUIRED_CLIENT_CAPABILITY,
+            \Mcp\Shared\McpError::UNSUPPORTED_PROTOCOL_VERSION,
+        ];
+        if (in_array($code, $badRequestCodes, true)) {
+            $response->setStatusCode(400);
+        }
+    }
+
     /**
      * Send an HTTP response.
      *

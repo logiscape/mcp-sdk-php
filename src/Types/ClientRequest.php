@@ -74,7 +74,8 @@ final class ClientRequest implements RequestWrapperInterface {
             $request instanceof TaskGetRequest ||
             $request instanceof TaskResultRequest ||
             $request instanceof TaskListRequest ||
-            $request instanceof TaskCancelRequest
+            $request instanceof TaskCancelRequest ||
+            $request instanceof DiscoverRequest
         )) {
             throw new \InvalidArgumentException('Invalid client request type');
         }
@@ -92,6 +93,7 @@ final class ClientRequest implements RequestWrapperInterface {
 
         return match ($method) {
             'initialize' => self::createInitializeRequest($params),
+            'server/discover' => self::createDiscoverRequest($params),
             'ping' => new self(new PingRequest()),
             'completion/complete' => self::createCompleteRequest($params),
             'logging/setLevel' => self::createSetLevelRequest($params),
@@ -195,6 +197,28 @@ final class ClientRequest implements RequestWrapperInterface {
         return new self(new InitializeRequest($initializeParams));
     }
 
+    /**
+     * Build a server/discover request (SEP-2575).
+     *
+     * The params (notably the `_meta` envelope carrying the protocol version,
+     * client info, and client capabilities) are preserved as-is; envelope
+     * validation is deliberately left to the server session so a malformed
+     * request gets the spec's -32602 JSON-RPC error instead of a parse failure.
+     *
+     * @param array<string, mixed> $params
+     */
+    private static function createDiscoverRequest(array $params): self {
+        $meta = self::extractMeta($params);
+        unset($params['_meta']);
+
+        $requestParams = new RequestParams($meta);
+        foreach ($params as $k => $v) {
+            $requestParams->$k = $v;
+        }
+
+        return new self(new DiscoverRequest($requestParams));
+    }
+
     /** @param array<string, mixed> $params */
     private static function createCompleteRequest(array $params): self {
         $argumentData = $params['argument'] ?? [];
@@ -219,8 +243,9 @@ final class ClientRequest implements RequestWrapperInterface {
         $contextData = $params['context'] ?? null;
         $context = is_array($contextData) ? CompletionContext::fromArray($contextData) : null;
 
-        // Construct the new CompleteRequestParams
-        $reqParams = new CompleteRequestParams($argument, $ref, context: $context);
+        // Construct the new CompleteRequestParams, preserving _meta so the
+        // modern envelope and trace-context keys survive (SEP-2575/SEP-414)
+        $reqParams = new CompleteRequestParams($argument, $ref, self::extractMeta($params), $context);
 
         // Now pass that to CompleteRequest
         return new self(new CompleteRequest($reqParams));
@@ -249,7 +274,8 @@ final class ClientRequest implements RequestWrapperInterface {
 
         $getParams = new GetPromptRequestParams(
             name: $params['name'],
-            arguments: $arguments
+            arguments: $arguments,
+            _meta: self::extractMeta($params)
         );
 
         return new self(new GetPromptRequest($getParams));
@@ -258,13 +284,13 @@ final class ClientRequest implements RequestWrapperInterface {
     /** @param array<string, mixed> $params */
     private static function createListPromptsRequest(array $params): self {
         $cursor = $params['cursor'] ?? null;
-        return new self(new ListPromptsRequest($cursor));
+        return new self(new ListPromptsRequest($cursor, self::extractMeta($params)));
     }
 
     /** @param array<string, mixed> $params */
     private static function createListResourcesRequest(array $params): self {
         $cursor = $params['cursor'] ?? null;
-        return new self(new ListResourcesRequest($cursor));
+        return new self(new ListResourcesRequest($cursor, self::extractMeta($params)));
     }
 
     /** @param array<string, mixed> $params */
@@ -272,7 +298,7 @@ final class ClientRequest implements RequestWrapperInterface {
         if (empty($params['uri'])) {
             throw new \InvalidArgumentException('ReadResourceRequest requires "uri"');
         }
-        return new self(new ReadResourceRequest(uri: $params['uri']));
+        return new self(new ReadResourceRequest(uri: $params['uri'], _meta: self::extractMeta($params)));
     }
 
     /** @param array<string, mixed> $params */
@@ -323,13 +349,13 @@ final class ClientRequest implements RequestWrapperInterface {
     /** @param array<string, mixed> $params */
     private static function createListTemplatesRequest(array $params): self {
         $cursor = $params['cursor'] ?? null;
-        return new self(new ListTemplatesRequest($cursor));
+        return new self(new ListTemplatesRequest($cursor, self::extractMeta($params)));
     }
 
     /** @param array<string, mixed> $params */
     private static function createListToolsRequest(array $params): self {
         $cursor = $params['cursor'] ?? null;
-        return new self(new ListToolsRequest($cursor));
+        return new self(new ListToolsRequest($cursor, self::extractMeta($params)));
     }
 
     /** @param array<string, mixed> $params */

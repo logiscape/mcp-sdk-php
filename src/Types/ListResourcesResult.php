@@ -29,7 +29,9 @@ declare(strict_types=1);
 
 namespace Mcp\Types;
 
-class ListResourcesResult extends PaginatedResult {
+class ListResourcesResult extends PaginatedResult implements CacheableResult {
+    use CacheableResultTrait;
+
     /**
      * @param Resource[] $resources
      */
@@ -71,6 +73,7 @@ class ListResourcesResult extends PaginatedResult {
 
     public function validate(): void {
         parent::validate();
+        $this->validateCacheHints();
         foreach ($this->resources as $resource) {
             if (!$resource instanceof Resource) {
                 throw new \InvalidArgumentException('Resources must be instances of Resource');

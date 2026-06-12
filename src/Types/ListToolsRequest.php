@@ -32,7 +32,7 @@ namespace Mcp\Types;
  * Request to list available tools
  */
 class ListToolsRequest extends PaginatedRequest {
-    public function __construct(?string $cursor = null) {
-        parent::__construct('tools/list', $cursor);
+    public function __construct(?string $cursor = null, ?Meta $_meta = null) {
+        parent::__construct('tools/list', $cursor, $_meta);
     }
 }

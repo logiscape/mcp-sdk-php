@@ -34,7 +34,11 @@ use Mcp\Shared\RequestResponder;
 use Mcp\Shared\Version;
 use Mcp\Types\Annotations;
 use Mcp\Types\AudioContent;
+use Mcp\Types\CacheableResult;
 use Mcp\Types\CallToolResult;
+use Mcp\Types\DiscoverResult;
+use Mcp\Types\MetaKeys;
+use Mcp\Types\RequestParams;
 use Mcp\Types\ClientCapabilities;
 use Mcp\Types\ClientNotification;
 use Mcp\Types\ClientRequest;
@@ -83,7 +87,7 @@ class ServerSession extends BaseSession {
     protected InitializationState $initializationState = InitializationState::NotInitialized;
     protected ?InitializeRequestParams $clientParams = null;
     protected LoggerInterface $logger;
-    protected string $negotiatedProtocolVersion = Version::LATEST_PROTOCOL_VERSION;
+    protected string $negotiatedProtocolVersion = Version::LATEST_LEGACY_PROTOCOL_VERSION;
     /** @var array<string, callable> Method-keyed request handlers registered via registerHandlers() */
     protected array $methodRequestHandlers = [];
     /** @var array<string, callable> Method-keyed notification handlers registered via registerNotificationHandlers() */
@@ -223,6 +227,14 @@ class ServerSession extends BaseSession {
             return;
         }
 
+        // server/discover (SEP-2575) is self-contained: it carries its own
+        // _meta envelope and is answered regardless of legacy initialization
+        // state — the 2026-07-28 lifecycle has no handshake to wait for.
+        if ($method === 'server/discover') {
+            $this->handleDiscover($params, fn($result) => $responder->sendResponse($result));
+            return;
+        }
+
         if ($this->initializationState !== InitializationState::Initialized) {
             throw new \RuntimeException('Received request before initialization was complete');
         }
@@ -335,23 +347,170 @@ class ServerSession extends BaseSession {
     
     /**
      * Negotiate the protocol version based on the client's requested version.
+     *
+     * Only legacy revisions are negotiable here: the 2026-07-28 revision
+     * removes the initialize handshake itself (SEP-2575), so a client that
+     * sends `initialize` is by definition speaking a legacy revision. The
+     * stateless revision is selected per-request via the _meta envelope
+     * instead (see handleDiscover; the full per-request era detection is
+     * the WS2 milestone).
      */
     private function negotiateProtocolVersion(string $clientRequestedVersion): string {
-        // If the client requests the latest version we support, return it
-        if ($clientRequestedVersion === Version::LATEST_PROTOCOL_VERSION) {
-            return Version::LATEST_PROTOCOL_VERSION;
-        }
-        
-        // If the client requests a version we support, return it
-        if (in_array($clientRequestedVersion, Version::SUPPORTED_PROTOCOL_VERSIONS)) {
+        // If the client requests a legacy version we support, return it
+        if (in_array($clientRequestedVersion, Version::SUPPORTED_PROTOCOL_VERSIONS, true)
+            && version_compare($clientRequestedVersion, Version::LATEST_LEGACY_PROTOCOL_VERSION, '<=')
+        ) {
             return $clientRequestedVersion;
         }
-        
-        // If the client requests an unsupported version, fallback to the most appropriate one
-        // For now, we'll use the latest version we support
-        $this->logger->info('Client requested unsupported protocol version: ' . $clientRequestedVersion . 
-                            '. Using latest supported version: ' . Version::LATEST_PROTOCOL_VERSION);
-        return Version::LATEST_PROTOCOL_VERSION;
+
+        // Unsupported (or non-legacy) version: fall back to the newest
+        // revision the legacy handshake can negotiate.
+        $this->logger->info('Client requested protocol version not negotiable via initialize: '
+                            . $clientRequestedVersion
+                            . '. Using latest legacy version: ' . Version::LATEST_LEGACY_PROTOCOL_VERSION);
+        return Version::LATEST_LEGACY_PROTOCOL_VERSION;
+    }
+
+    /**
+     * Handle the `server/discover` request (SEP-2575, revision 2026-07-28).
+     *
+     * The capabilities advertised here are the same object the legacy
+     * initialize result advertises (InitializationOptions::capabilities,
+     * built from Server::getCapabilities()), so the two discovery surfaces
+     * can never disagree.
+     *
+     * @param RequestParams|null $params The request params (carrying the _meta envelope)
+     * @param callable $respond Responder receiving a DiscoverResult or ErrorData
+     */
+    protected function handleDiscover(?RequestParams $params, callable $respond): void {
+        $envelopeError = $this->validateModernRequestMeta($params);
+        if ($envelopeError !== null) {
+            $respond($envelopeError);
+            return;
+        }
+
+        /** @var Meta $meta */
+        $meta = $params->_meta;
+        $requestedVersion = $meta->getExtraFields()[MetaKeys::PROTOCOL_VERSION];
+
+        if (!in_array($requestedVersion, Version::SUPPORTED_PROTOCOL_VERSIONS, true)) {
+            $respond(new \Mcp\Shared\ErrorData(
+                code: \Mcp\Shared\McpError::UNSUPPORTED_PROTOCOL_VERSION,
+                message: 'Unsupported protocol version',
+                data: [
+                    'supported' => Version::SUPPORTED_PROTOCOL_VERSIONS,
+                    'requested' => $requestedVersion,
+                ],
+            ));
+            return;
+        }
+
+        $result = new DiscoverResult(
+            supportedVersions: Version::SUPPORTED_PROTOCOL_VERSIONS,
+            capabilities: $this->initOptions->capabilities,
+            serverInfo: new Implementation(
+                name: $this->initOptions->serverName,
+                version: $this->initOptions->serverVersion
+            ),
+        );
+        // Required wire fields under 2026-07-28. The discover result is
+        // identical for every client of this server (capabilities are
+        // derived from registered handlers, not from the caller), so
+        // "public" is accurate; ttlMs 0 marks it immediately stale, the
+        // conservative default for an SDK that cannot know the server's
+        // deployment cadence.
+        $result->resultType = Result::RESULT_TYPE_COMPLETE;
+        $result->setCacheHints(0, CacheableResult::CACHE_SCOPE_PUBLIC);
+
+        $respond($result);
+    }
+
+    /**
+     * Validate the SEP-2575 per-request `_meta` envelope.
+     *
+     * @return \Mcp\Shared\ErrorData|null An InvalidParams (-32602) error
+     *         naming the missing/invalid field, or null when the envelope
+     *         is valid.
+     */
+    protected function validateModernRequestMeta(?RequestParams $params): ?\Mcp\Shared\ErrorData {
+        $meta = $params?->_meta;
+        if ($meta === null) {
+            return new \Mcp\Shared\ErrorData(
+                code: -32602,
+                message: 'Invalid params: missing required _meta envelope (SEP-2575)'
+            );
+        }
+
+        $required = [
+            MetaKeys::PROTOCOL_VERSION,
+            MetaKeys::CLIENT_INFO,
+            MetaKeys::CLIENT_CAPABILITIES,
+        ];
+        foreach ($required as $key) {
+            if (!isset($meta->{$key})) {
+                return new \Mcp\Shared\ErrorData(
+                    code: -32602,
+                    message: "Invalid params: missing required _meta field: {$key}"
+                );
+            }
+        }
+
+        $fields = $meta->getExtraFields();
+
+        $version = $fields[MetaKeys::PROTOCOL_VERSION];
+        if (!is_string($version) || $version === '') {
+            return new \Mcp\Shared\ErrorData(
+                code: -32602,
+                message: 'Invalid params: ' . MetaKeys::PROTOCOL_VERSION . ' must be a non-empty string'
+            );
+        }
+
+        if (!self::isValidImplementationValue($fields[MetaKeys::CLIENT_INFO])) {
+            return new \Mcp\Shared\ErrorData(
+                code: -32602,
+                message: 'Invalid params: ' . MetaKeys::CLIENT_INFO
+                    . ' must be an object with non-empty string "name" and "version"'
+            );
+        }
+
+        if (!self::isValidCapabilitiesValue($fields[MetaKeys::CLIENT_CAPABILITIES])) {
+            return new \Mcp\Shared\ErrorData(
+                code: -32602,
+                message: 'Invalid params: ' . MetaKeys::CLIENT_CAPABILITIES . ' must be an object'
+            );
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether a _meta clientInfo value is a valid Implementation: either the
+     * typed object (in-process callers) or the wire shape — an object with
+     * non-empty string name and version.
+     */
+    private static function isValidImplementationValue(mixed $value): bool {
+        if ($value instanceof Implementation) {
+            return true;
+        }
+        if ($value instanceof \stdClass) {
+            $value = (array) $value;
+        }
+        return is_array($value)
+            && isset($value['name'], $value['version'])
+            && is_string($value['name']) && $value['name'] !== ''
+            && is_string($value['version']) && $value['version'] !== '';
+    }
+
+    /**
+     * Whether a _meta clientCapabilities value is a JSON object (an empty
+     * object — no optional capabilities — is valid; a JSON array or any
+     * scalar is not).
+     */
+    private static function isValidCapabilitiesValue(mixed $value): bool {
+        if ($value instanceof ClientCapabilities || $value instanceof \stdClass) {
+            return true;
+        }
+        return is_array($value) && ($value === [] || !array_is_list($value));
     }
 
     /**
@@ -722,15 +881,46 @@ class ServerSession extends BaseSession {
     }
 
     /**
+     * Set the negotiated protocol version directly, without a handshake.
+     *
+     * This is the seam for the 2026-07-28 stateless path, where there is no
+     * initialize exchange and the effective protocol version arrives
+     * per-request in the _meta envelope (the per-request era detection that
+     * drives this lands with WS2). When the version selects the stateless
+     * revision the session is also marked ready, because that lifecycle has
+     * no handshake to wait for (SEP-2575).
+     *
+     * @internal Intended for the SDK's own era detection and for tests.
+     */
+    public function setNegotiatedProtocolVersion(string $version): void {
+        if (!in_array($version, Version::SUPPORTED_PROTOCOL_VERSIONS, true)) {
+            throw new InvalidArgumentException("Unsupported protocol version: {$version}");
+        }
+        $this->negotiatedProtocolVersion = $version;
+        if (Version::supportsFeature($version, 'stateless_lifecycle')) {
+            $this->initializationState = InitializationState::Initialized;
+        }
+    }
+
+    /**
      * Adapts an outgoing response to be compatible with the client's protocol version.
-     * 
+     *
      * @param mixed $response The response object to adapt
      * @return mixed The adapted response
      */
     public function adaptResponseForClient($response): mixed {
-        // No adaptation needed if client supports the latest version
-        if ($this->negotiatedProtocolVersion === Version::LATEST_PROTOCOL_VERSION) {
-            return $response;
+        // Modern path (2026-07-28): stamp the fields the stateless revision
+        // requires on every result instead of stripping anything.
+        if (Version::supportsFeature($this->negotiatedProtocolVersion, 'stateless_lifecycle')) {
+            return $this->adaptResultForModernClient($response);
+        }
+
+        // Legacy path: remove fields that did not exist before 2026-07-28.
+        if ($response instanceof Result) {
+            $response->resultType = null;
+            if ($response instanceof CacheableResult) {
+                $response->clearCacheHints();
+            }
         }
 
         // Apply adaptations based on the response type
@@ -746,12 +936,56 @@ class ServerSession extends BaseSession {
     }
 
     /**
+     * Ensure a result carries the fields the 2026-07-28 schema requires:
+     * the `resultType` discriminator on every result, and the SEP-2549
+     * `ttlMs` / `cacheScope` caching hints on cacheable results. Handlers
+     * that already set them are left untouched; bare results get the most
+     * conservative defaults (ttlMs 0 = immediately stale, scope "private").
+     */
+    private function adaptResultForModernClient(mixed $response): mixed {
+        if ($response instanceof Result) {
+            if ($response->resultType === null) {
+                $response->resultType = Result::RESULT_TYPE_COMPLETE;
+            }
+            if ($response instanceof CacheableResult
+                && ($response->getTtlMs() === null || $response->getCacheScope() === null)
+            ) {
+                $response->setCacheHints(
+                    $response->getTtlMs() ?? 0,
+                    $response->getCacheScope() ?? CacheableResult::CACHE_SCOPE_PRIVATE
+                );
+            }
+        }
+        return $response;
+    }
+
+    /**
      * Adapts a CallToolResult to be compatible with older protocol versions.
      */
     private function adaptCallToolResult(CallToolResult $result): CallToolResult {
         $needsAdaptation = false;
         $adaptedContent = $result->content;
         $structuredContent = $result->structuredContent;
+
+        // Non-object structuredContent (any JSON value) is a 2026-07-28
+        // capability (SEP-2106); legacy clients expect an object, so strip
+        // everything else for them: scalars, explicit null, and PHP list
+        // arrays (which serialize as JSON arrays). An empty PHP array is
+        // kept — it is how handlers have always expressed an empty JSON
+        // object. McpServer always emits the serialized JSON as a
+        // TextContent block alongside, so no information is lost.
+        if (!Version::supportsFeature($this->negotiatedProtocolVersion, 'json_schema_2020_12')) {
+            $isJsonObject = is_array($structuredContent)
+                && ($structuredContent === [] || !array_is_list($structuredContent));
+            if ($structuredContent !== null && !$isJsonObject) {
+                $structuredContent = null;
+                $needsAdaptation = true;
+            }
+            if ($result->hasExplicitNullStructuredContent()) {
+                // The rebuilt result below carries no explicit-null marker.
+                $needsAdaptation = true;
+            }
+        }
 
         // Strip structuredContent and ResourceLinkContent for clients older than 2025-06-18
         if (version_compare($this->negotiatedProtocolVersion, '2025-06-18', '<')) {

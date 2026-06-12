@@ -320,6 +320,42 @@ function scenarioElicitationClientDefaults(string $serverUrl): void
 }
 
 // ---------------------------------------------------------------------------
+// Scenario: json-schema-ref-no-deref (SEP-2106)
+//
+// The conformance server advertises a tool whose inputSchema uses JSON
+// Schema 2020-12 $defs/$ref, including a $ref to a network "canary" URL the
+// test framework watches. The client must list the tools (parsing the
+// 2020-12 schema without choking) and MUST NOT fetch the network $ref —
+// SEP-2106 forbids automatic dereferencing of network URIs. The PHP SDK
+// passes schemas through verbatim and never dereferences, so this scenario
+// only needs the connect + tools/list flow.
+// ---------------------------------------------------------------------------
+
+function scenarioJsonSchemaRefNoDeref(string $serverUrl): void
+{
+    $session = connectToServer($serverUrl);
+
+    $toolsResult = $session->listTools();
+    $tools = $toolsResult->tools ?? [];
+    fwrite(STDERR, "Found " . count($tools) . " tools\n");
+
+    if (empty($tools)) {
+        throw new \RuntimeException('Expected at least one tool advertising a 2020-12 schema');
+    }
+
+    // Confirm the $ref-bearing schema round-tripped intact (nothing
+    // dereferenced, nothing dropped).
+    foreach ($tools as $tool) {
+        $schema = json_decode(json_encode($tool->inputSchema), true);
+        $refs = isset($schema['properties']) ? array_filter(
+            $schema['properties'],
+            static fn($p) => is_array($p) && isset($p['$ref'])
+        ) : [];
+        fwrite(STDERR, "Tool {$tool->name}: " . count($refs) . " \$ref properties preserved\n");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Scenario: auth/* - OAuth authorization-code scenarios
 //
 // Matches reference runAuthClient: connect with OAuth, listTools, then
@@ -372,6 +408,7 @@ try {
 
         'elicitation-sep1034-client-defaults' => scenarioElicitationClientDefaults($serverUrl),
         'sse-retry' => scenarioSseRetry($serverUrl),
+        'json-schema-ref-no-deref' => scenarioJsonSchemaRefNoDeref($serverUrl),
 
         // --- Client credentials grant type (not implemented) ---
         // These scenarios require grant_type=client_credentials which the SDK

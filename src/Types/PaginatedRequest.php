@@ -35,10 +35,11 @@ abstract class PaginatedRequest extends Request {
     public function __construct(
         string $method,
         ?string $cursor = null,
+        ?Meta $_meta = null,
     ) {
         // Instead of passing cursor directly to Request, we create PaginatedRequestParams
         // and pass as params.
-        parent::__construct($method, new PaginatedRequestParams($cursor));
+        parent::__construct($method, new PaginatedRequestParams($cursor, $_meta));
     }
 
     public function validate(): void {

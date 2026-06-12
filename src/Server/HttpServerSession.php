@@ -198,6 +198,14 @@ class HttpServerSession extends ServerSession
             return;
         }
 
+        // server/discover (SEP-2575) is self-contained: it carries its own
+        // _meta envelope and is answered regardless of legacy initialization
+        // state — the 2026-07-28 lifecycle has no handshake to wait for.
+        if ($method === 'server/discover') {
+            $this->handleDiscover($params, fn($result) => $responder->sendResponse($result));
+            return;
+        }
+
         if ($this->initializationState !== InitializationState::Initialized) {
             throw new \RuntimeException('Received request before initialization was complete');
         }
