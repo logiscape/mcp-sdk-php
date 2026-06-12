@@ -35,6 +35,7 @@ use Mcp\Types\MetaKeys;
 use Mcp\Types\RequestId;
 use Mcp\Types\JsonRpcErrorObject;
 use Mcp\Shared\McpError;
+use Mcp\Shared\McpHeaders;
 use Mcp\Shared\Version;
 use Mcp\Server\Transport\Http\Config;
 use Mcp\Server\Transport\Http\Environment;
@@ -111,6 +112,24 @@ class HttpServerTransport implements Transport
      * @var bool
      */
     private bool $currentRequestSessionless = false;
+
+    /**
+     * Lower-cased header map of the modern (2026-07-28) request currently
+     * being handled, captured so downstream layers (the runner / session /
+     * McpServer's Mcp-Param-* validation) can see transport metadata the
+     * JSON-RPC body does not carry (SEP-2243). Null for legacy requests.
+     *
+     * @var array<string, string>|null
+     */
+    private ?array $currentRequestHeaders = null;
+
+    /**
+     * Whether the modern request currently being handled advertised
+     * text/event-stream in its Accept header — the precondition for
+     * upgrading its response to a request-scoped SSE stream when the
+     * handler emitted notifications (SEP-2575).
+     */
+    private bool $currentRequestAcceptsSse = false;
 
     /**
      * Last session cleanup time.
@@ -384,6 +403,8 @@ class HttpServerTransport implements Transport
         $this->lastResponseMode = null;
         $this->currentStreamId = null;
         $this->currentOriginatingRequestId = null;
+        $this->currentRequestHeaders = null;
+        $this->currentRequestAcceptsSse = false;
 
         // DNS rebinding protection: validate Origin header (MCP spec MUST requirement)
         if ($rejection = $this->validateOrigin($request)) {
@@ -417,8 +438,11 @@ class HttpServerTransport implements Transport
         // legacy version-header gate — the session answers an unsupported
         // version with the spec's UnsupportedProtocolVersionError (-32004,
         // original request id, data.supported/requested) instead of the
-        // transport's generic -32600/id:null. Validating header-vs-_meta
-        // mismatch (-32001) is the WS3 milestone.
+        // transport's generic -32600/id:null. The SEP-2243 header checks
+        // (validateModernRequestHeaders) run first: a missing or
+        // body-mismatched standard header is rejected 400/-32001 before
+        // the envelope or version is considered, so -32004 only ever
+        // fires when header and _meta agree.
         $headerVersion = $request->getHeader('MCP-Protocol-Version');
         $headerDeclaresModern = $headerVersion !== null && Version::isModernVersion($headerVersion);
         $isModernPost = $method === 'POST'
@@ -453,20 +477,37 @@ class HttpServerTransport implements Transport
         // header and to discard the ephemeral session instead of
         // persisting it.
         if ($isModernPost) {
+            // SEP-2243: validate the request-metadata headers before any
+            // body-level processing. HeaderMismatch (-32001, HTTP 400)
+            // takes precedence over the envelope's -32602 and the
+            // version's -32004 whenever a header is missing or disagrees
+            // with the body.
+            if ($rejection = $this->validateModernRequestHeaders($request, $decodedPostBody)) {
+                return $rejection;
+            }
+            $this->currentRequestHeaders = $request->getHeaders();
             $this->currentRequestSessionless = true;
             $session = $this->createSession();
             $this->currentSessionId = $session->getId();
             $this->lastUsedSession = $session;
 
+            // Remember whether this client can accept a request-scoped
+            // SSE response: createJsonResponse() upgrades to a buffered
+            // text/event-stream body when the handler emitted
+            // notifications during execution (SEP-2575 request-scoped
+            // streams).
+            $accept = $request->getHeader('Accept');
+            $this->currentRequestAcceptsSse = $accept !== null
+                && stripos($accept, 'text/event-stream') !== false;
+
             $response = $this->handlePostRequest($request, $session, $decodedPostBody);
 
-            // Modern stateless responses are never SSE-framed in this
-            // milestone, even when the client accepts text/event-stream
-            // and SSE is enabled: the SEP-2575 error statuses (HTTP
-            // 400/404) can only be applied to a plain JSON response —
-            // once an SSE stream commits to 200, the status is unfixable.
-            // Request-scoped SSE streams for the modern path land with
-            // WS3's transport changes.
+            // The legacy SSE emitters (priming frames, event ids,
+            // Last-Event-ID replay, session streams) never run for modern
+            // requests: the SEP-2575 error statuses (HTTP 400/404) can
+            // only be applied to a plain JSON response, and modern
+            // request-scoped SSE — built in createJsonResponse() as a
+            // buffered stream without event ids — has no resumption.
             $this->lastResponseMode = null;
             $this->currentStreamId = null;
             $this->currentOriginatingRequestId = null;
@@ -1555,7 +1596,11 @@ class HttpServerTransport implements Transport
                 // re-chunk the body and break the client's SSE parser.
                 $io->sendHeader('Content-Encoding', 'identity');
             }
-            $io->sendHeader('Mcp-Session-Id', $session->getId());
+            if (!$this->currentRequestSessionless) {
+                // SEP-2567: the 2026-07-28 path never mints or echoes a
+                // session id — only legacy streams carry the header.
+                $io->sendHeader('Mcp-Session-Id', $session->getId());
+            }
         }
     }
 
@@ -1868,25 +1913,33 @@ class HttpServerTransport implements Transport
             return HttpMessage::createEmptyResponse(202);
         }
 
-        // Modern stateless request (SEP-2567/2575): the Streamable HTTP
-        // JSON response mode carries exactly ONE JSON object — the
-        // response (or error) to the request; an array body is not a
-        // valid response shape on the modern revision. Notifications a
-        // handler emitted during execution have no channel on this
-        // response and are dropped (the transport has no logging
-        // facility; the limitation is documented in the development
-        // plan) — WS3's request-scoped SSE and subscriptions/listen are
-        // their carriers. The session's HTTP status hint (SEP-2575: 400
-        // for envelope/version/capability errors, 404 for unknown or
-        // removed methods) rides on the surviving response.
+        // Modern stateless request (SEP-2567/2575). Two response shapes
+        // exist on this path:
+        // - plain JSON: exactly ONE JSON object — the response (or error)
+        //   to the request; an array body is not a valid response shape on
+        //   the modern revision. The session's HTTP status hint (SEP-2575:
+        //   400 for envelope/version/capability/header errors, 404 for
+        //   unknown or removed methods) rides on it.
+        // - request-scoped SSE: when the handler emitted notifications
+        //   during execution, the client accepts text/event-stream, SSE
+        //   is enabled, and the response is a success — the notifications
+        //   (which MUST relate to this request) stream first, then the
+        //   final response terminates the stream. No event ids and no
+        //   Last-Event-ID resumption exist on the modern path.
+        // Error responses are always plain JSON (an SSE stream commits to
+        // status 200, which the SEP-2575 statuses forbid for errors), so
+        // notifications preceding an error are dropped.
         if ($this->currentRequestSessionless) {
             $response = null;
+            $notifications = [];
             foreach ($pendingMessages as $msg) {
                 $inner = $msg->message;
                 if ($inner instanceof JSONRPCResponse || $inner instanceof JSONRPCError) {
                     // A modern POST carries exactly one request, so at
                     // most one queued message is its response.
                     $response = $msg;
+                } elseif ($inner instanceof JSONRPCNotification) {
+                    $notifications[] = $msg;
                 }
             }
             if ($response === null) {
@@ -1894,9 +1947,30 @@ class HttpServerTransport implements Transport
                 // POST whose handler emitted more notifications).
                 return HttpMessage::createEmptyResponse(202);
             }
+
+            $status = $response->httpStatusHint ?? 200;
+            if ($notifications !== []
+                && $status === 200
+                && $this->currentRequestAcceptsSse
+                && $this->config->isSseEnabled()
+            ) {
+                $body = '';
+                foreach ($notifications as $msg) {
+                    $body .= 'data: ' . json_encode($msg->message, JSON_UNESCAPED_SLASHES) . "\n\n";
+                }
+                $body .= 'data: ' . json_encode($response->message, JSON_UNESCAPED_SLASHES) . "\n\n";
+
+                $sse = new HttpMessage($body);
+                $sse->setStatusCode(200);
+                $sse->setHeader('Content-Type', 'text/event-stream');
+                $sse->setHeader('Cache-Control', 'no-cache, no-transform');
+                $sse->setHeader('X-Accel-Buffering', 'no');
+                return $sse;
+            }
+
             return HttpMessage::createJsonResponse(
                 $response->message,
-                $response->httpStatusHint ?? 200
+                $status
             );
         }
 
@@ -2205,6 +2279,127 @@ class HttpServerTransport implements Transport
             ],
             400
         );
+    }
+
+    /**
+     * SEP-2243 server validation for a modern (2026-07-28) POST: the
+     * standard request-metadata headers must be present and must match the
+     * body. Any violation is rejected with HTTP 400 and the HeaderMismatch
+     * JSON-RPC error (-32001) carrying the request's id.
+     *
+     * Checks, in order (mirroring the spec's canonical sequence so -32004
+     * only ever fires when header and _meta agree):
+     * 1. MCP-Protocol-Version header present — a request that signals the
+     *    modern era through its body cannot be served as a legacy
+     *    revision, so the header is required here even though bare legacy
+     *    requests may omit it.
+     * 2. MCP-Protocol-Version header equals the _meta envelope's
+     *    protocolVersion when the envelope carries one (a missing envelope
+     *    key is the session's -32602, not a header mismatch).
+     * 3. Mcp-Method header present and equal to the body's method (values
+     *    case-sensitive, OWS-trimmed; header names are looked up
+     *    case-insensitively by HttpMessage).
+     * 4. Mcp-Name header present and matching on the name/uri-bearing
+     *    methods.
+     *
+     * Mcp-Param-* validation needs the tool's inputSchema and runs later,
+     * in McpServer's tools/call dispatch, against the header map captured
+     * in currentRequestHeaders.
+     *
+     * @param array<string, mixed>|null $decoded The single up-front body parse
+     * @return HttpMessage|null A 400 HeaderMismatch response, or null to allow
+     */
+    private function validateModernRequestHeaders(HttpMessage $request, ?array $decoded): ?HttpMessage
+    {
+        $bodyId = null;
+        if (is_array($decoded)) {
+            $id = $decoded['id'] ?? null;
+            if (is_string($id) || is_int($id)) {
+                $bodyId = $id;
+            }
+        }
+
+        $reject = static function (string $message) use ($bodyId): HttpMessage {
+            return HttpMessage::createJsonResponse(
+                [
+                    'jsonrpc' => '2.0',
+                    'id' => $bodyId,
+                    'error' => [
+                        'code' => McpError::HEADER_MISMATCH,
+                        'message' => $message,
+                    ],
+                ],
+                400
+            );
+        };
+
+        $headerVersion = $request->getHeader(McpHeaders::PROTOCOL_VERSION);
+        if ($headerVersion === null || McpHeaders::trimOws($headerVersion) === '') {
+            return $reject('Header mismatch: missing required MCP-Protocol-Version header');
+        }
+        $headerVersion = McpHeaders::trimOws($headerVersion);
+
+        $meta = is_array($decoded) ? ($decoded['params']['_meta'] ?? null) : null;
+        $metaVersion = is_array($meta) ? ($meta[MetaKeys::PROTOCOL_VERSION] ?? null) : null;
+        if (is_string($metaVersion) && $metaVersion !== $headerVersion) {
+            return $reject(
+                "Header mismatch: MCP-Protocol-Version header value '$headerVersion' does not match "
+                . "the _meta protocolVersion '$metaVersion'"
+            );
+        }
+
+        $bodyMethod = null;
+        if (is_array($decoded) && isset($decoded['method']) && is_string($decoded['method'])) {
+            $bodyMethod = $decoded['method'];
+        }
+        if ($bodyMethod === null) {
+            // Not a request/notification shape; body-level validation will
+            // produce the appropriate JSON-RPC error.
+            return null;
+        }
+
+        $mcpMethod = $request->getHeader(McpHeaders::METHOD);
+        if ($mcpMethod === null) {
+            return $reject('Header mismatch: missing required Mcp-Method header');
+        }
+        $mcpMethod = McpHeaders::trimOws($mcpMethod);
+        if ($mcpMethod !== $bodyMethod) {
+            return $reject(
+                "Header mismatch: Mcp-Method header value '$mcpMethod' does not match body method '$bodyMethod'"
+            );
+        }
+
+        if (McpHeaders::methodBearsName($bodyMethod)) {
+            $params = is_array($decoded['params'] ?? null) ? $decoded['params'] : null;
+            $expectedName = McpHeaders::expectedNameValue($bodyMethod, $params);
+            if ($expectedName !== null) {
+                $mcpName = $request->getHeader(McpHeaders::NAME);
+                if ($mcpName === null) {
+                    return $reject("Header mismatch: missing required Mcp-Name header for $bodyMethod");
+                }
+                $mcpName = McpHeaders::trimOws($mcpName);
+                if ($mcpName !== $expectedName) {
+                    return $reject(
+                        "Header mismatch: Mcp-Name header value '$mcpName' does not match body value '$expectedName'"
+                    );
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The lower-cased header map of the modern request handled by the last
+     * handleRequest() call, or null when that request was legacy. The
+     * runner forwards this to the server session so schema-driven header
+     * validation (Mcp-Param-*) can run at dispatch time.
+     *
+     * @return array<string, string>|null
+     */
+    public function lastRequestHeaders(): ?array
+    {
+        return $this->currentRequestHeaders;
     }
 
     /**

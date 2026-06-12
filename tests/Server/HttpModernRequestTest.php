@@ -123,15 +123,46 @@ final class HttpModernRequestTest extends TestCase
         ]);
     }
 
+    /**
+     * Build a POST carrying the SEP-2243 headers a conforming modern
+     * client sends: Mcp-Method mirroring the body method, Mcp-Name on the
+     * name/uri-bearing methods, and MCP-Protocol-Version (explicit
+     * $headerVersion wins; otherwise mirrored from the envelope when the
+     * body is modern). Tests exercising header violations adjust headers
+     * after calling this.
+     */
     private function postRequest(string $body, ?string $headerVersion = null, ?string $sessionId = null): HttpMessage
     {
         $request = new HttpMessage($body);
         $request->setMethod('POST');
         $request->setHeader('Content-Type', 'application/json');
         $request->setHeader('Accept', 'application/json, text/event-stream');
+
+        $decoded = json_decode($body, true);
+        $metaVersion = is_array($decoded)
+            ? ($decoded['params']['_meta'][MetaKeys::PROTOCOL_VERSION] ?? null)
+            : null;
+        if ($headerVersion === null && is_string($metaVersion)) {
+            $headerVersion = $metaVersion;
+        }
         if ($headerVersion !== null) {
             $request->setHeader('MCP-Protocol-Version', $headerVersion);
         }
+        $isModernBody = is_string($metaVersion)
+            || (is_array($decoded) && ($decoded['method'] ?? null) === 'server/discover');
+        if (($headerVersion !== null || $isModernBody)
+            && is_array($decoded)
+            && isset($decoded['method'])
+            && is_string($decoded['method'])
+        ) {
+            $request->setHeader('Mcp-Method', $decoded['method']);
+            $params = is_array($decoded['params'] ?? null) ? $decoded['params'] : null;
+            $name = \Mcp\Shared\McpHeaders::expectedNameValue($decoded['method'], $params);
+            if ($name !== null) {
+                $request->setHeader('Mcp-Name', $name);
+            }
+        }
+
         if ($sessionId !== null) {
             $request->setHeader('Mcp-Session-Id', $sessionId);
         }
@@ -242,15 +273,14 @@ final class HttpModernRequestTest extends TestCase
     }
 
     /**
-     * Unknown methods on the modern path answer HTTP 404 + -32601 too
-     * (subscriptions/listen is honest here: not implemented until WS3).
+     * Unknown methods on the modern path answer HTTP 404 + -32601 too.
      */
     public function testUnknownMethodAnswers404(): void
     {
         $runner = $this->makeRunner();
 
         $response = $runner->handleRequest($this->postRequest(
-            $this->body('subscriptions/listen', ['_meta' => $this->validEnvelope()], id: 3),
+            $this->body('totally/unknown', ['_meta' => $this->validEnvelope()], id: 3),
             headerVersion: '2026-07-28'
         ));
 
@@ -360,8 +390,10 @@ final class HttpModernRequestTest extends TestCase
      * the only valid shape for the modern JSON response mode (review
      * findings: queued notifications first discarded the status, then the
      * interim fix returned an invalid [notification, error] array). The
-     * notification itself is dropped: it has no channel on a plain JSON
-     * response until WS3's request-scoped SSE / subscriptions/listen.
+     * notification itself is dropped: error responses are always plain
+     * JSON (an SSE stream would commit to status 200), so notifications
+     * preceding an error have no carrier even now that request-scoped SSE
+     * exists for success responses.
      */
     public function testNotificationBeforeErrorKeepsModernStatusAndSingleObjectBody(): void
     {
@@ -396,7 +428,7 @@ final class HttpModernRequestTest extends TestCase
         $runner = $this->makeRunner();
 
         $response = $runner->handleRequest($this->postRequest(
-            $this->body('subscriptions/listen', [
+            $this->body('totally/unknown', [
                 '_meta' => [MetaKeys::PROTOCOL_VERSION => '2026-07-28'],
             ], id: 13),
             headerVersion: '2026-07-28'
@@ -409,9 +441,9 @@ final class HttpModernRequestTest extends TestCase
     }
 
     /**
-     * Modern responses are plain JSON even on SSE-enabled servers in this
-     * milestone — the SEP-2575 statuses can only ride a JSON response
-     * (request-scoped modern SSE lands with WS3).
+     * Modern ERROR responses are plain JSON even on SSE-enabled servers —
+     * the SEP-2575 statuses can only ride a JSON response (request-scoped
+     * SSE upgrades success responses only).
      */
     public function testModernRequestOnSseEnabledServerReturnsPlainJson(): void
     {

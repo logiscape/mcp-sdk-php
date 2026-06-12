@@ -54,6 +54,9 @@ class AuthorizationServerMetadata
      * @param array<int, string>|null $scopesSupported Supported scopes
      * @param string|null $revocationEndpoint Token revocation endpoint
      * @param string|null $introspectionEndpoint Token introspection endpoint
+     * @param bool|null $authorizationResponseIssParameterSupported Whether the AS advertises
+     *        RFC 9207 iss authorization response parameter support (null when not present
+     *        in the metadata document)
      */
     public function __construct(
         public readonly string $issuer,
@@ -67,7 +70,8 @@ class AuthorizationServerMetadata
         public readonly array $tokenEndpointAuthMethodsSupported = ['client_secret_post'],
         public readonly ?array $scopesSupported = null,
         public readonly ?string $revocationEndpoint = null,
-        public readonly ?string $introspectionEndpoint = null
+        public readonly ?string $introspectionEndpoint = null,
+        public readonly ?bool $authorizationResponseIssParameterSupported = null
     ) {
     }
 
@@ -155,7 +159,10 @@ class AuthorizationServerMetadata
             tokenEndpointAuthMethodsSupported: $data['token_endpoint_auth_methods_supported'] ?? ['client_secret_post'],
             scopesSupported: $data['scopes_supported'] ?? null,
             revocationEndpoint: $data['revocation_endpoint'] ?? null,
-            introspectionEndpoint: $data['introspection_endpoint'] ?? null
+            introspectionEndpoint: $data['introspection_endpoint'] ?? null,
+            authorizationResponseIssParameterSupported: isset($data['authorization_response_iss_parameter_supported'])
+                ? (bool) $data['authorization_response_iss_parameter_supported']
+                : null
         );
     }
 
@@ -191,6 +198,11 @@ class AuthorizationServerMetadata
 
         if ($this->introspectionEndpoint !== null) {
             $data['introspection_endpoint'] = $this->introspectionEndpoint;
+        }
+
+        if ($this->authorizationResponseIssParameterSupported !== null) {
+            $data['authorization_response_iss_parameter_supported'] =
+                $this->authorizationResponseIssParameterSupported;
         }
 
         return $data;

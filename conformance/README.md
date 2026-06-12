@@ -87,23 +87,18 @@ stale entry.
 the repository where "this test is expected to fail" is encoded. Every entry
 carries a reason comment.
 
-At the time of writing (suite `v0.1.16`) the baseline contains:
-
-- `auth/client-credentials-jwt` — the SDK does not implement the
-  `client_credentials` grant with JWT assertions yet.
-- `auth/client-credentials-basic` — the SDK does not implement the
-  `client_credentials` grant with HTTP Basic client authentication yet.
-- `auth/cross-app-access-complete-flow` — partial: 8 of 10 assertions pass,
-  two remain.
-
-All three are optional MCP Extensions. Closing them is tracked in
-[`../ROADMAP.md`](../ROADMAP.md).
+As of the WS3 milestone (suite `v0.1.16`) **the stable baseline is empty**:
+100% of stable scenarios pass on both the server and client tracks. Its
+last three entries — the `client_credentials` grant variants and the
+cross-app-access flow, all optional MCP Extensions — were closed by WS3's
+authorization hardening.
 
 The draft track's baseline
-([`conformance-draft-baseline.yml`](conformance-draft-baseline.yml)) is
-larger by design while v2 is pre-alpha: every `2026-07-28` behavior the SDK
-has not yet implemented fails honestly there, annotated with the development
-plan workstream (WS1–WS3) that will make it pass.
+([`conformance-draft-baseline.yml`](conformance-draft-baseline.yml))
+carries the remaining `2026-07-28` entries while v2 is pre-alpha, each
+annotated with its root cause: bugs/staleness in the pinned alpha tool
+itself are documented there (and re-checked at every draft-pin bump)
+rather than worked around in the SDK.
 
 ## The no-shortcut rule
 

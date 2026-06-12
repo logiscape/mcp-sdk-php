@@ -151,9 +151,14 @@ class Client {
      *                                                   initialize handshake when the server is legacy;
      *                                                   'legacy' skips the probe (for servers known to
      *                                                   predate 2026-07-28, or fragile ones that mishandle
-     *                                                   unknown pre-initialize requests); 'modern' forbids
-     *                                                   the legacy fallback. For HTTP, may also be supplied
-     *                                                   as $env['protocolMode'], which takes precedence.
+     *                                                   unknown pre-initialize requests); 'modern' skips the
+     *                                                   probe and enters the stateless modern era directly
+     *                                                   with the preferred wire version (for servers known
+     *                                                   to speak 2026-07-28 — including ones that reject
+     *                                                   both server/discover and initialize). For HTTP, may
+     *                                                   also be supplied as $env['protocolMode'], which
+     *                                                   takes precedence; $env['protocolVersion'] optionally
+     *                                                   overrides the preferred modern wire identifier.
      * @param float|null                   $probeTimeout Seconds to wait for the discover probe before
      *                                                   concluding the server is a silent legacy server
      *                                                   (defaults to $readTimeout, or 10s when unset). For
@@ -248,6 +253,12 @@ class Client {
                         $session->dispatchIncomingMessage($msg);
                     }
                 );
+
+                // SEP-2243: header mirroring and x-mcp-header annotation
+                // validation apply to HTTP clients only — the stdio
+                // transport has no headers and must keep tools/list
+                // results unfiltered.
+                $this->session->setHttpTransportMode(true);
             }
 
             // Apply any elicitation handler registered via onElicit() before
@@ -285,18 +296,24 @@ class Client {
             // initialize keeps the normal timeout; a timed-out probe throws
             // HttpRequestTimeoutException, which negotiate() classifies as
             // a silent legacy server.
+            $preferredVersion = null;
             if ($this->transport instanceof StreamableHttpTransport) {
                 $httpOptions = $env ?? [];
                 $protocolMode = $httpOptions['protocolMode'] ?? $protocolMode;
                 $probeTimeout = $httpOptions['probeTimeout'] ?? $probeTimeout;
-                if ($protocolMode !== 'legacy') {
+                // Preferred modern wire identifier (SEP-2575): the first
+                // probe version for mode 'auto', the session's wire
+                // version for mode 'modern'. Defaults to the latest
+                // supported revision when unset.
+                $preferredVersion = $httpOptions['protocolVersion'] ?? null;
+                if ($protocolMode === 'auto') {
                     $this->transport->setProbeTimeout(
                         $probeTimeout ?? $readTimeout ?? ClientSession::DEFAULT_PROBE_TIMEOUT
                     );
                 }
             }
             try {
-                $era = $this->session->negotiate($protocolMode, $probeTimeout);
+                $era = $this->session->negotiate($protocolMode, $probeTimeout, $preferredVersion);
             } finally {
                 if ($this->transport instanceof StreamableHttpTransport) {
                     $this->transport->setProbeTimeout(null);
@@ -443,6 +460,9 @@ class Client {
                     $session->dispatchIncomingMessage($msg);
                 }
             );
+
+            // Resumed sessions ride the HTTP transport by definition.
+            $this->session->setHttpTransportMode(true);
 
             // Apply any elicitation handler registered via onElicit() before
             // resumeHttpSession(). The original session advertised the

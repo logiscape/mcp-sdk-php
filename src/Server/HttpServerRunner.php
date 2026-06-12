@@ -33,6 +33,8 @@ use Mcp\Server\Transport\Http\HttpMessage;
 use Mcp\Server\Transport\Http\NativePhpIo;
 use Mcp\Server\Transport\Http\SessionStoreInterface;
 use Mcp\Server\Transport\Http\StreamedHttpMessage;
+use Mcp\Server\Subscriptions\SubscriptionBusInterface;
+use Mcp\Types\MetaKeys;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -143,6 +145,17 @@ class HttpServerRunner extends ServerRunner
                     $this->logger
                 );
                 $this->serverSession->declareTransportModernEra(true);
+                // SEP-2243: hand the request's header map to the session so
+                // schema-aware validation (Mcp-Param-*) can run at dispatch.
+                $this->serverSession->setTransportHttpHeaders(
+                    $this->transport->lastRequestHeaders()
+                );
+                // SEP-2322: forward the authenticated principal so
+                // multi-round-trip requestState is bound to the user it
+                // was issued for.
+                $this->serverSession->setAuthenticatedPrincipal(
+                    $this->resolveAuthenticatedPrincipal($httpSession)
+                );
             } elseif (is_array($savedState = $httpSession->getMetadata('mcp_server_session'))) {
                 // Rebuild the HttpServerSession from the array
                 $restored = HttpServerSession::fromArray(
@@ -193,8 +206,19 @@ class HttpServerRunner extends ServerRunner
                 }
                 $response = $this->transport->finalizeStreamingSse($httpSession);
             } else {
-                if (!$this->serverSession->isInitialized()) {
-                    $this->serverSession->start();
+                try {
+                    if (!$this->serverSession->isInitialized()) {
+                        $this->serverSession->start();
+                    }
+                } catch (SubscriptionListenException $listen) {
+                    // SEP-2575 subscriptions/listen: the session validated
+                    // the request; the runner owns the SAPI adapter and
+                    // produces the long-lived notification stream. The
+                    // ephemeral modern session is discarded like any other
+                    // sessionless request.
+                    $response = $this->streamSubscriptionListen($listen);
+                    $this->transport->discardSession($httpSession);
+                    return $response;
                 }
 
                 // 5) Build the final HTTP response. When the transport selected
@@ -232,6 +256,156 @@ class HttpServerRunner extends ServerRunner
         return HttpMessage::createJsonResponse(['error' => 'No valid session'], 400);
     }
     
+    /**
+     * Resolve the stable authenticated identity of the current request
+     * for SEP-2322 requestState binding.
+     *
+     * Preference order: the validated token's `sub` claim; otherwise a
+     * SHA-256 fingerprint of the presented bearer token — a token
+     * validator MAY return a valid result with empty claims
+     * (TokenValidationResult's claims default), and two such users must
+     * never share a binding. The prefixes keep claim-derived and
+     * fingerprint-derived identities from colliding. When token
+     * validation produced claims but no bearer token is recoverable
+     * (unreachable through the transport's own auth path), a random
+     * identity is minted so the request FAILS CLOSED: its state can never
+     * be replayed, by anyone. Null only when authorization is not in play
+     * at all (no validated claims), where no authenticated identity
+     * exists to bind.
+     */
+    private function resolveAuthenticatedPrincipal(\Mcp\Server\Transport\Http\HttpSession $httpSession): ?string
+    {
+        $claims = $httpSession->getMetadata('oauth_claims');
+        if (!is_array($claims)) {
+            return null;
+        }
+
+        $sub = $claims['sub'] ?? null;
+        if (is_string($sub) && $sub !== '') {
+            return 'sub:' . $sub;
+        }
+
+        $authorization = $this->transport->lastRequestHeaders()['authorization'] ?? '';
+        if (preg_match('/^Bearer\s+(\S+)/i', $authorization, $m) === 1) {
+            return 'tok:' . hash('sha256', $m[1]);
+        }
+
+        return 'tok:' . bin2hex(random_bytes(16));
+    }
+
+    /**
+     * Run the subscriptions/listen SSE stream (SEP-2575, 2026-07-28).
+     *
+     * Emits the spec-mandated first frame —
+     * `notifications/subscriptions/acknowledged` echoing the filter subset
+     * the server agreed to honor — then forwards change events from the
+     * configured SubscriptionBusInterface that pass the filter, every
+     * frame's `_meta` tagged with `io.modelcontextprotocol/subscriptionId`
+     * (the stringified listen request id). There is never a JSON-RPC
+     * response: the stream ends when the client disconnects (surfaced by
+     * keep-alive writes) or the configured lifetime budget elapses. No
+     * Mcp-Session-Id, no SSE event ids, no Last-Event-ID resumption — none
+     * of those exist on the modern path.
+     *
+     * Without a configured bus the stream still opens and acknowledges
+     * (honest degradation for hosts with no cross-process channel); it
+     * just never carries events.
+     */
+    private function streamSubscriptionListen(SubscriptionListenException $listen): HttpMessage
+    {
+        $config = $this->transport->getConfig();
+        $bus = $config->get('subscription_bus');
+        if (!$bus instanceof SubscriptionBusInterface) {
+            $bus = null;
+        }
+        $maxMs = max(0, (int) ($config->get('listen_max_ms') ?? 30000));
+        $pollMs = max(10, (int) ($config->get('listen_poll_ms') ?? 50));
+        $keepaliveMs = max($pollMs, (int) ($config->get('listen_keepalive_ms') ?? 250));
+
+        $io = $this->io;
+        $io->drainOutputBuffers();
+        $io->disableAbortKills();
+        if (!$io->headersSent()) {
+            $io->sendStatus(200);
+            $io->sendHeader('Content-Type', 'text/event-stream');
+            $io->sendHeader('Cache-Control', 'no-cache, no-transform');
+            $io->sendHeader('X-Accel-Buffering', 'no');
+        }
+
+        $subscriptionId = $listen->subscriptionId();
+        $filter = $listen->agreedFilter;
+
+        $frame = static function (string $method, array $params) use ($subscriptionId): string {
+            $params['_meta'] = [MetaKeys::SUBSCRIPTION_ID => $subscriptionId];
+            return 'data: ' . json_encode(
+                ['jsonrpc' => '2.0', 'method' => $method, 'params' => $params],
+                JSON_UNESCAPED_SLASHES
+            ) . "\n\n";
+        };
+
+        // Capture the bus position BEFORE the acknowledgement reaches the
+        // wire: a client is allowed to trigger changes the moment it sees
+        // the ack, so an event published between the flush and a
+        // later-captured cursor would land inside the starting offset and
+        // be lost. Capturing first can only over-deliver (an event from
+        // just before the ack), never drop.
+        $cursor = $bus?->cursor() ?? 0;
+
+        // Spec: the acknowledgement MUST be the first message on the stream.
+        $ack = $filter->jsonSerialize();
+        $io->write($frame(
+            'notifications/subscriptions/acknowledged',
+            ['notifications' => $ack instanceof \stdClass ? new \stdClass() : $ack]
+        ));
+        $io->flush();
+        $deadline = microtime(true) + ($maxMs / 1000.0);
+        $nextKeepalive = microtime(true) + ($keepaliveMs / 1000.0);
+
+        while (microtime(true) < $deadline) {
+            if ($io->connectionAborted()) {
+                break;
+            }
+
+            $wrote = false;
+            if ($bus !== null) {
+                $poll = $bus->pollSince($cursor);
+                $cursor = $poll['cursor'];
+                foreach ($poll['events'] as $event) {
+                    $uri = isset($event['params']['uri']) && is_string($event['params']['uri'])
+                        ? $event['params']['uri']
+                        : null;
+                    if ($filter->wants($event['method'], $uri)) {
+                        $io->write($frame($event['method'], $event['params']));
+                        $wrote = true;
+                    }
+                }
+            }
+            if ($wrote) {
+                $io->flush();
+                $nextKeepalive = microtime(true) + ($keepaliveMs / 1000.0);
+            } elseif (microtime(true) >= $nextKeepalive) {
+                // SSE comment: ignored by clients, surfaces a closed
+                // connection so the loop can end promptly.
+                $io->write(": keepalive\n\n");
+                $io->flush();
+                if ($io->connectionAborted()) {
+                    break;
+                }
+                $nextKeepalive = microtime(true) + ($keepaliveMs / 1000.0);
+            }
+
+            usleep($pollMs * 1000);
+        }
+
+        $response = new StreamedHttpMessage('');
+        $response->setStatusCode(200);
+        $response->setHeader('Content-Type', 'text/event-stream');
+        $response->setHeader('Cache-Control', 'no-cache, no-transform');
+        $response->setHeader('X-Accel-Buffering', 'no');
+        $response->setHeader('X-Mcp-Already-Emitted', '1');
+        return $response;
+    }
+
     /**
      * Send an HTTP response.
      *

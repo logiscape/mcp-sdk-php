@@ -487,6 +487,143 @@ fix the comment when touching the transport.
 - `composer check` green; `composer conformance` regression-free, with both
   tracks' baselines shrinking, not growing.
 
+**Status (2026-06-12):** implemented and verified (step 2 complete; awaiting
+step 3 human-initiated review). Research drift findings, applied per
+"official text wins": (1) `subscriptions/listen` is **SEP-2575**, not
+SEP-2260 — SEP-2260 is the rule that server requests must be associated
+with a client request (the basis of the no-server-requests-on-streams
+restriction that MRTR replaces); (2) the listen channel carries only the
+four *opted-in* change-notification types via a `SubscriptionFilter`
+(`toolsListChanged`/`promptsListChanged`/`resourcesListChanged`/
+`resourceSubscriptions`, the last replacing the removed
+`resources/subscribe` RPC), the `notifications/subscriptions/acknowledged`
+ack MUST be the stream's first message, every frame carries
+`_meta` `io.modelcontextprotocol/subscriptionId` = the stringified listen
+request id (WS1's forward-declared key re-verified correct), and the listen
+request never gets a JSON-RPC response; (3) SEP-2350 (scope union) and
+SEP-2351 (discovery order) were already conformant — they shipped as
+verify-plus-regression-tests, not new work; (4) the failing checks in the
+"accept-side" iss scenarios and `auth/offline-access-not-supported` were
+SEP-837's cross-cutting `application_type` assertion, not iss/refresh
+logic. Delivered: SEP-2243 server validation (`Mcp-Method`/`Mcp-Name`
+presence+match, OWS trim, case-sensitive values, header-vs-`_meta` version
+mismatch — `-32001` evaluated BEFORE `-32004`, which fires only when
+header and `_meta` agree; `Mcp-Param-*` designated parameters validated
+against tool schemas with strict base64-sentinel decoding) and client
+emission (headers derived from each enveloped message; `Mcp-Param-*` from
+`x-mcp-header` annotations with invalid-annotation tools excluded from
+modern HTTP `tools/list`), shared rules in `Mcp\Shared\McpHeaders`
+(tasks/get|update|cancel → `params.taskId` mapping already included for
+WS4). SEP-2567: no session id minted/echoed/honored anywhere on the modern
+path, including streams. SEP-2575 streams: handler-emitted notifications
+now ride request-scoped buffered SSE on success responses (the WS2 drop is
+removed; error responses stay plain JSON since the 400/404 statuses cannot
+ride a committed SSE stream); `subscriptions/listen` implemented on HTTP
+(runner-held stream: ack first, bus-polled events, strict filter
+containment, keep-alive abort detection, no event ids/resumption) and
+stdio (in-session subscriptions, id-tagged demux), with a pluggable
+`SubscriptionBusInterface` (`FileSubscriptionBus` for multi-process PHP
+hosting, in-memory for tests/long-running runtimes) and `McpServer`
+publish helpers. SEP-2322: `InputRequiredResult` exchanges on tools/call
+and prompts/get over both transports via ephemeral re-execution (the
+model the TS SDK's exploration branches validated): `ElicitationContext`/
+`SamplingContext` gained exchange-backed modern paths and optional
+`inputKey` naming, the new `InputContext` batches mixed input requests
+into a single round, and `requestState` is HMAC-SHA256-signed
+(`RequestStateCodec`, file-backed per-installation secret for
+multi-process deployments, expiry enforced, tamper → `-32602`) carrying
+consumed results between rounds; resources/read accepts the retry params
+but no context injection ships for resource callbacks (the spec's MAY —
+recorded as intentionally descoped). Client MRTR loop services
+`inputRequests` through `onElicit`/`onSampling` (new)/roots handlers with
+verbatim state echo, fresh ids, a 16-round cap, per-call isolation, and
+absent-`resultType`-means-complete. `Client::connect()` gained
+`protocolMode: 'modern'` (no probe — required by conformance mocks that
+reject `initialize` AND `server/discover`) and a `protocolVersion`
+preference; modern sessions adopt an advertised version and retry once on
+`-32004`. Auth hardening: SEP-837 `application_type` (derived
+native/web), SEP-2468 iss validation (non-normalized byte comparison,
+error params suppressed on mismatch, `AuthorizationCallbackResult` with
+BC for string-returning handlers), SEP-2352 PRM re-fetch on 401 +
+re-registration at the new AS without credential reuse, SEP-2207
+offline_access gating — plus the `client_credentials` grant
+(private_key_jwt with ES256/RS256 incl. DER→raw conversion, and
+client_secret_basic) and the SEP-990 cross-app-access flow (RFC 8693 +
+RFC 7523), closing the stable track's last three baseline entries. WS2
+review carry-overs done: typed `UnknownMethodException` and
+`ReadTimeoutException` replace both message-string discriminations; the
+`receiveFromHttp()` docblock overclaim is fixed. A latent serialization
+bug surfaced by testing was fixed: `HttpServerSession::toArray()` now
+deep-normalizes `clientParams`, so client capabilities survive session
+persistence on non-JSON stores (previously the in-memory store silently
+dropped them between requests). Conformance: `composer check` green (1116
+tests); stable track 40 server + 319 client scenarios pass with **both
+stable baselines now empty**; draft track passes everything except the
+one documented upstream tool bug (`sep-2575-server-rejects-undeclared-
+capability` asserts a string array against the schema's ClientCapabilities
+object — re-checked at every pin bump), the draft client baseline is
+empty, and the two listen SHOULD warnings pass only where
+`PHP_CLI_SERVER_WORKERS` is available (POSIX; `run-conformance.php` now
+sets it — the trigger call must be served concurrently with the open
+stream, impossible on Windows's single-worker CLI server). Two earlier
+baseline comments were corrected during re-curation (`request-metadata`
+was about the SEP-2575 envelope checks, not Mcp-Method/Mcp-Name;
+`offline-access-not-supported` was about SEP-837).
+**Review round (step 3):** all seven findings assessed as legitimate and
+fixed with regression tests. (1) SEP-2322 `requestState` is now
+cryptographically bound to the authenticated principal: the runner
+forwards the validated token's `sub` claim into the session, the signed
+payload carries it, and a different user replaying captured state fails
+verification exactly like tampering. (2) x-mcp-header validation now
+matches the final SEP-2243 text: annotations are collected at any
+nesting depth (dot-path keys, case-insensitive uniqueness across the
+whole schema), type `number` is prohibited, and designated integer
+values are enforced within ±(2^53−1) on both sides (the client throws
+before wire traffic; the server rejects -32001). Consequence, per the
+no-shortcuts rule: the pinned alpha tool's `http-custom-headers`
+scenario still REQUIRES mirroring number-typed parameters, so the SDK's
+spec-faithful rejection re-enters the draft baseline as documented
+upstream staleness (the draft baseline now holds exactly two
+upstream-tool entries; `http-invalid-tool-headers` and the server-side
+custom-header scenario still pass). (3) `notifications/cancelled`
+referencing a listen request id now terminates the stdio subscription.
+(4) A server that cannot deliver subscription events no longer
+acknowledges them: the HTTP path answers -32601 without a configured
+bus, and `resources.subscribe` is derived from handler registration —
+`McpServer::subscriptionBus()` registers minimal legacy
+subscribe/unsubscribe acceptors so the convenience API can honor
+`resourceSubscriptions`. (5) The file-backed MRTR secret initializes
+via exclusive create (one writer; losers read the winner's bytes) and
+fails loudly when no shared secret can be established, instead of
+silently falling back to a process-local secret that would break
+cross-worker verification. (6) The listen loop captures the bus cursor
+BEFORE the acknowledgement is flushed, closing the window where an
+event triggered on seeing the ack could be lost. (7)
+conformance/README.md and ROADMAP.md were brought in line with the
+emptied stable baseline.
+**Follow-up review round:** three further findings, all fixed with
+regression tests. (1) Principal binding no longer collapses to null for
+valid tokens with empty claims (TokenValidationResult permits them): the
+runner prefers the `sub` claim (`sub:` prefix), falls back to a SHA-256
+fingerprint of the presented bearer token (`tok:` prefix) so distinct
+credentials never share a binding, and mints a random identity (fails
+closed) in the unreachable claims-without-token case; null remains only
+where authorization is not in play at all. (2) The modern
+`resourceSubscriptions` honor was separated from the legacy capability:
+`McpServer::subscriptionBus()` no longer registers no-op legacy
+subscribe handlers (which advertised a legacy RPC that delivered
+nothing), and `SubscriptionFilter::intersectWithCapabilities()` gates
+`resourceSubscriptions` on actual deliverability (the bus on HTTP, the
+in-session channel on stdio, plus the server serving resources) rather
+than on `resources.subscribe` — the acknowledgement frame is the modern
+honor signal; `Server::getCapabilities()` keeps deriving the legacy
+flag from real handler registration. (3) The ±(2^53−1) integer bound
+now also covers integral floats (how PHP decodes large JSON integers):
+`McpHeaders::isSafeIntegerValue()` requires finite, integral, in-range
+values, enforced on integer-typed designated parameters by both the
+client (throws before wire traffic, non-finite floats rejected
+outright) and the server (-32001).
+
 ## WS4 — Tasks extension
 
 The SEP-2663 stateless redesign of the experimental Tasks surface. Breaking
@@ -512,6 +649,11 @@ redesign, no deprecation shims — the existing surface is pre-release
 (the RC moved this surface substantially and it may move again); the
 extension's declared id/version string; whether task-augmented
 elicitation/sampling is in the stable extension text or still draft.
+**Added by WS3 (2026-06-12):** the SEP-2663 `Mcp-Name`-carries-the-task-id
+routing rule is already wired: `Mcp\Shared\McpHeaders` maps
+`tasks/get|update|cancel` → `params.taskId` for both client emission and
+server validation — re-verify the method list against the final extension
+text rather than re-implementing.
 
 **Completion criteria**
 
@@ -632,6 +774,28 @@ ephemeral sessions of the 2026-07-28 sessionless lifecycle, which call
 `start()` on the same long-lived transport). Decide during the audit
 whether the old throw counts as supported v1 surface; if so, record the
 change in WS10's migration guide.
+**Added by WS3 (2026-06-12):** further v1→v2 audit items, all shipped with
+WS3: (a) `HttpServerSession::toArray()` now deep-normalizes
+`clientParams` to plain arrays — a behavior FIX for in-memory session
+stores, which previously dropped declared client capabilities (e.g.
+`elicitation: {}`) between requests; cover the fixed path in the
+cross-revision matrix. (b) On modern HTTP clients, `listTools()` results
+EXCLUDE tools whose `x-mcp-header` annotations violate the SEP-2243
+constraints, and `callTool()` on such a tool throws before any wire
+traffic (spec MUST; legacy and stdio results are unfiltered). (c) Typed
+exceptions replaced message sniffing: `Types/ClientRequest` throws
+`Mcp\Shared\UnknownMethodException` (subclass of
+`InvalidArgumentException`) and client read timeouts throw
+`Mcp\Client\Transport\ReadTimeoutException` (subclass of
+`RuntimeException`) — messages unchanged, so string-matching v1 code
+keeps working, but document the typed forms. (d) Additive client surface
+to document: `negotiate(mode, probeTimeout, preferredVersion)`,
+`protocolMode: 'modern'`, the `protocolVersion` HTTP option,
+`onSampling()`, `JsonRpcMessage::$httpHeaderHints`. (e) A legacy-era
+HTTP `prompts/get` whose callback declares an `ElicitationContext` now
+fails with the session's BadMethodCallException (-32603) instead of
+silently lacking injection — prompt-side input gathering is modern-only
+by design (the legacy suspend/resume store is tools-only).
 
 **Completion criteria**
 
@@ -688,6 +852,17 @@ conformance-draft` and a CI draft job wired up, and the initial draft
 baseline populated from a real run (all `2026-07-28` draft scenarios
 annotated with the workstream that will close them). Both tracks verified
 green against their baselines.
+**Update (2026-06-12, WS3):** the stable track now passes 100% of its
+scenarios — both stable baseline lists are empty (WS3's auth hardening
+closed the last three client entries). The draft baseline is down to a
+single entry: the documented upstream tool bug in
+`sep-2575-server-rejects-undeclared-capability` (string-array
+`requiredCapabilities` assertion contradicting the draft schema), to be
+re-checked at every draft-pin bump and a candidate for an upstream
+issue/PR per SEP-2484. `run-conformance.php` now sets
+`PHP_CLI_SERVER_WORKERS` (POSIX) so the concurrent-stream scenarios
+(`subscriptions/listen`, `server-sse-multiple-streams`) exercise real
+parallelism.
 
 **Completion criteria**
 

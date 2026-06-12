@@ -92,7 +92,7 @@ class LoopbackCallbackHandler implements AuthorizationCallbackInterface
     /**
      * {@inheritdoc}
      */
-    public function authorize(string $authUrl, string $state): string
+    public function authorize(string $authUrl, string $state): AuthorizationCallbackResult
     {
         // Create socket server
         $socket = $this->createServer();
@@ -111,9 +111,7 @@ class LoopbackCallbackHandler implements AuthorizationCallbackInterface
             $this->presentAuthorizationUrl($authUrl);
 
             // Wait for callback
-            $code = $this->waitForCallback($socket, $state);
-
-            return $code;
+            return $this->waitForCallback($socket, $state);
         } finally {
             socket_close($socket);
         }
@@ -282,10 +280,10 @@ class LoopbackCallbackHandler implements AuthorizationCallbackInterface
      *
      * @param \Socket $socket The server socket
      * @param string $expectedState The expected state parameter
-     * @return string The authorization code
+     * @return AuthorizationCallbackResult The raw callback result
      * @throws OAuthException If callback fails or times out
      */
-    private function waitForCallback($socket, string $expectedState): string
+    private function waitForCallback($socket, string $expectedState): AuthorizationCallbackResult
     {
         // Set socket timeout
         socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, [
@@ -312,11 +310,11 @@ class LoopbackCallbackHandler implements AuthorizationCallbackInterface
                 }
             }
 
-            // Parse the request to get the code and state
+            // Parse the request to get the raw callback parameters
             $result = $this->parseCallback($request, $expectedState);
 
-            // Send success response
-            $this->sendResponse($client, true);
+            // Send response page (failure page when the AS returned an error)
+            $this->sendResponse($client, !$result->hasError() && $result->code !== null);
 
             return $result;
         } finally {
@@ -327,12 +325,18 @@ class LoopbackCallbackHandler implements AuthorizationCallbackInterface
     /**
      * Parse the callback request.
      *
+     * Deliberately does NOT interpret error parameters or require a code:
+     * per SEP-2468 the iss parameter must be validated against the expected
+     * issuer BEFORE acting on any error or code content, and only the
+     * OAuthClient knows the expected issuer. The raw parameters are returned
+     * for the OAuthClient to validate and dispatch.
+     *
      * @param string $request The HTTP request
      * @param string $expectedState The expected state parameter
-     * @return string The authorization code
+     * @return AuthorizationCallbackResult The raw callback result
      * @throws OAuthException If parsing fails or state doesn't match
      */
-    private function parseCallback(string $request, string $expectedState): string
+    private function parseCallback(string $request, string $expectedState): AuthorizationCallbackResult
     {
         // Parse the request line
         if (!preg_match('/^GET\s+([^\s]+)\s+HTTP/', $request, $matches)) {
@@ -345,28 +349,22 @@ class LoopbackCallbackHandler implements AuthorizationCallbackInterface
 
         parse_str($queryString, $params);
 
-        // Check for error
-        if (isset($params['error'])) {
-            throw OAuthException::fromOAuthError($params);
-        }
-
-        // Validate state
+        // Validate state (CSRF protection). This is independent of the
+        // error/iss handling deferred to the OAuthClient: a response that
+        // doesn't carry our state is not a response to our request at all.
         if (!isset($params['state']) || $params['state'] !== $expectedState) {
             throw OAuthException::authorizationFailed(
                 'State parameter mismatch - possible CSRF attack'
             );
         }
 
-        // Get the code
-        if (!isset($params['code'])) {
-            throw OAuthException::authorizationFailed(
-                'Authorization code not found in callback'
-            );
-        }
+        $this->logger->info('Received authorization callback');
 
-        $this->logger->info('Received authorization code');
-
-        return $params['code'];
+        return new AuthorizationCallbackResult(
+            code: isset($params['code']) && is_string($params['code']) ? $params['code'] : null,
+            iss: isset($params['iss']) && is_string($params['iss']) ? $params['iss'] : null,
+            params: $params
+        );
     }
 
     /**

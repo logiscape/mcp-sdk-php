@@ -44,7 +44,9 @@ use Mcp\Types\CreateMessageResult;
 use Mcp\Types\SamplingMessage;
 use Mcp\Types\EmptyResult;
 use Mcp\Server\Elicitation\ElicitationContext;
+use Mcp\Server\InputRequired\InputContext;
 use Mcp\Server\Sampling\SamplingContext;
+use Mcp\Server\Subscriptions\FileSubscriptionBus;
 
 // Minimal 1x1 transparent PNG (base64)
 const TEST_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
@@ -58,7 +60,22 @@ $server = new McpServer('conformance-test-server');
 // exercises spec-aligned streaming of progress notifications and server-to-
 // client requests. Gracefully disabled at runtime when Environment checks
 // fail, so shared-hosting deployments that mirror this config stay safe.
-$server->httpOptions(['enable_sse' => true]);
+// The listen_max_ms cap keeps a subscriptions/listen stream from holding a
+// CLI-server worker hostage long after the conformance tool aborted it.
+$server->httpOptions(['enable_sse' => true, 'listen_max_ms' => 5000]);
+
+// Advertise listChanged on tools/prompts/resources: the draft suite's
+// subscriptions/listen SHOULD checks only engage when server/discover
+// declares these capabilities.
+$server->notifyOnChanges(resourcesChanged: true, toolsChanged: true, promptsChanged: true);
+
+// Cross-process event channel for subscriptions/listen: the trigger tool
+// runs in a different CLI-server worker than the open listen stream, so
+// the change events travel through a file-backed bus (the shared-hosting
+// pattern the SDK ships for exactly this).
+$server->subscriptionBus(new FileSubscriptionBus(
+    sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'mcp-conformance-subscription-bus'
+));
 
 // ---------------------------------------------------------------------------
 // Tools — all registered through McpServer's public API
@@ -338,8 +355,192 @@ $server->tool('test_elicitation_sep1330_enums', 'Requests elicitation with enum 
 });
 
 // ---------------------------------------------------------------------------
+// WS3: SEP-2243 designated header parameters (x-mcp-header)
+// ---------------------------------------------------------------------------
+
+// The http-custom-header-server-validation scenario activates on the first
+// listed tool whose inputSchema carries an x-mcp-header annotation on a
+// string property; it then calls the tool with matching / mismatched /
+// base64-mangled Mcp-Param-Region headers and expects the SDK to accept or
+// reject (400/-32001) accordingly. The handler itself only ever sees valid
+// invocations.
+$server->tool(
+    name: 'test_header_params',
+    description: 'Echoes a parameter designated for header mirroring via x-mcp-header',
+    callback: fn(string $region): string => "region={$region}",
+    inputSchema: [
+        'properties' => [
+            'region' => [
+                'type' => 'string',
+                'description' => 'Deployment region (mirrored into Mcp-Param-Region)',
+                'x-mcp-header' => 'Region',
+            ],
+        ],
+        'required' => ['region'],
+    ],
+);
+
+// ---------------------------------------------------------------------------
+// WS3: subscriptions/listen diagnostics (SEP-2575)
+// ---------------------------------------------------------------------------
+
+$server->tool('test_trigger_tool_change', 'Publishes a tools list_changed event', function () use ($server): string {
+    $server->publishToolsListChanged();
+    return 'Tool list change triggered';
+});
+
+$server->tool('test_trigger_prompt_change', 'Publishes a prompts list_changed event', function () use ($server): string {
+    $server->publishPromptsListChanged();
+    return 'Prompt list change triggered';
+});
+
+// Diagnostic for sep-2575-server-no-independent-requests-on-stream: a tool
+// that needs elicitation mid-call. On the modern path the SDK answers with
+// an InputRequiredResult (SEP-2322) — no server-initiated request may ever
+// appear on the response stream.
+$server->tool('test_streaming_elicitation', 'Elicits input mid-call (modern: MRTR, never a stream request)', function (ElicitationContext $elicit): string {
+    $result = $elicit->form(
+        'Streaming elicitation check',
+        ['type' => 'object', 'properties' => ['ack' => ['type' => 'string']]],
+        inputKey: 'ack'
+    );
+    return 'Streaming elicitation complete: ' . ($result?->action ?? 'none');
+});
+
+// Diagnostic for sep-2575-server-no-log-without-loglevel: emits
+// notifications/message ONLY when the request's _meta carried the
+// io.modelcontextprotocol/logLevel key (SEP-2577 per-request opt-in).
+$server->tool('test_logging_tool', 'Logs only when the request opts in via _meta logLevel', function () use ($server): string {
+    $session = $server->getServer()->getSession();
+    if ($session !== null && $session->getCurrentRequestLogLevel() !== null) {
+        $session->sendLogMessage(LoggingLevel::INFO, 'Per-request log line', 'test-logger');
+    }
+    return 'Logging tool complete';
+});
+
+// ---------------------------------------------------------------------------
+// WS3: SEP-2322 multi-round-trip fixtures (input-required-result-* scenarios)
+// ---------------------------------------------------------------------------
+
+$server->tool('test_input_required_result_elicitation', 'Round 1: requests the user name via elicitation; round 2: completes', function (ElicitationContext $elicit): string {
+    $result = $elicit->form(
+        'What is your name?',
+        [
+            'type' => 'object',
+            'properties' => ['name' => ['type' => 'string', 'description' => "The user's name"]],
+            'required' => ['name'],
+        ],
+        inputKey: 'user_name'
+    );
+    $content = $result?->content;
+    $name = is_object($content) ? ($content->name ?? null) : (is_array($content) ? ($content['name'] ?? null) : null);
+    return 'Hello, ' . (is_string($name) ? $name : 'unknown') . '!';
+});
+
+$server->tool('test_input_required_result_sampling', 'Round 1: requests a sampling completion; round 2: completes', function (SamplingContext $sampling): string {
+    $response = $sampling->prompt('What is the capital of France?', maxTokens: 100);
+    $text = $response?->content instanceof TextContent ? $response->content->text : 'no response';
+    return 'Sampling says: ' . $text;
+});
+
+$server->tool('test_input_required_result_list_roots', 'Round 1: requests the client roots; round 2: completes', function (InputContext $input): string {
+    $input->wantRoots('workspace_roots');
+    $results = $input->collect();
+    $roots = $results['workspace_roots']['roots'] ?? [];
+    return 'Received ' . count($roots) . ' root(s)';
+});
+
+$server->tool('test_input_required_result_request_state', 'Exercises requestState round-tripping', function (ElicitationContext $elicit): string {
+    $elicit->form(
+        'Confirm to continue',
+        ['type' => 'object', 'properties' => ['ok' => ['type' => 'boolean']]],
+        inputKey: 'confirmation'
+    );
+    return 'state-ok';
+});
+
+$server->tool('test_input_required_result_multiple_inputs', 'Requests elicitation + sampling + roots in ONE round', function (InputContext $input): string {
+    $input->wantForm('user_name', 'What is your name?', [
+        'type' => 'object',
+        'properties' => ['name' => ['type' => 'string']],
+        'required' => ['name'],
+    ]);
+    $input->wantSample('greeting', [new SamplingMessage(
+        role: Role::USER,
+        content: new TextContent(text: 'Say hello')
+    )], 50);
+    $input->wantRoots('workspace');
+    $input->collect();
+    return 'All three inputs gathered';
+});
+
+$server->tool('test_input_required_result_multi_round', 'Two sequential elicitation rounds', function (ElicitationContext $elicit): string {
+    $name = $elicit->form(
+        'What is your name?',
+        ['type' => 'object', 'properties' => ['name' => ['type' => 'string']], 'required' => ['name']],
+        inputKey: 'name_round'
+    );
+    $color = $elicit->form(
+        'What is your favorite color?',
+        ['type' => 'object', 'properties' => ['color' => ['type' => 'string']], 'required' => ['color']],
+        inputKey: 'color_round'
+    );
+    return 'Multi-round complete';
+});
+
+$server->tool('test_input_required_result_tampered_state', 'Rejects tampered requestState (SDK-signed)', function (ElicitationContext $elicit): string {
+    $elicit->form(
+        'Tamper check',
+        ['type' => 'object', 'properties' => ['ok' => ['type' => 'boolean']]],
+        inputKey: 'tamper_check'
+    );
+    return 'Tamper check complete';
+});
+
+// Capability-aware fixture: the scenario calls this with clientCapabilities
+// declaring ONLY sampling — the tool must request input WITHOUT including
+// any elicitation/create entry (spec: servers MUST NOT request input types
+// the client did not declare) and without erroring.
+$server->tool('test_input_required_result_capabilities', 'Requests only input types the client declared', function (InputContext $input): string {
+    if ($input->supports('elicitation')) {
+        $input->wantForm('user_name', 'What is your name?', [
+            'type' => 'object',
+            'properties' => ['name' => ['type' => 'string']],
+        ]);
+    }
+    if ($input->supports('sampling')) {
+        $input->wantSample('llm_check', [new SamplingMessage(
+            role: Role::USER,
+            content: new TextContent(text: 'Capability check')
+        )], 50);
+    }
+    $input->collect();
+    return 'Capability-aware gathering complete';
+});
+
+// ---------------------------------------------------------------------------
 // Prompts — all registered through McpServer's public API
 // ---------------------------------------------------------------------------
+
+// SEP-2322 non-tool fixture: prompts/get may also answer InputRequiredResult.
+$server->prompt('test_input_required_result_prompt', 'Prompt that elicits context before rendering', function (ElicitationContext $elicit): GetPromptResult {
+    $result = $elicit->form(
+        'What context should the prompt use?',
+        ['type' => 'object', 'properties' => ['context' => ['type' => 'string']], 'required' => ['context']],
+        inputKey: 'user_context'
+    );
+    $content = $result?->content;
+    $context = is_object($content) ? ($content->context ?? null) : (is_array($content) ? ($content['context'] ?? null) : null);
+    return new GetPromptResult(
+        messages: [
+            new PromptMessage(
+                role: Role::USER,
+                content: new TextContent(text: 'Prompt with context: ' . (is_string($context) ? $context : 'none'))
+            ),
+        ],
+        description: 'Prompt rendered with elicited context'
+    );
+});
 
 $server->prompt('test_simple_prompt', 'A simple test prompt', function (): GetPromptResult {
     return new GetPromptResult(

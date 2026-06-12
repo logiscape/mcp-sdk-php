@@ -417,26 +417,125 @@ final class ClientNegotiationTest extends TestCase
     }
 
     /**
-     * mode 'modern' forbids the legacy fallback: a legacy server's -32601
-     * becomes a connect failure, and initialize is never sent.
+     * mode 'modern' (forced): no server/discover probe and no initialize
+     * are sent at all — the session enters the stateless modern era
+     * immediately with the preferred wire version (the latest revision by
+     * default) and every subsequent request carries the envelope. Needed
+     * for 2026-07-28 servers that answer -32601 to BOTH server/discover
+     * and initialize.
      */
-    public function testModernModeForbidsFallback(): void
+    public function testModernModeSkipsProbeEntirely(): void
     {
         $readStream = new MemoryStream();
         $writeStream = new MemoryStream();
-        $readStream->send($this->error(0, -32601, 'Method not found: server/discover'));
+        $readStream->send($this->response(0, ['tools' => []]));
 
         $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
 
+        $this->assertSame('modern', $session->negotiate('modern'));
+        $this->assertTrue($session->isModernMode());
+        $this->assertSame(Version::LATEST_PROTOCOL_VERSION, $session->getModernWireVersion());
+        $this->assertSame('2026-07-28', $session->getNegotiatedProtocolVersion());
+
+        $session->listTools();
+
+        $wire = $this->sentWire($writeStream);
+        $this->assertCount(1, $wire, 'No probe, no initialize — only the tools/list itself');
+        $this->assertSame('tools/list', $wire[0]['method']);
+        $this->assertSame(
+            Version::LATEST_PROTOCOL_VERSION,
+            $wire[0]['params']['_meta'][MetaKeys::PROTOCOL_VERSION],
+            'Forced-modern requests carry the envelope'
+        );
+    }
+
+    /**
+     * mode 'modern' honors a preferred wire identifier (e.g. the RC-window
+     * draft alias the conformance mocks speak) and feature-gates on its
+     * canonical dated form.
+     */
+    public function testModernModeHonorsPreferredVersion(): void
+    {
+        $readStream = new MemoryStream();
+        $writeStream = new MemoryStream();
+        $readStream->send($this->response(0, ['tools' => []]));
+
+        $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
+        $session->negotiate('modern', null, Version::DRAFT_MODERN_PROTOCOL_VERSION);
+
+        $this->assertSame(Version::DRAFT_MODERN_PROTOCOL_VERSION, $session->getModernWireVersion());
+        $this->assertSame('2026-07-28', $session->getNegotiatedProtocolVersion());
+
+        $session->listTools();
+        $wire = $this->sentWire($writeStream);
+        $this->assertSame(
+            Version::DRAFT_MODERN_PROTOCOL_VERSION,
+            $wire[0]['params']['_meta'][MetaKeys::PROTOCOL_VERSION]
+        );
+    }
+
+    /**
+     * Forced-modern -32004 recovery: when the FIRST real request is
+     * rejected with -32004 carrying a usable data.supported list, the
+     * session adopts an advertised version (envelope and header switch
+     * together) and retries that request exactly once under a fresh id.
+     */
+    public function testForcedModernAdoptsAdvertisedVersionOnFirstRequest(): void
+    {
+        $readStream = new MemoryStream();
+        // Snapshot the wire bytes at send time: the retry adopts the new
+        // version by mutating the request's (shared) _meta, so decoding
+        // the queued message OBJECTS afterwards would show the adopted
+        // version on both attempts even though the first attempt was sent
+        // with the original one.
+        $writeStream = new SnapshotWriteStream();
+        $readStream->send($this->error(0, McpError::UNSUPPORTED_PROTOCOL_VERSION, 'Unsupported protocol version', [
+            'supported' => [Version::DRAFT_MODERN_PROTOCOL_VERSION],
+            'requested' => '2026-07-28',
+        ]));
+        $readStream->send($this->response(1, ['tools' => []]));
+
+        $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
+        $session->negotiate('modern');
+
+        $result = $session->listTools();
+        $this->assertSame([], $result->tools);
+        $this->assertSame(Version::DRAFT_MODERN_PROTOCOL_VERSION, $session->getModernWireVersion());
+
+        $wire = $writeStream->wire;
+        $this->assertCount(2, $wire, 'Original request plus exactly one retry');
+        $this->assertSame('tools/list', $wire[0]['method']);
+        $this->assertSame('2026-07-28', $wire[0]['params']['_meta'][MetaKeys::PROTOCOL_VERSION]);
+        $this->assertSame('tools/list', $wire[1]['method']);
+        $this->assertSame(
+            Version::DRAFT_MODERN_PROTOCOL_VERSION,
+            $wire[1]['params']['_meta'][MetaKeys::PROTOCOL_VERSION],
+            'The retry envelope carries the adopted version'
+        );
+        $this->assertNotSame($wire[0]['id'], $wire[1]['id'], 'Fresh JSON-RPC id on the retry');
+    }
+
+    /**
+     * The adopt-and-retry is narrow: a -32004 whose data lacks a usable
+     * supported list propagates unchanged (no retry, no adoption).
+     */
+    public function testForcedModern32004WithoutSupportedListPropagates(): void
+    {
+        $readStream = new MemoryStream();
+        $writeStream = new MemoryStream();
+        $readStream->send($this->error(0, McpError::UNSUPPORTED_PROTOCOL_VERSION, 'Unsupported protocol version'));
+
+        $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
+        $session->negotiate('modern');
+
         try {
-            $session->negotiate('modern');
-            $this->fail('Expected RuntimeException');
-        } catch (RuntimeException $e) {
-            $this->assertStringContainsString("'modern'", $e->getMessage());
+            $session->listTools();
+            $this->fail('Expected McpError');
+        } catch (McpError $e) {
+            $this->assertSame(McpError::UNSUPPORTED_PROTOCOL_VERSION, $e->error->code);
         }
-        foreach ($this->sentWire($writeStream) as $sent) {
-            $this->assertNotSame('initialize', $sent['method']);
-        }
+        $this->assertCount(1, $this->sentWire($writeStream), 'No retry without an advertised list');
+        $this->assertSame(Version::LATEST_PROTOCOL_VERSION, $session->getModernWireVersion(), 'No adoption');
     }
 
     /**
@@ -470,6 +569,24 @@ final class ClientNegotiationTest extends TestCase
         $this->assertSame('initialize', $wire[0]['method']);
         $this->assertArrayNotHasKey('_meta', $wire[0]['params']);
         $this->assertSame('notifications/initialized', $wire[1]['method']);
+    }
+}
+
+/**
+ * Write stream that records the SERIALIZED form of every message at send
+ * time — needed when a later retry mutates an object shared with an
+ * already-sent message (e.g. the -32004 version adoption rewriting the
+ * request's _meta).
+ */
+final class SnapshotWriteStream extends MemoryStream
+{
+    /** @var array<int, array<string, mixed>> */
+    public array $wire = [];
+
+    public function send(mixed $message): void
+    {
+        $this->wire[] = json_decode((string) json_encode($message), true);
+        parent::send($message);
     }
 }
 

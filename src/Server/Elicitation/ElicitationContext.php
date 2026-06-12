@@ -76,7 +76,19 @@ class ElicitationContext
         private readonly string $toolName = '',
         private readonly array $toolArguments = [],
         private readonly int|string $originalRequestId = 0,
+        private readonly ?\Mcp\Server\InputRequired\InputExchange $exchange = null,
     ) {}
+
+    /**
+     * Whether form-mode elicitation can be used at all on this request —
+     * convenience alias handlers can guard on before electing to request
+     * input (SEP-2322: servers MUST NOT send input requests the client
+     * has not declared support for).
+     */
+    public function isSupported(): bool
+    {
+        return $this->supportsForm();
+    }
 
     /**
      * Check if the client supports form-mode elicitation.
@@ -120,7 +132,7 @@ class ElicitationContext
      * @param array<string, mixed> $requestedSchema JSON Schema defining expected response structure
      * @return ElicitationCreateResult|null The client's response, or null if not supported
      */
-    public function form(string $message, array $requestedSchema, ?Meta $_meta = null, ?TaskRequestParams $task = null): ?ElicitationCreateResult
+    public function form(string $message, array $requestedSchema, ?Meta $_meta = null, ?TaskRequestParams $task = null, ?string $inputKey = null): ?ElicitationCreateResult
     {
         if (!$this->supportsForm()) {
             // Modern path (SEP-2575): a request whose envelope did not
@@ -135,6 +147,25 @@ class ElicitationContext
         $task = null;
 
         $seq = $this->sequenceCounter++;
+
+        // Modern path (SEP-2322): resolve from this round's input
+        // responses or suspend into an InputRequiredResult. A response
+        // with an invalid shape is re-requested, never carried forward.
+        if ($this->exchange !== null) {
+            $key = $inputKey ?? ('input_' . $seq);
+            $raw = $this->exchange->resolve($key);
+            if (is_array($raw) && isset($raw['action']) && is_string($raw['action'])) {
+                $this->exchange->accept($key, $raw);
+                return ElicitationCreateResult::fromResponseData($raw);
+            }
+            $this->exchange->queue($key, new ElicitationCreateRequest(
+                message: $message,
+                mode: 'form',
+                requestedSchema: $requestedSchema,
+                _meta: $_meta,
+            ));
+            $this->exchange->suspend();
+        }
 
         // HTTP resume path: return preloaded result if available
         if ($this->httpMode && isset($this->preloadedResults[$seq])) {
@@ -186,7 +217,7 @@ class ElicitationContext
      * @param string|null $elicitationId Unique identifier for this elicitation (auto-generated if null)
      * @return ElicitationCreateResult|null The client's consent response, or null if not supported
      */
-    public function url(string $message, string $url, ?string $elicitationId = null, ?Meta $_meta = null, ?TaskRequestParams $task = null): ?ElicitationCreateResult
+    public function url(string $message, string $url, ?string $elicitationId = null, ?Meta $_meta = null, ?TaskRequestParams $task = null, ?string $inputKey = null): ?ElicitationCreateResult
     {
         if (!$this->supportsUrl()) {
             // Modern path (SEP-2575): see form().
@@ -200,6 +231,24 @@ class ElicitationContext
 
         $elicitationId = $elicitationId ?? bin2hex(random_bytes(16));
         $seq = $this->sequenceCounter++;
+
+        // Modern path (SEP-2322): see form().
+        if ($this->exchange !== null) {
+            $key = $inputKey ?? ('input_' . $seq);
+            $raw = $this->exchange->resolve($key);
+            if (is_array($raw) && isset($raw['action']) && is_string($raw['action'])) {
+                $this->exchange->accept($key, $raw);
+                return ElicitationCreateResult::fromResponseData($raw);
+            }
+            $this->exchange->queue($key, new ElicitationCreateRequest(
+                message: $message,
+                mode: 'url',
+                url: $url,
+                elicitationId: $elicitationId,
+                _meta: $_meta,
+            ));
+            $this->exchange->suspend();
+        }
 
         // HTTP resume path
         if ($this->httpMode && isset($this->preloadedResults[$seq])) {

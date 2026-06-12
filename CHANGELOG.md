@@ -89,34 +89,112 @@ This file was introduced during the v1.7.x series. Structured entries below cove
   fallback on any other error or probe timeout; modern sessions stamp the
   `_meta` envelope on every request with the `MCP-Protocol-Version` header
   mirrored from it. `connect()` gains `protocolMode`
-  (`auto`/`legacy`/`modern`) and `probeTimeout` options. Covered by a
-  four-way era test matrix plus fallback-safety tests
-  (`tests/Server/ServerEraDetectionTest`, `tests/Server/HttpModernRequestTest`,
-  `tests/Client/ClientNegotiationTest`). Code-review hardening: the
-  adopted era is request-scoped (no modern state leaking into later bare
-  stdio requests, no clobbering of a legacy session's negotiated state);
+  (`auto`/`legacy`/`modern`) and `probeTimeout` options. The adopted era
+  is request-scoped (no modern state leaking into later bare stdio
+  requests, no clobbering of a legacy session's negotiated state);
   envelope/version validation precedes method routing for unknown and
   removed methods too; the modern HTTP response is always the single JSON
-  object the Streamable HTTP spec requires — the SEP-2575 status survives
-  an interleaved notification, and the notification itself is dropped
-  until WS3's request-scoped SSE / `subscriptions/listen` provide its
-  carrier (legacy multi-message behavior unchanged); and HTTP discover
-  probes are bounded by the probe timeout,
+  object the Streamable HTTP spec requires, with the SEP-2575 status
+  surviving an interleaved notification (legacy multi-message behavior
+  unchanged); and HTTP discover probes are bounded by the probe timeout,
   with cURL timeouts surfacing as the typed `HttpRequestTimeoutException`
-  that negotiation treats as a silent legacy server. Spec-shape
-  reconciliation (official text wins): `-32003`'s
-  `data.requiredCapabilities` is emitted as the ClientCapabilities OBJECT
+  that negotiation treats as a silent legacy server. `-32003`'s
+  `data.requiredCapabilities` is emitted as the ClientCapabilities object
   the SEP-2575 final text and draft schema specify (e.g.
-  `{"sampling": {}}`), not the string array the pinned conformance tool
-  asserts — that divergence persists on conformance `main` (contradicting
-  its own vendored types) and is documented in the draft baseline as an
-  upstream tool bug. Investigating it also revealed `McpServer`'s
-  tools/call wrapper was converting SDK-raised `McpError`s into `isError`
-  tool results; it now propagates them as JSON-RPC protocol errors
-  (matching the existing `McpServerException` handling), so the SEP-2575
-  missing-capability error genuinely reaches the wire with HTTP 400 — an
-  API-visible change for tool handlers that deliberately throw `McpError`,
-  recorded for the WS10 migration guide.
+  `{"sampling": {}}`); the pinned conformance tool's divergent
+  string-array assertion is documented in the draft baseline as an
+  upstream tool bug. `McpServer`'s tools/call wrapper now propagates
+  SDK-raised `McpError`s as JSON-RPC protocol errors (matching the
+  existing `McpServerException` handling) instead of converting them into
+  `isError` tool results, so the SEP-2575 missing-capability error
+  reaches the wire with HTTP 400 — an API-visible change for tool
+  handlers that deliberately throw `McpError`.
+- **v2 WS3 — transport changes.** The HTTP-layer and streaming surface of
+  the `2026-07-28` stateless revision, plus the authorization-hardening
+  SEPs.
+  - SEP-2243 request-metadata headers. Servers validate `Mcp-Method` (all
+    modern requests and notifications) and `Mcp-Name` (`tools/call` and
+    `prompts/get` → `params.name`; `resources/read` → `params.uri`;
+    `tasks/*` → `params.taskId`): a missing or body-mismatched header, or
+    an `MCP-Protocol-Version` header that disagrees with the `_meta`
+    envelope, is rejected HTTP 400 + `-32001 HeaderMismatch`; `-32004`
+    fires only when header and `_meta` agree on an unsupported version.
+    Header names compare case-insensitively, values case-sensitively
+    after RFC 9110 OWS trimming. Designated tool parameters
+    (`x-mcp-header` annotations — valid at any nesting depth on
+    string/integer/boolean properties; `number` is not permitted, and
+    integer values must be finite, integral, and within ±(2^53−1), even
+    when large JSON integers decode as floats) are validated server-side
+    against the request's `Mcp-Param-*` headers with strict
+    base64-sentinel decoding, and mirrored client-side from cached
+    `tools/list` schemas: null arguments omit the header, unsafe values
+    get the lowercase `=?base64?…?=` wrapper, and out-of-range values
+    fail before any wire traffic. HTTP clients exclude tools whose
+    annotations violate the constraints. Shared rules live in
+    `Mcp\Shared\McpHeaders`; stdio is exempt (headers are HTTP-only).
+  - SEP-2575 streams. Handler-emitted notifications ride a request-scoped
+    buffered SSE response on the modern path (error responses stay plain
+    JSON so the 400/404 statuses hold), and `subscriptions/listen` is
+    implemented on HTTP and stdio: the
+    `notifications/subscriptions/acknowledged` ack is the stream's first
+    message and echoes only the filter subset the server can actually
+    deliver, every frame carries
+    `_meta["io.modelcontextprotocol/subscriptionId"]` (the stringified
+    listen request id), the `SubscriptionFilter` is strictly contained
+    (no un-opted-in notification types; `resourceSubscriptions` is
+    honored where resource-update delivery is possible, independent of
+    the legacy `resources.subscribe` capability), and the listen request
+    never receives a JSON-RPC response. On stdio,
+    `notifications/cancelled` referencing the listen request id ends the
+    subscription. Event fan-out crosses processes through the new
+    `SubscriptionBusInterface` (`FileSubscriptionBus` for typical PHP
+    hosting, `InMemorySubscriptionBus` for tests and long-running
+    runtimes) with `McpServer` publish helpers
+    (`publishToolsListChanged()` etc.); a server without a configured
+    bus answers `subscriptions/listen` with `-32601` rather than
+    acknowledging subscriptions it cannot serve. No SSE event ids or
+    `Last-Event-ID` resumption exist on the modern path; legacy streams
+    keep both.
+  - SEP-2322 multi-round-trip input. `tools/call` and `prompts/get`
+    answer `InputRequiredResult` (`resultType: "input_required"`,
+    `inputRequests`, signed `requestState`) instead of server-initiated
+    sampling/elicitation/roots requests on the modern path, via ephemeral
+    re-execution: `ElicitationContext`/`SamplingContext` resolve from the
+    round's `inputResponses` or suspend (new optional `inputKey`
+    parameter), and the new `InputContext` batches mixed elicitation +
+    sampling + roots requests into a single round. `RequestStateCodec`
+    HMAC-signs `requestState` (attacker-controlled input per spec) and
+    binds it to the authenticated principal — the token's `sub` claim,
+    or a SHA-256 fingerprint of the bearer token when the validated
+    claims carry no usable subject — so tampering, expiry, and
+    cross-user replay are all rejected with `-32602`; consumed results
+    are carried between rounds inside the state, and the
+    per-installation file-backed signing secret initializes atomically
+    (exclusive create) and fails loudly when no shared secret can be
+    established. The client side services `inputRequests` through
+    `onElicit`/`onSampling` (new)/roots handlers and retries with
+    key-matched `inputResponses`, verbatim `requestState` echo, fresh
+    request ids, a 16-round cap, and absent `resultType` treated as
+    `"complete"`. `Client::connect()` gains `protocolMode: 'modern'`
+    (skip the probe entirely) and a `protocolVersion` preference; modern
+    sessions adopt an advertised version and retry once on `-32004`.
+  - Authorization hardening (client): SEP-2468 `iss` validation per RFC
+    9207 (non-normalized byte comparison; error params never acted on
+    when `iss` fails; new `AuthorizationCallbackResult` with
+    backward compatibility for string-returning handlers), SEP-837
+    `application_type` on dynamic registration (derived native/web),
+    SEP-2352 authorization-server migration (PRM re-fetched on 401,
+    tokens/credentials never reused across issuers, fresh registration at
+    the new AS), SEP-2207 `offline_access` gating on
+    `scopes_supported` — plus the `client_credentials` grant
+    (private_key_jwt with ES256/RS256 assertions including DER→raw
+    signature conversion, and client_secret_basic) and the SEP-990
+    cross-app-access flow (RFC 8693 token exchange + RFC 7523
+    jwt-bearer).
+  - New typed exceptions `Mcp\Shared\UnknownMethodException` and
+    `Mcp\Client\Transport\ReadTimeoutException` replace exception-message
+    string matching in unknown-method handling and client read-timeout
+    classification (messages unchanged for backward compatibility).
 
 ### Changed
 
@@ -149,19 +227,42 @@ This file was introduced during the v1.7.x series. Structured entries below cove
   `readTimeout` is now also enforced against a peer that sends nothing at
   all (previously the timeout could only fire between messages). Both are
   wire-compatible behavior fixes; the `McpError` change is API-visible to
-  v1 code that caught `RuntimeException` from HTTP tool calls and is
-  recorded for the WS10 migration guide.
+  v1 code that caught `RuntimeException` from HTTP tool calls.
 - Draft conformance baseline re-curated for the WS2 milestone:
   `sep-2164-resource-not-found` (3/3) and `caching` (7/7) pass and left the
-  baseline; `server-stateless` passes 17/19 with two failing checks — the
-  SEP-2243 header/`_meta` mismatch `-32001` check (attributed to WS3, along
-  with the `subscriptions/listen` list-changed SHOULD warnings) and the
-  upstream tool's string-array `requiredCapabilities` assertion (a
-  documented upstream tool bug; the SDK keeps the schema's object shape);
+  baseline; `server-stateless` passes 17/19, its two failing checks being
+  the SEP-2243 header/`_meta` mismatch `-32001` check and the upstream
+  tool's string-array `requiredCapabilities` assertion (a documented
+  upstream tool bug; the SDK keeps the schema's object shape);
   `http-custom-header-server-validation` removed as inactive (its checks
-  only engage once an `x-mcp-header` tool exists — a WS3 deliverable). The
-  stable track stays regression-free (291 passed, up 4 from the typed-error
-  fix).
+  only engage once an `x-mcp-header` tool exists). The stable track stays
+  regression-free (291 passed, up 4 from the typed-error fix).
+- `Server::getCapabilities()` derives the `resources.subscribe`
+  capability from actual `resources/subscribe` handler registration
+  instead of hardcoding `false`, so the advertisement matches what the
+  server really serves.
+- Conformance updated for the WS3 milestone: **both stable baselines are
+  now empty** — 100% of stable scenarios pass (40 server + 319 client) —
+  and the draft baselines are down to two documented upstream-tool
+  entries: `sep-2575-server-rejects-undeclared-capability` (the pinned
+  tool asserts a string-array `requiredCapabilities` against the draft
+  schema's ClientCapabilities object) and `http-custom-headers` (the
+  pinned tool still requires mirroring `number`-typed designated
+  parameters, which the final SEP-2243 text prohibits).
+  `run-conformance.php` starts the fixture server with
+  `PHP_CLI_SERVER_WORKERS` on POSIX so concurrent-stream scenarios
+  exercise real parallelism; the everything-server gained the WS3 fixture
+  tools (header params, listen triggers, per-request-logLevel logging,
+  and the SEP-2322 input-required suite) and the everything-client gained
+  the matching scenario handlers. `conformance/README.md` and
+  `ROADMAP.md` reflect the emptied stable baseline.
+
+### Fixed
+
+- `HttpServerSession::toArray()` deep-normalizes `clientParams`, so
+  declared client capabilities (e.g. a bare `elicitation: {}`) survive
+  cross-request restoration on session stores that keep PHP values in
+  memory — previously `fromArray()`'s array guards silently dropped them.
 
 ## [1.7.3]
 

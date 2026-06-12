@@ -111,6 +111,18 @@ class HttpMessage
     }
     
     /**
+     * Remove an HTTP header (case-insensitive).
+     *
+     * @param string $name Header name
+     * @return self
+     */
+    public function removeHeader(string $name): self
+    {
+        unset($this->headers[strtolower($name)]);
+        return $this;
+    }
+
+    /**
      * Get all HTTP headers.
      *
      * @return array<string, string> All headers

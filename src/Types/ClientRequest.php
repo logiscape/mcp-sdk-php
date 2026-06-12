@@ -75,7 +75,8 @@ final class ClientRequest implements RequestWrapperInterface {
             $request instanceof TaskResultRequest ||
             $request instanceof TaskListRequest ||
             $request instanceof TaskCancelRequest ||
-            $request instanceof DiscoverRequest
+            $request instanceof DiscoverRequest ||
+            $request instanceof SubscriptionsListenRequest
         )) {
             throw new \InvalidArgumentException('Invalid client request type');
         }
@@ -94,6 +95,7 @@ final class ClientRequest implements RequestWrapperInterface {
         return match ($method) {
             'initialize' => self::createInitializeRequest($params),
             'server/discover' => self::createDiscoverRequest($params),
+            'subscriptions/listen' => self::createSubscriptionsListenRequest($params),
             'ping' => new self(new PingRequest()),
             'completion/complete' => self::createCompleteRequest($params),
             'logging/setLevel' => self::createSetLevelRequest($params),
@@ -110,7 +112,7 @@ final class ClientRequest implements RequestWrapperInterface {
             'tasks/result' => self::createTaskResultRequest($params),
             'tasks/list' => self::createTaskListRequest($params),
             'tasks/cancel' => self::createTaskCancelRequest($params),
-            default => throw new \InvalidArgumentException("Unknown client request method: $method")
+            default => throw new \Mcp\Shared\UnknownMethodException("Unknown client request method: $method")
         };
     }
 
@@ -220,6 +222,22 @@ final class ClientRequest implements RequestWrapperInterface {
     }
 
     /** @param array<string, mixed> $params */
+    private static function createSubscriptionsListenRequest(array $params): self {
+        $meta = self::extractMeta($params);
+        unset($params['_meta']);
+
+        $requestParams = new RequestParams($meta);
+        foreach ($params as $k => $v) {
+            // The required `notifications` SubscriptionFilter (and any
+            // forward-compatible extras) ride as dynamic fields; the
+            // session validates the filter shape at dispatch.
+            $requestParams->$k = $v;
+        }
+
+        return new self(new SubscriptionsListenRequest($requestParams));
+    }
+
+    /** @param array<string, mixed> $params */
     private static function createCompleteRequest(array $params): self {
         $argumentData = $params['argument'] ?? [];
         if (empty($argumentData['name']) || !isset($argumentData['value'])) {
@@ -278,7 +296,9 @@ final class ClientRequest implements RequestWrapperInterface {
             _meta: self::extractMeta($params)
         );
 
-        return new self(new GetPromptRequest($getParams));
+        $request = new GetPromptRequest($getParams);
+        self::attachInputResponseFields($request, $params);
+        return new self($request);
     }
 
     /** @param array<string, mixed> $params */
@@ -298,7 +318,9 @@ final class ClientRequest implements RequestWrapperInterface {
         if (empty($params['uri'])) {
             throw new \InvalidArgumentException('ReadResourceRequest requires "uri"');
         }
-        return new self(new ReadResourceRequest(uri: $params['uri'], _meta: self::extractMeta($params)));
+        $request = new ReadResourceRequest(uri: $params['uri'], _meta: self::extractMeta($params));
+        self::attachInputResponseFields($request, $params);
+        return new self($request);
     }
 
     /** @param array<string, mixed> $params */
@@ -343,7 +365,30 @@ final class ClientRequest implements RequestWrapperInterface {
             }
         }
 
-        return new self(new CallToolRequest($params['name'], $arguments, $task, $meta));
+        $request = new CallToolRequest($params['name'], $arguments, $task, $meta);
+        self::attachInputResponseFields($request, $params);
+        return new self($request);
+    }
+
+    /**
+     * SEP-2322 (revision 2026-07-28): tools/call, prompts/get, and
+     * resources/read params extend InputResponseRequestParams — a retry of
+     * a request that answered InputRequiredResult carries `inputResponses`
+     * and the echoed `requestState` alongside the original params. They
+     * ride as dynamic fields so dispatch (McpServer) can read them.
+     *
+     * @param array<string, mixed> $params
+     */
+    private static function attachInputResponseFields(Request $request, array $params): void {
+        if ($request->params === null) {
+            return;
+        }
+        if (isset($params['inputResponses']) && is_array($params['inputResponses'])) {
+            $request->params->__set('inputResponses', $params['inputResponses']);
+        }
+        if (isset($params['requestState']) && is_string($params['requestState'])) {
+            $request->params->__set('requestState', $params['requestState']);
+        }
     }
 
     /** @param array<string, mixed> $params */

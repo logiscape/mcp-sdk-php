@@ -89,6 +89,16 @@ class DynamicClientRegistration
             'token_endpoint_auth_method' => 'none',
         ], $metadata);
 
+        // SEP-837: every registration request MUST declare an application_type
+        // of "native" or "web". Derive it from the redirect URIs when the
+        // caller didn't specify one explicitly.
+        if (!isset($metadata['application_type'])) {
+            $redirectUris = $metadata['redirect_uris'] ?? [];
+            $metadata['application_type'] = self::deriveApplicationType(
+                is_array($redirectUris) ? $redirectUris : []
+            );
+        }
+
         $ch = curl_init($as->registrationEndpoint);
         if ($ch === false) {
             throw new OAuthException('Failed to initialize cURL for client registration');
@@ -173,6 +183,62 @@ class DynamicClientRegistration
             'grant_types' => ['authorization_code', 'refresh_token'],
             'response_types' => ['code'],
             'token_endpoint_auth_method' => 'none',
+            // SEP-837: clients MUST specify an appropriate application_type.
+            // Callers can override via $additionalMetadata.
+            'application_type' => self::deriveApplicationType($redirectUris),
         ], $additionalMetadata);
+    }
+
+    /**
+     * Derive the SEP-837 application_type from the redirect URIs.
+     *
+     * Native applications (CLI/desktop apps using loopback redirects or
+     * private-use URI schemes per RFC 8252) use "native"; remote
+     * browser-based applications use "web". When every redirect URI is a
+     * loopback/localhost URI or uses a private-use (non-HTTP) scheme, the
+     * client is native; any other redirect URI makes it a web client. With
+     * no redirect URIs at all (e.g. non-interactive grants), "native" is
+     * assumed.
+     *
+     * @param array<int, mixed> $redirectUris The redirect URIs to inspect
+     * @return string Either 'native' or 'web'
+     */
+    public static function deriveApplicationType(array $redirectUris): string
+    {
+        foreach ($redirectUris as $uri) {
+            if (!is_string($uri) || !self::isNativeRedirectUri($uri)) {
+                return 'web';
+            }
+        }
+
+        return 'native';
+    }
+
+    /**
+     * Check whether a redirect URI indicates a native application.
+     *
+     * @param string $uri The redirect URI
+     * @return bool True for loopback/localhost or private-use scheme URIs
+     */
+    private static function isNativeRedirectUri(string $uri): bool
+    {
+        $parsed = parse_url($uri);
+        if ($parsed === false) {
+            return false;
+        }
+
+        $scheme = strtolower($parsed['scheme'] ?? '');
+
+        // Private-use URI schemes (e.g. com.example.app:/callback) are
+        // native-app redirects per RFC 8252 Section 7.1.
+        if ($scheme !== '' && $scheme !== 'http' && $scheme !== 'https') {
+            return true;
+        }
+
+        // Loopback interface redirects (RFC 8252 Section 7.3). Trim IPv6
+        // brackets so [::1] matches.
+        $host = strtolower(trim($parsed['host'] ?? '', '[]'));
+
+        return in_array($host, ['localhost', '127.0.0.1', '::1'], true);
     }
 }

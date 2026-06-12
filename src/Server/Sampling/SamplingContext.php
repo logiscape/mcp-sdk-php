@@ -77,6 +77,7 @@ class SamplingContext
         private readonly string $toolName = '',
         private readonly array $toolArguments = [],
         private readonly int|string $originalRequestId = 0,
+        private readonly ?\Mcp\Server\InputRequired\InputExchange $exchange = null,
     ) {}
 
     /**
@@ -134,6 +135,7 @@ class SamplingContext
         ?array $tools = null,
         ?ToolChoice $toolChoice = null,
         ?Meta $_meta = null,
+        ?string $inputKey = null,
     ): ?CreateMessageResult {
         if (!$this->supportsSampling()) {
             // Modern path (SEP-2575): a request whose envelope did not
@@ -152,6 +154,34 @@ class SamplingContext
         }
 
         $seq = $this->sequenceCounter++;
+
+        // Modern path (SEP-2322): resolve from this round's input
+        // responses or suspend into an InputRequiredResult. Invalid
+        // response shapes are re-requested, never carried forward.
+        if ($this->exchange !== null) {
+            $key = $inputKey ?? ('input_' . $seq);
+            $raw = $this->exchange->resolve($key);
+            if (is_array($raw) && isset($raw['role'], $raw['content'])) {
+                $this->exchange->accept($key, $raw);
+                return CreateMessageResult::fromResponseData($raw);
+            }
+            $request = new CreateMessageRequest(
+                messages: $messages,
+                maxTokens: $maxTokens,
+                stopSequences: $stopSequences,
+                systemPrompt: $systemPrompt,
+                temperature: $temperature,
+                metadata: $metadata,
+                modelPreferences: $modelPreferences,
+                includeContext: $includeContext,
+                tools: $tools,
+                toolChoice: $toolChoice,
+                _meta: $_meta,
+            );
+            $request->validate();
+            $this->exchange->queue($key, $request);
+            $this->exchange->suspend();
+        }
 
         // HTTP resume path: return preloaded result if available
         if ($this->httpMode && isset($this->preloadedResults[$seq])) {

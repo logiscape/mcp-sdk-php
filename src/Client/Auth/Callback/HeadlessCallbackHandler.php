@@ -72,7 +72,7 @@ class HeadlessCallbackHandler implements AuthorizationCallbackInterface
     /**
      * {@inheritdoc}
      */
-    public function authorize(string $authUrl, string $state): string
+    public function authorize(string $authUrl, string $state): AuthorizationCallbackResult
     {
         $this->logger->info('Headless authorization: requesting authorization URL', [
             'authUrl' => $authUrl,
@@ -157,29 +157,23 @@ class HeadlessCallbackHandler implements AuthorizationCallbackInterface
             );
         }
 
-        // Check for error response
-        if (isset($params['error'])) {
-            $errorDesc = $params['error_description'] ?? $params['error'];
-            throw new OAuthException("Authorization error: {$errorDesc}");
-        }
-
-        // Validate state
+        // Validate state (CSRF protection). Error parameters and the iss
+        // parameter are deliberately NOT interpreted here: per SEP-2468 the
+        // OAuthClient must validate iss against the expected issuer BEFORE
+        // acting on any error or code content from the response.
         if (!isset($params['state']) || $params['state'] !== $state) {
             throw OAuthException::authorizationFailed(
                 'State parameter mismatch in authorization redirect'
             );
         }
 
-        // Extract code
-        if (!isset($params['code'])) {
-            throw OAuthException::authorizationFailed(
-                'No authorization code in redirect URL'
-            );
-        }
+        $this->logger->info('Received authorization callback via headless flow');
 
-        $this->logger->info('Received authorization code via headless flow');
-
-        return $params['code'];
+        return new AuthorizationCallbackResult(
+            code: isset($params['code']) && is_string($params['code']) ? $params['code'] : null,
+            iss: isset($params['iss']) && is_string($params['iss']) ? $params['iss'] : null,
+            params: $params
+        );
     }
 
     /**

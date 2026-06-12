@@ -14,119 +14,94 @@
 # complete. The no-shortcut rule in conformance/README.md applies to this
 # file exactly as it does to the stable baseline.
 #
-# Last updated: 2026-06-12 (WS2 milestone)
+# Last updated: 2026-06-12 (WS3 milestone)
 # Conformance tool version: 0.2.0-alpha.2 (draft pin)
 
 server:
-  # (WS2's per-request era detection landed 2026-06-12: the server accepts
-  # the DRAFT-2026-v1 identifier as an alias for 2026-07-28 on the
-  # per-request stateless path, serves every modern request sessionless
-  # with the SEP-2575 status mapping (400 for -32602/-32003/-32004, 404 +
-  # -32601 for unknown/removed methods), and adopts version/clientInfo/
-  # clientCapabilities from each request's _meta envelope. WS2 entries
-  # removed as now passing: `sep-2164-resource-not-found` (3/3) and
-  # `caching` (7/7). Also removed `http-custom-header-server-validation`:
-  # its checks only activate when the server exposes a tool with
-  # x-mcp-header annotations, which none does yet — the tool reports the
-  # scenario as passing with 0 checks, and the baseline gate flags the
-  # entry as stale. WS3's SEP-2243 work adds such a tool and re-baselines
-  # honestly if its checks then fail.)
+  # (WS3's transport changes landed 2026-06-12: SEP-2243 request-metadata
+  # header validation — Mcp-Method/Mcp-Name presence+match, OWS trimming,
+  # case-sensitive values, version-header/_meta mismatch, and Mcp-Param-*
+  # designated-parameter validation with strict base64-sentinel decoding —
+  # all rejected 400/-32001; the SEP-2322 multi-round-trip mechanism
+  # (InputRequiredResult with HMAC-signed requestState, ephemeral
+  # re-execution, capability-gated input requests, prompts/get support);
+  # and the SEP-2575 streaming surface (request-scoped SSE for
+  # handler-emitted notifications, subscriptions/listen with the
+  # acknowledgement-first stream, subscriptionId tagging, and strict
+  # filter containment). WS3 entries removed as now passing:
+  # `http-header-validation` (13/13), `http-custom-header-server-
+  # validation` (9/9, activated by the new test_header_params fixture
+  # tool), and all twelve `input-required-result-*` scenarios.)
 
-  # --- WS3 (transport changes) + one upstream tool bug ---
+  # --- One upstream tool bug ---
   - server-stateless
-    # 17/19 checks pass after WS2 (era detection, discover, removed-method
-    # 404s, -32004/-32602 statuses, missing-capability -32003 with HTTP
-    # 400, no session-id echo). Note: the two capability checks were
-    # silently SKIPPED in earlier WS2 runs — McpServer's tools/call
-    # wrapper converted the SDK-raised McpError into an isError tool
-    # result, so no -32003 reached the wire; the wrapper now propagates
-    # McpError as protocol errors, and both checks actually execute.
-    # The two failing checks:
+    # 22/23 checks pass after WS3, including
+    # sep-2575-http-server-header-mismatch-400 (-32001 before -32004),
+    # the subscriptions/listen acknowledgement-first and subscriptionId
+    # checks, and the notification-filter containment check.
     #
-    # 1. sep-2575-http-server-header-mismatch-400 (WS3): a request whose
-    #    MCP-Protocol-Version header disagrees with the _meta value must
-    #    be rejected -32001 HeaderMismatch (we currently answer from the
-    #    envelope, yielding -32004) — that validation is SEP-2243, a WS3
-    #    deliverable per the plan.
+    # The one failing check, sep-2575-server-rejects-undeclared-capability
+    # (UPSTREAM TOOL BUG, not pursued in the SDK): the SDK emits
+    # data.requiredCapabilities as a ClientCapabilities OBJECT
+    # ({"sampling": {}}), which is what the SEP-2575 final text, the
+    # draft schema.ts, its canonical example
+    # (MissingRequiredClientCapabilityError/missing-elicitation-capability.json),
+    # and the TypeScript SDK v2 types all specify. The conformance
+    # tool asserts a string array (["sampling"]) — on the pinned
+    # 0.2.0-alpha.2 AND on conformance main as of 2026-06-12, where
+    # the check contradicts the repo's own vendored draft types.
+    # Official text wins (guiding principle; see conformance/README.md
+    # no-shortcuts rule): the SDK keeps the schema shape and this
+    # check stays an expected failure until the tool is fixed
+    # upstream. Re-check at every draft-pin bump; candidate for an
+    # upstream issue/PR per SEP-2484. The companion check
+    # sep-2575-missing-capability-http-400 (status only) passes.
     #
-    # 2. sep-2575-server-rejects-undeclared-capability (UPSTREAM TOOL
-    #    BUG, not pursued in the SDK): the SDK emits
-    #    data.requiredCapabilities as a ClientCapabilities OBJECT
-    #    ({"sampling": {}}), which is what the SEP-2575 final text, the
-    #    draft schema.ts, its canonical example
-    #    (MissingRequiredClientCapabilityError/missing-elicitation-capability.json),
-    #    and the TypeScript SDK v2 types all specify. The conformance
-    #    tool asserts a string array (["sampling"]) — on the pinned
-    #    0.2.0-alpha.2 AND on conformance main as of 2026-06-12, where
-    #    the check contradicts the repo's own vendored draft types.
-    #    Official text wins (guiding principle; see conformance/README.md
-    #    no-shortcuts rule): the SDK keeps the schema shape and this
-    #    check stays an expected failure until the tool is fixed
-    #    upstream. Re-check at every draft-pin bump; candidate for an
-    #    upstream issue/PR per SEP-2484. The companion check
-    #    sep-2575-missing-capability-http-400 (status only) passes.
-    #
-    # Two SHOULD-level warnings also remain (prompts/tools list_changed
-    # notifications on an open subscriptions/listen stream), which need
-    # WS3's subscriptions/listen channel.
-
-  - http-header-validation
-    # Mcp-Method/Mcp-Name header validation and HeaderMismatch (-32001)
-    # rejection not yet implemented (3/8 checks pass after WS2).
-
-  # --- WS3 (transport changes: SEP-2322 InputRequiredResult) ---
-  # The multi-round-trip input mechanism replacing server-initiated
-  # sampling/elicitation/roots requests is not yet implemented; the
-  # existing suspend/resume pattern still uses server-initiated requests.
-  - input-required-result-basic-elicitation
-  - input-required-result-basic-sampling
-  - input-required-result-basic-list-roots
-  - input-required-result-request-state
-  - input-required-result-multiple-input-requests
-  - input-required-result-multi-round
-  - input-required-result-missing-input-response
-  - input-required-result-non-tool-request
-  - input-required-result-result-type
-  - input-required-result-tampered-state
-  - input-required-result-capability-check
-  - input-required-result-ignore-extra-params
+    # The two SHOULD-level warnings (prompts/tools list_changed delivered
+    # to an open subscriptions/listen stream) pass only where PHP's CLI
+    # server can run multiple workers (PHP_CLI_SERVER_WORKERS, POSIX
+    # only — run-conformance.php sets it automatically): the trigger
+    # tools/call must be served concurrently with the open stream. On
+    # Windows dev machines the events cannot be exercised locally;
+    # warnings do not fail the scenario either way.
 
 client:
-  # (WS1's json-schema-ref-no-deref entry removed 2026-06-12: the client
-  # passes 2020-12 schemas through verbatim and never dereferences network
-  # $refs — scenario passing.)
-
-  # --- WS3 (transport changes: SEP-2243 request-metadata headers) ---
-  - request-metadata
-    # Mcp-Method/Mcp-Name header emission not yet implemented.
-
+  # --- One stale-tool entry (WS3 review round) ---
   - http-custom-headers
-    # Mcp-Param-* mirroring of designated tool parameters not yet
-    # implemented.
+    # UPSTREAM TOOL STALENESS, not pursued in the SDK: the scenario's
+    # advertised tools annotate `number`-typed parameters
+    # (priority/float_val) with x-mcp-header and REQUIRE the client to
+    # mirror them — but the final SEP-2243 text explicitly prohibits
+    # x-mcp-header on type `number` (string/integer/boolean only) and
+    # mandates that HTTP clients REJECT tool definitions violating the
+    # constraints. The SDK follows the final text (the WS3 review
+    # confirmed the prohibition), so it excludes the scenario's tools as
+    # invalid and never mirrors them; the scenario's five checks then
+    # fail unexercised. The companion http-invalid-tool-headers scenario
+    # (which has no number case) passes 11/11, as does
+    # http-custom-header-server-validation on the server track (its
+    # fixture uses a string parameter). Re-check at every draft-pin
+    # bump; candidate for an upstream scenario fix per SEP-2484.
 
-  - http-invalid-tool-headers
-    # Client-side rejection rules for invalid x-mcp-header mappings not
-    # yet implemented.
-
-  # --- WS3 (transport changes: SEP-2322 InputRequiredResult) ---
-  - sep-2322-client-request-state
-    # Client side of the multi-round-trip input mechanism (inputResponses,
-    # requestState round-tripping) not yet implemented.
-
-  # --- WS3 (authorization hardening) ---
-  - auth/iss-supported
-  - auth/iss-not-advertised
-  - auth/iss-supported-missing
-  - auth/iss-wrong-issuer
-  - auth/iss-unexpected
-  - auth/iss-normalized
-    # SEP-2468 `iss` parameter validation (RFC 9207) not yet implemented;
-    # one to two checks fail per iss scenario.
-
-  - auth/authorization-server-migration
-    # SEP-2352 credential binding to the issuing server's issuer not yet
-    # implemented.
-
-  - auth/offline-access-not-supported
-    # SEP-2207 refresh-token clarification: one check fails at the draft
-    # version (refresh behavior when offline_access is unsupported).
+  # (Otherwise empty as of the WS3 milestone, 2026-06-12. Removed as now
+  # passing:
+  # - request-metadata: closed by an everything-client handler exercising
+  #   the SEP-2575 envelope/version-header obligations the checks actually
+  #   assert — the earlier baseline comment mis-attributed this scenario
+  #   to Mcp-Method/Mcp-Name emission, which it never checked.
+  # - http-custom-headers / http-invalid-tool-headers: SEP-2243
+  #   Mcp-Param-* mirroring with the base64 sentinel encoding, plus
+  #   client-side rejection (exclusion) of tools with invalid
+  #   x-mcp-header annotations.
+  # - sep-2322-client-request-state: the client MRTR loop — verbatim
+  #   requestState echo, fresh JSON-RPC ids, key-matched inputResponses,
+  #   per-call isolation, absent resultType treated as complete.
+  # - auth/iss-*: SEP-2468 RFC 9207 iss validation (non-normalized
+  #   comparison; reject scenarios exit before any token exchange).
+  # - auth/authorization-server-migration: SEP-2352 PRM re-fetch on 401 +
+  #   re-registration at the new AS without credential reuse.
+  # - auth/offline-access-not-supported: its one failing check was
+  #   SEP-837's cross-cutting application_type assertion in the mock
+  #   AS's registration handler (now sent on every DCR), not refresh
+  #   behavior — the earlier comment mis-attributed it.
+  # - json-schema-ref-no-deref had already left with WS1.)

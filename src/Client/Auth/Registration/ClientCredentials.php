@@ -39,6 +39,7 @@ class ClientCredentials
     public const AUTH_METHOD_NONE = 'none';
     public const AUTH_METHOD_CLIENT_SECRET_POST = 'client_secret_post';
     public const AUTH_METHOD_CLIENT_SECRET_BASIC = 'client_secret_basic';
+    public const AUTH_METHOD_PRIVATE_KEY_JWT = 'private_key_jwt';
 
     /**
      * Sentinel value: discover the auth method from AS metadata at runtime.
@@ -53,11 +54,17 @@ class ClientCredentials
      * @param string $clientId The client identifier
      * @param string|null $clientSecret The client secret (if applicable)
      * @param string $tokenEndpointAuthMethod The authentication method for the token endpoint
+     * @param string|null $privateKeyPem PEM-encoded private key for private_key_jwt
+     *        client authentication (RFC 7523)
+     * @param string|null $signingAlgorithm JWS algorithm for private_key_jwt client
+     *        assertions (e.g. 'ES256', 'RS256')
      */
     public function __construct(
         public readonly string $clientId,
         public readonly ?string $clientSecret = null,
-        public readonly string $tokenEndpointAuthMethod = self::AUTH_METHOD_CLIENT_SECRET_POST
+        public readonly string $tokenEndpointAuthMethod = self::AUTH_METHOD_CLIENT_SECRET_POST,
+        public readonly ?string $privateKeyPem = null,
+        public readonly ?string $signingAlgorithm = null
     ) {
     }
 

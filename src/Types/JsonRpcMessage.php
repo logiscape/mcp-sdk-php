@@ -54,6 +54,22 @@ class JsonRpcMessage implements McpModel {
     public ?int $httpStatusHint = null;
 
     /**
+     * Transport-layer extra HTTP request headers (SEP-2243).
+     *
+     * Mirrors the {@see $httpStatusHint} pattern in the opposite direction:
+     * the client session stamps `Mcp-Param-{name}` mirrors for tool
+     * arguments whose inputSchema property carries the `x-mcp-header`
+     * annotation, and the HTTP transport merges them into the outgoing
+     * request's headers — a structured signal between the two layers. The
+     * hint is never serialized onto the wire body and is ignored by
+     * non-HTTP transports (the stdio transport has no headers and is
+     * exempt from SEP-2243).
+     *
+     * @var array<string, string>|null Header name => verbatim header value
+     */
+    public ?array $httpHeaderHints = null;
+
+    /**
      * We store one of the four possible variants.
      */
     public function __construct(

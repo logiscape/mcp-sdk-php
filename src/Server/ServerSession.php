@@ -68,6 +68,7 @@ use Mcp\Types\Meta;
 use Mcp\Types\ModelPreferences;
 use Mcp\Types\SamplingCapability;
 use Mcp\Types\SamplingMessage;
+use Mcp\Types\SubscriptionFilter;
 use Mcp\Types\TaskRequestParams;
 use Mcp\Types\ToolChoice;
 use Mcp\Server\Transport\Transport;
@@ -108,6 +109,27 @@ class ServerSession extends BaseSession {
 
     /** Whether the request currently being handled selected the modern era. */
     protected bool $currentRequestModern = false;
+
+    /**
+     * Lower-cased HTTP header map of the modern request currently being
+     * served, forwarded by the HTTP runner from the transport (SEP-2243).
+     * Null on stdio (no headers) and on legacy HTTP requests. Lets
+     * schema-aware layers (McpServer's Mcp-Param-* validation) see
+     * transport metadata at dispatch time.
+     *
+     * @var array<string, string>|null
+     */
+    protected ?array $transportHttpHeaders = null;
+
+    /**
+     * Active subscriptions/listen filters keyed by subscription id (the
+     * stringified JSON-RPC id of the listen request). Only populated on
+     * stdio, where the subscription lives for the session; the HTTP
+     * binding streams instead (see SubscriptionListenException).
+     *
+     * @var array<string, SubscriptionFilter>
+     */
+    protected array $activeSubscriptions = [];
 
     /**
      * The raw wire-level `_meta` of the message currently being processed,
@@ -315,7 +337,7 @@ class ServerSession extends BaseSession {
         $isModern = $this->transportDeclaredModern
             || $method === 'server/discover'
             || self::metaCarriesModernEnvelope($inner->params?->_meta);
-        $isUnknownMethod = str_contains($e->getMessage(), 'Unknown client request method');
+        $isUnknownMethod = $e instanceof \Mcp\Shared\UnknownMethodException;
         $isRemovedModern = $isModern && in_array($method, self::MODERN_REMOVED_METHODS, true);
 
         $this->currentRequestModern = $isModern;
@@ -453,6 +475,16 @@ class ServerSession extends BaseSession {
         $isModern = $this->transportDeclaredModern
             || self::metaCarriesModernEnvelope($actualNotification->params?->_meta ?? null)
             || self::metaCarriesModernEnvelope($this->currentRawMeta);
+
+        // SEP-2575: notifications/cancelled referencing a
+        // subscriptions/listen request id is the stdio binding's way to
+        // END that subscription — the server MUST stop forwarding its
+        // notification types. Handled on both eras, before handler
+        // dispatch, so registered cancellation handlers still run.
+        if ($method === 'notifications/cancelled') {
+            $this->cancelSubscriptionIfListenId($actualNotification);
+        }
+
         if ($isModern) {
             if (in_array($method, self::MODERN_REMOVED_NOTIFICATIONS, true)) {
                 $this->logger->warning("Ignoring notification removed in the 2026-07-28 revision: $method");
@@ -631,6 +663,11 @@ class ServerSession extends BaseSession {
             return;
         }
 
+        if ($method === 'subscriptions/listen') {
+            $this->handleSubscriptionsListen($responder, $params);
+            return;
+        }
+
         if (in_array($method, self::MODERN_REMOVED_METHODS, true)) {
             $respond(new \Mcp\Shared\ErrorData(
                 code: -32601,
@@ -640,6 +677,151 @@ class ServerSession extends BaseSession {
         }
 
         $this->dispatchRegisteredHandler($method, $params, $responder);
+    }
+
+    /**
+     * Parse and validate the `notifications` filter of a
+     * subscriptions/listen request. Null when the required filter object
+     * is missing or malformed (schema: `notifications` is required).
+     */
+    protected function parseListenFilter(?RequestParams $params): ?SubscriptionFilter {
+        if ($params === null) {
+            return null;
+        }
+        $serialized = $params->jsonSerialize();
+        $fields = $serialized instanceof \stdClass ? (array) $serialized : (is_array($serialized) ? $serialized : []);
+        $notifications = $fields['notifications'] ?? null;
+        if ($notifications instanceof \stdClass) {
+            $notifications = json_decode((string) json_encode($notifications), true);
+        }
+        if (!is_array($notifications)) {
+            return null;
+        }
+        return SubscriptionFilter::fromArray($notifications);
+    }
+
+    /**
+     * Serve `subscriptions/listen` on the stdio transport (SEP-2575).
+     *
+     * The acknowledgement notification is sent as the FIRST message of the
+     * subscription and the request gets no JSON-RPC response — the
+     * subscription stays active for the life of the session (the spec's
+     * stdio binding: the client cancels via notifications/cancelled or by
+     * closing the transport; the server holds no subscription state across
+     * reconnections). Change notifications published through
+     * deliverSubscriptionNotification() are forwarded to every active
+     * subscription whose filter wants them, tagged with the subscription
+     * id so the client can demultiplex.
+     *
+     * HttpServerSession overrides this: an HTTP listen stream needs the
+     * runner's SAPI adapter, so the validated request is thrown upward as
+     * a SubscriptionListenException instead.
+     */
+    protected function handleSubscriptionsListen(RequestResponder $responder, ?RequestParams $params): void {
+        $filter = $this->parseListenFilter($params);
+        if ($filter === null) {
+            $responder->sendResponse(new \Mcp\Shared\ErrorData(
+                code: -32602,
+                message: 'Invalid params: subscriptions/listen requires a notifications filter object'
+            ));
+            return;
+        }
+
+        // stdio delivers resources/updated in-session, so the
+        // resourceSubscriptions filter is deliverable whenever the server
+        // serves resources at all.
+        $agreed = $filter->intersectWithCapabilities(
+            $this->initOptions->capabilities,
+            resourceUpdatesDeliverable: $this->initOptions->capabilities->resources !== null
+        );
+        $subscriptionId = (string) $responder->getRequestId()->getValue();
+        $this->activeSubscriptions[$subscriptionId] = $agreed;
+
+        $this->writeSubscriptionNotification(
+            'notifications/subscriptions/acknowledged',
+            ['notifications' => $agreed->jsonSerialize()],
+            $subscriptionId
+        );
+        // Deliberately no $responder->sendResponse(): the stream of
+        // notifications IS the response (the listen request never gets a
+        // JSON-RPC result).
+    }
+
+    /**
+     * Forward a change notification to every active stdio subscription
+     * whose filter opted in to it. No-op when nothing is subscribed.
+     *
+     * @param array<string, mixed> $params Notification params (without _meta)
+     */
+    public function deliverSubscriptionNotification(string $method, array $params = []): void {
+        $uri = isset($params['uri']) && is_string($params['uri']) ? $params['uri'] : null;
+        foreach ($this->activeSubscriptions as $subscriptionId => $filter) {
+            if ($filter->wants($method, $uri)) {
+                // PHP silently converts numeric-string array keys to ints;
+                // the wire id is always the stringified form.
+                $this->writeSubscriptionNotification($method, $params, (string) $subscriptionId);
+            }
+        }
+    }
+
+    /**
+     * Active stdio subscription filters keyed by subscription id.
+     *
+     * @return array<string, SubscriptionFilter>
+     */
+    public function getActiveSubscriptions(): array {
+        return $this->activeSubscriptions;
+    }
+
+    /**
+     * Drop the stdio subscription a notifications/cancelled refers to,
+     * when its requestId matches an active listen request. No-op for
+     * cancellations of ordinary requests.
+     */
+    protected function cancelSubscriptionIfListenId(Notification $notification): void {
+        $params = $notification->params;
+        if ($params === null) {
+            return;
+        }
+        $serialized = $params->jsonSerialize();
+        $fields = $serialized instanceof \stdClass
+            ? (array) $serialized
+            : (is_array($serialized) ? $serialized : []);
+        $requestId = $fields['requestId'] ?? null;
+        if (!is_string($requestId) && !is_int($requestId)) {
+            return;
+        }
+        $key = (string) $requestId;
+        if (isset($this->activeSubscriptions[$key])) {
+            unset($this->activeSubscriptions[$key]);
+            $this->logger->info("Subscription $key cancelled by client");
+        }
+    }
+
+    /**
+     * Write a notification onto the transport with the SEP-2575
+     * subscription-correlation id stamped into `_meta`
+     * (`io.modelcontextprotocol/subscriptionId` — required on every frame
+     * of the channel, including the acknowledgement).
+     *
+     * @param array<string, mixed> $params Notification params (without _meta)
+     */
+    protected function writeSubscriptionNotification(string $method, array $params, string $subscriptionId): void {
+        $meta = new Meta();
+        $meta->setField(MetaKeys::SUBSCRIPTION_ID, $subscriptionId);
+
+        $notificationParams = new NotificationParams($meta);
+        foreach ($params as $key => $value) {
+            if ($value !== null) {
+                $notificationParams->$key = $value;
+            }
+        }
+
+        $this->writeMessage(new JsonRpcMessage(new JSONRPCNotification(
+            jsonrpc: '2.0',
+            method: $method,
+            params: $notificationParams
+        )));
     }
 
     /**
@@ -1311,6 +1493,74 @@ class ServerSession extends BaseSession {
      */
     public function declareTransportModernEra(bool $modern = true): void {
         $this->transportDeclaredModern = $modern;
+    }
+
+    /**
+     * Forward the lower-cased HTTP header map of the modern request being
+     * served (SEP-2243). Set per request by the HTTP runner; null on stdio
+     * and on legacy HTTP requests.
+     *
+     * @param array<string, string>|null $headers
+     * @internal Intended for the SDK's own runners and for tests.
+     */
+    public function setTransportHttpHeaders(?array $headers): void {
+        $this->transportHttpHeaders = $headers;
+    }
+
+    /**
+     * Look up a header of the current request by name (case-insensitive).
+     * Null when the header is absent or the request has no HTTP headers
+     * (stdio / legacy).
+     */
+    public function getTransportHttpHeader(string $name): ?string {
+        if ($this->transportHttpHeaders === null) {
+            return null;
+        }
+        return $this->transportHttpHeaders[strtolower($name)] ?? null;
+    }
+
+    /**
+     * The full lower-cased header map of the current request, or null when
+     * none was provided (stdio / legacy HTTP).
+     *
+     * @return array<string, string>|null
+     */
+    public function getTransportHttpHeaders(): ?array {
+        return $this->transportHttpHeaders;
+    }
+
+    /**
+     * Authenticated principal of the current request (the OAuth token's
+     * `sub` claim), forwarded by the HTTP runner when token validation is
+     * enabled. Null for anonymous and stdio requests. SEP-2322 binds
+     * `requestState` to it so one authenticated user cannot replay
+     * another user's captured multi-round-trip state.
+     */
+    protected ?string $authenticatedPrincipal = null;
+
+    /**
+     * @internal Intended for the SDK's own runners and for tests.
+     */
+    public function setAuthenticatedPrincipal(?string $principal): void {
+        $this->authenticatedPrincipal = $principal;
+    }
+
+    public function getAuthenticatedPrincipal(): ?string {
+        return $this->authenticatedPrincipal;
+    }
+
+    /**
+     * The per-request log level the current request carried in
+     * `_meta["io.modelcontextprotocol/logLevel"]` (SEP-2577 — the
+     * 2026-07-28 replacement for the removed logging/setLevel; the key is
+     * deprecated-at-birth upstream but remains the only way modern
+     * requests opt in to notifications/message). Null when absent: the
+     * server MUST NOT emit log notifications for that request.
+     */
+    public function getCurrentRequestLogLevel(): ?string {
+        $fields = $this->currentRawMeta?->getExtraFields() ?? [];
+        $level = $fields[MetaKeys::LOG_LEVEL] ?? null;
+        return is_string($level) ? $level : null;
     }
 
     /**

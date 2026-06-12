@@ -125,7 +125,12 @@ class Server {
     
         if (isset($this->requestHandlers['resources/list'])) {
             $resourcesCapability = new ServerResourcesCapability(
-                subscribe: false, // Adjust based on your requirements
+                // Derived from handler registration like every other
+                // capability here. Under 2026-07-28 this flag also gates
+                // whether subscriptions/listen honors the
+                // resourceSubscriptions filter (the modern replacement
+                // for the removed resources/subscribe RPC).
+                subscribe: isset($this->requestHandlers['resources/subscribe']),
                 listChanged: $notificationOptions->resourcesChanged
             );
         }

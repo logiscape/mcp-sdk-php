@@ -279,7 +279,7 @@ final class ServerEraDetectionTest extends TestCase
     {
         [$transport, $session] = $this->makeSession();
 
-        $session->processIncoming($this->makeRequest('subscriptions/listen', [
+        $session->processIncoming($this->makeRequest('totally/unknown', [
             '_meta' => $this->envelope(),
         ], id: 7));
 
@@ -299,7 +299,7 @@ final class ServerEraDetectionTest extends TestCase
     {
         [$transport, $session] = $this->makeSession();
 
-        $session->processIncoming($this->makeRequest('subscriptions/listen', [
+        $session->processIncoming($this->makeRequest('totally/unknown', [
             '_meta' => [
                 MetaKeys::PROTOCOL_VERSION => '2026-07-28',
                 // clientInfo and clientCapabilities missing
@@ -320,7 +320,7 @@ final class ServerEraDetectionTest extends TestCase
     {
         [$transport, $session] = $this->makeSession();
 
-        $session->processIncoming($this->makeRequest('subscriptions/listen', [
+        $session->processIncoming($this->makeRequest('totally/unknown', [
             '_meta' => $this->envelope('v999.0.0'),
         ], id: 9));
 

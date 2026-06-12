@@ -41,15 +41,26 @@ interface AuthorizationCallbackInterface
      * This method should:
      * 1. Present the authorization URL to the user (browser, CLI prompt, etc.)
      * 2. Wait for the user to complete authorization
-     * 3. Receive the callback with the authorization code
-     * 4. Return the authorization code
+     * 3. Receive the callback with the authorization response parameters
+     * 4. Return the result
+     *
+     * Implementations SHOULD return an AuthorizationCallbackResult carrying the
+     * raw callback parameters (including the RFC 9207 iss parameter and any
+     * error parameters) WITHOUT interpreting error parameters themselves — the
+     * OAuthClient validates the iss parameter against the expected issuer
+     * before acting on either the code or the error content (SEP-2468).
+     *
+     * Returning a plain authorization code string is still supported for
+     * backward compatibility; it is treated as a callback that carried no iss
+     * parameter and no error.
      *
      * @param string $authUrl The complete authorization URL
      * @param string $state The state parameter to validate in the callback
-     * @return string The authorization code from the callback
+     * @return string|AuthorizationCallbackResult The callback result, or the
+     *         bare authorization code (legacy)
      * @throws OAuthException If authorization fails or is cancelled
      */
-    public function authorize(string $authUrl, string $state): string;
+    public function authorize(string $authUrl, string $state): string|AuthorizationCallbackResult;
 
     /**
      * Get the redirect URI for this callback handler.

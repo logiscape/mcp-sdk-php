@@ -178,7 +178,19 @@ function startServer(int $port, string $serverScript, string $phpBinary, &$serve
         2 => ['pipe', 'w'],
     ];
 
-    $serverProcess = proc_open($cmd, $descriptors, $pipes);
+    // The subscriptions/listen scenarios hold an SSE stream open on one
+    // request while a second concurrent tools/call triggers a change, and
+    // server-sse-multiple-streams makes three parallel POSTs — a
+    // single-worker built-in server would deadlock. Multi-worker mode is
+    // POSIX-only (the env var is ignored on Windows, where those checks
+    // cannot run locally anyway).
+    $env = null;
+    if (PHP_OS_FAMILY !== 'Windows') {
+        $env = getenv();
+        $env['PHP_CLI_SERVER_WORKERS'] = $env['PHP_CLI_SERVER_WORKERS'] ?? '4';
+    }
+
+    $serverProcess = proc_open($cmd, $descriptors, $pipes, null, $env);
     if (!is_resource($serverProcess)) {
         fwrite(STDERR, "ERROR: Failed to start PHP built-in server\n");
         exit(1);

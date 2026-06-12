@@ -40,15 +40,15 @@ $store = new SessionStore($logger);
 $baseUrl = rtrim(str_replace('\\', '/', dirname((string)$_SERVER['SCRIPT_NAME'] ?? '/')), '/');
 $indexUrl = preg_replace('#/api$#', '', $baseUrl) . '/index.php';
 
-// Errors from the authorization server (access_denied, invalid_scope, ...).
-if (isset($_GET['error'])) {
-    redirectWithError($indexUrl, (string)$_GET['error'], (string)($_GET['error_description'] ?? ''));
-}
-
 $code = isset($_GET['code']) ? (string)$_GET['code'] : '';
 $state = isset($_GET['state']) ? (string)$_GET['state'] : '';
-if ($code === '' || $state === '') {
-    redirectWithError($indexUrl, 'invalid_callback', 'Missing code or state in callback');
+$iss = isset($_GET['iss']) ? (string)$_GET['iss'] : null;
+
+// State is required to locate the pending flow — and the pending flow holds
+// the expected issuer needed for SEP-2468 iss validation, which must happen
+// BEFORE any error parameters from the response are acted on or displayed.
+if ($state === '') {
+    redirectWithError($indexUrl, 'invalid_callback', 'Missing state in callback');
 }
 
 // Intentionally consumed before the code exchange: on exchange failure the
@@ -66,6 +66,29 @@ if (!is_array($authReqData)) {
 
 try {
     $authRequest = AuthorizationRequest::fromArray($authReqData);
+
+    // SEP-2468 (RFC 9207): validate the authorization response issuer
+    // byte-for-byte before touching error or code parameters. A response
+    // failing iss validation must not have its error content surfaced.
+    if ($iss !== null && $iss !== $authRequest->issuer) {
+        $logger->error('OAuth callback iss mismatch', [
+            'expected' => $authRequest->issuer,
+        ]);
+        redirectWithError($indexUrl, 'iss_mismatch', 'Authorization response issuer mismatch');
+    }
+    if ($iss === null && $authRequest->issParameterSupported === true) {
+        redirectWithError($indexUrl, 'iss_missing', 'Authorization response missing required iss parameter');
+    }
+
+    // Errors from the authorization server (access_denied, invalid_scope, ...)
+    // — only surfaced after the response issuer has been validated.
+    if (isset($_GET['error'])) {
+        redirectWithError($indexUrl, (string)$_GET['error'], (string)($_GET['error_description'] ?? ''));
+    }
+
+    if ($code === '') {
+        redirectWithError($indexUrl, 'invalid_callback', 'Missing code in callback');
+    }
 
     $tokenStorage = new SessionTokenStorage(
         Bootstrap::tokenStoragePath(),
@@ -95,7 +118,7 @@ try {
     );
     $oauthClient = new OAuthClient($oauthConfig, $logger);
 
-    $oauthClient->exchangeCodeForTokens($authRequest, $code);
+    $oauthClient->exchangeCodeForTokens($authRequest, $code, $iss);
 
     // Persist ClientCredentials alongside the stored config so SessionStore
     // can feed them to future OAuthConfiguration instances for token refresh.

@@ -26,6 +26,10 @@ use Mcp\Server\ClientRequestSuspendException;
 use Mcp\Server\Elicitation\ElicitationContext;
 use Mcp\Server\Elicitation\ElicitationDeclinedException;
 use Mcp\Server\Elicitation\ElicitationSuspendException;
+use Mcp\Server\InputRequired\InputContext;
+use Mcp\Server\InputRequired\InputExchange;
+use Mcp\Server\InputRequired\InputRequiredSuspendException;
+use Mcp\Server\InputRequired\RequestStateCodec;
 use Mcp\Server\Sampling\SamplingContext;
 use Mcp\Server\Sampling\SamplingSuspendException;
 use Mcp\Server\Transport\Http\FileSessionStore;
@@ -54,6 +58,7 @@ use Mcp\Types\Role;
 use Mcp\Types\Task;
 use Mcp\Types\TaskGetResult;
 use Mcp\Types\TaskListResult;
+use Mcp\Types\InputRequiredResult;
 use Mcp\Types\TextContent;
 use Mcp\Types\TextResourceContents;
 use Mcp\Types\Meta;
@@ -61,6 +66,9 @@ use Mcp\Types\ProgressToken;
 use Mcp\Types\Tool;
 use Mcp\Types\ToolInputProperties;
 use Mcp\Types\ToolInputSchema;
+use Mcp\Shared\ErrorData;
+use Mcp\Shared\McpError;
+use Mcp\Shared\McpHeaders;
 use Mcp\Shared\ProgressContext;
 use Mcp\Shared\UriTemplate;
 use Psr\Log\LoggerInterface;
@@ -143,6 +151,25 @@ class McpServer
 
     /** @var array<string, mixed> [Added] HTTP transport options. */
     protected array $httpOptions = [];
+
+    /**
+     * Bus backing subscriptions/listen event fan-out (SEP-2575). Null
+     * when no cross-request channel is configured.
+     */
+    protected ?\Mcp\Server\Subscriptions\SubscriptionBusInterface $subscriptionBus = null;
+
+    /**
+     * SEP-2322: the multi-round-trip exchange of the modern request
+     * currently being dispatched. Set around tools/call and prompts/get
+     * dispatch; the handler-context objects read it at construction.
+     */
+    protected ?InputExchange $currentExchange = null;
+
+    /**
+     * SEP-2322 requestState signer. Lazily defaults to the per-installation
+     * file-backed secret; override via inputStateCodec().
+     */
+    protected ?RequestStateCodec $stateCodec = null;
 
     /** @var SessionStoreInterface|null [Added] Session store for HTTP transport. */
     protected ?SessionStoreInterface $sessionStore = null;
@@ -241,9 +268,16 @@ class McpServer
             $this->toolsNeedSampling[$name] = true;
         }
         $needsProgress = $this->callbackNeedsProgress($callback);
+        $needsInput = $this->callbackNeedsInputContext($callback);
 
-        $this->toolHandlers[$name] = function ($args, ?Meta $meta = null) use ($name, $callback, $outputSchema, $needsElicitation, $needsSampling, $needsProgress) {
+        $this->toolHandlers[$name] = function ($args, ?Meta $meta = null) use ($name, $tool, $callback, $outputSchema, $needsElicitation, $needsSampling, $needsProgress, $needsInput) {
             $arguments = json_decode(json_encode($args), true) ?? [];
+
+            // SEP-2243: on the modern HTTP path, arguments designated by an
+            // x-mcp-header annotation must arrive mirrored in Mcp-Param-*
+            // headers that match the body; a missing, undecodable, or
+            // mismatched header is rejected 400/-32001.
+            $this->validateMcpParamHeaders($tool, $arguments);
 
             // Check for preloaded elicitation/sampling results (HTTP resume path)
             $elicitationResults = [];
@@ -266,6 +300,7 @@ class McpServer
                     toolName: $name,
                     toolArguments: $arguments,
                     originalRequestId: 0, // Set by HttpServerSession when catching suspend
+                    exchange: $this->currentExchange,
                 );
             }
 
@@ -280,7 +315,16 @@ class McpServer
                     toolName: $name,
                     toolArguments: $arguments,
                     originalRequestId: 0,
+                    exchange: $this->currentExchange,
                 );
+            }
+
+            $inputContext = null;
+            if ($needsInput) {
+                $session = $this->server->getSession();
+                if ($session instanceof ServerSession) {
+                    $inputContext = new InputContext($session, $this->currentExchange);
+                }
             }
 
             // Create ProgressContext if callback needs it and a progressToken was provided
@@ -296,7 +340,7 @@ class McpServer
                 }
             }
 
-            $ordered = $this->matchNamedParameters($callback, $arguments, $elicitContext, $progressContext, $samplingContext);
+            $ordered = $this->matchNamedParameters($callback, $arguments, $elicitContext, $progressContext, $samplingContext, $inputContext);
 
             $result = $callback(...$ordered);
 
@@ -338,6 +382,210 @@ class McpServer
     }
 
     /**
+     * SEP-2243 Mcp-Param-* validation for the modern (2026-07-28) HTTP
+     * path. For every top-level inputSchema property carrying a valid
+     * x-mcp-header annotation whose argument is present (non-null) in the
+     * body, the request must carry a matching Mcp-Param-{name} header:
+     * missing, undecodable (broken base64 sentinel), or value-mismatched
+     * headers raise HeaderMismatch (-32001), which the session maps to
+     * HTTP 400. Null/absent arguments require the header to be omitted —
+     * the server never expects one for them.
+     *
+     * No-op when the session has no transport header map (stdio, where
+     * headers do not exist, and legacy HTTP requests).
+     *
+     * @param array<string, mixed> $arguments Decoded tool arguments
+     */
+    private function validateMcpParamHeaders(Tool $tool, array $arguments): void
+    {
+        $session = $this->server->getSession();
+        if (!$session instanceof ServerSession) {
+            return;
+        }
+        $headers = $session->getTransportHttpHeaders();
+        if ($headers === null) {
+            return;
+        }
+
+        $schema = json_decode(json_encode($tool->inputSchema), true);
+        if (!is_array($schema)) {
+            return;
+        }
+        $annotations = McpHeaders::collectAnnotations($schema);
+        if ($annotations['map'] === []) {
+            return;
+        }
+
+        foreach ($annotations['map'] as $path => $info) {
+            $headerName = McpHeaders::paramHeaderName($info['annotation']);
+            $headerValue = $headers[strtolower($headerName)] ?? null;
+
+            [$found, $value] = McpHeaders::argumentAtPath($arguments, $info['segments']);
+            if (!$found || $value === null) {
+                // Spec: a null/absent designated parameter means the client
+                // MUST omit the header and the server MUST NOT expect it.
+                continue;
+            }
+
+            if (is_float($value) && !is_finite($value)) {
+                $this->raiseHeaderMismatch(
+                    "Header mismatch: designated parameter '$path' is not a finite number"
+                );
+            }
+            if ((is_int($value) || is_float($value))
+                && ($info['type'] === 'integer' || is_int($value))
+                && !McpHeaders::isSafeIntegerValue($value)
+            ) {
+                // SEP-2243: designated integer values MUST be within
+                // ±(2^53 - 1) — and large JSON integers can decode as
+                // floats, so integral floats are held to the same bound.
+                $this->raiseHeaderMismatch(
+                    "Header mismatch: designated parameter '$path' exceeds the JavaScript-safe integer range"
+                );
+            }
+
+            if ($headerValue === null) {
+                $this->raiseHeaderMismatch(
+                    "Header mismatch: missing required $headerName header for parameter '$path'"
+                );
+            }
+
+            $decoded = McpHeaders::decodeParamValue(McpHeaders::trimOws($headerValue));
+            if ($decoded === null) {
+                $this->raiseHeaderMismatch(
+                    "Header mismatch: $headerName header value could not be base64-decoded"
+                );
+            }
+
+            if (!McpHeaders::paramValueMatches($decoded, $value, $info['type'])) {
+                $this->raiseHeaderMismatch(
+                    "Header mismatch: $headerName header value '$decoded' does not match the body value for '$path'"
+                );
+            }
+        }
+    }
+
+    /**
+     * @throws McpError Always — the -32001 HeaderMismatch protocol error.
+     */
+    private function raiseHeaderMismatch(string $message): never
+    {
+        throw new McpError(new ErrorData(
+            code: McpError::HEADER_MISMATCH,
+            message: $message
+        ));
+    }
+
+    /**
+     * [Added] Override the SEP-2322 requestState signer (secret + TTL).
+     * Defaults to a per-installation file-backed secret so multi-process
+     * deployments verify each other's state.
+     *
+     * @return self For method chaining
+     */
+    public function inputStateCodec(RequestStateCodec $codec): self
+    {
+        $this->stateCodec = $codec;
+        return $this;
+    }
+
+    protected function getStateCodec(): RequestStateCodec
+    {
+        return $this->stateCodec ??= RequestStateCodec::withFileSecret();
+    }
+
+    /**
+     * Build the SEP-2322 exchange for a modern tools/call or prompts/get
+     * dispatch: verify the echoed requestState (integrity + expiry +
+     * method/name binding — it is attacker-controlled input) and merge the
+     * results it carries with this round's fresh inputResponses. Null on
+     * legacy revisions, where the mechanism does not exist.
+     *
+     * @param mixed $params The typed request params
+     * @throws McpError -32602 when requestState fails verification
+     */
+    protected function buildInputExchange(mixed $params, string $method, string $name): ?InputExchange
+    {
+        if (!$this->server->clientSupportsFeature('stateless_lifecycle')) {
+            return null;
+        }
+
+        $state = is_object($params) && isset($params->requestState) && is_string($params->requestState)
+            ? $params->requestState
+            : null;
+        $carried = [];
+        if ($state !== null && $state !== '') {
+            $payload = $this->getStateCodec()->decode($state);
+            if ($payload === null
+                || ($payload['m'] ?? null) !== $method
+                || ($payload['n'] ?? null) !== $name
+                // SEP-2322: requestState is bound to the authenticated
+                // principal it was issued for — another user replaying a
+                // captured state fails verification exactly like
+                // tampering (no detail leaked about which check failed).
+                || ($payload['p'] ?? null) !== $this->currentPrincipal()
+            ) {
+                throw new McpError(new ErrorData(
+                    code: -32602,
+                    message: 'requestState integrity check failed'
+                ));
+            }
+            if (is_array($payload['res'] ?? null)) {
+                $carried = $payload['res'];
+            }
+        }
+
+        $fresh = [];
+        if (is_object($params) && isset($params->inputResponses)) {
+            $responses = $params->inputResponses;
+            if (is_object($responses)) {
+                $responses = json_decode((string) json_encode($responses), true);
+            }
+            if (is_array($responses)) {
+                // Spec: ignore (don't fail on) unexpected/malformed entries;
+                // a non-array inputResponses value counts as absent and the
+                // round is simply re-requested.
+                $fresh = $responses;
+            }
+        }
+
+        return new InputExchange(array_merge($carried, $fresh));
+    }
+
+    /**
+     * Convert an InputRequiredSuspendException into the wire
+     * InputRequiredResult: the queued input requests plus a signed
+     * requestState carrying every already-resolved result into the next
+     * round (the handler re-executes from scratch on the retry).
+     */
+    protected function buildInputRequiredResult(InputRequiredSuspendException $e, string $method, string $name): InputRequiredResult
+    {
+        $state = $this->getStateCodec()->encode([
+            'm' => $method,
+            'n' => $name,
+            'p' => $this->currentPrincipal(),
+            'res' => $e->carryResults,
+        ]);
+        return new InputRequiredResult(
+            inputRequests: $e->inputRequests,
+            requestState: $state,
+        );
+    }
+
+    /**
+     * The authenticated principal of the request being dispatched (token
+     * `sub` claim forwarded by the HTTP runner), or null when the request
+     * is anonymous / on stdio.
+     */
+    private function currentPrincipal(): ?string
+    {
+        $session = $this->server->getSession();
+        return $session instanceof ServerSession
+            ? $session->getAuthenticatedPrincipal()
+            : null;
+    }
+
+    /**
      * Define a new prompt.
      *
      * The arguments are automatically generated from the callback's parameters
@@ -372,9 +620,40 @@ class McpServer
         $this->prompts[] = $prompt;
 
         // [Modified from pronskiy/mcp] Use named parameter matching.
-        $this->promptHandlers[$name] = function ($args) use ($callback) {
+        $needsElicitation = $this->callbackNeedsElicitation($callback);
+        $needsInput = $this->callbackNeedsInputContext($callback);
+        $this->promptHandlers[$name] = function ($args) use ($name, $callback, $needsElicitation, $needsInput) {
             $arguments = json_decode(json_encode($args), true) ?? [];
-            $ordered = $this->matchNamedParameters($callback, $arguments);
+
+            // SEP-2322: prompts/get callbacks may gather client input on
+            // the modern path (the contexts suspend into an
+            // InputRequiredResult). The legacy suspend/resume pattern is
+            // tools-only, so on legacy revisions an elicitation-needing
+            // prompt degrades the same way an unsupported client does.
+            $elicitContext = null;
+            $inputContext = null;
+            $session = $this->server->getSession();
+            if ($needsElicitation && $session instanceof ServerSession) {
+                // httpMode stays false here on purpose: the legacy HTTP
+                // suspend/resume machinery is tools-only (its pending
+                // records re-invoke tools/call on resume), so a legacy
+                // HTTP prompt that elicits must fail loudly (the session's
+                // BadMethodCallException) rather than suspend into state
+                // it can never resume from. Modern requests use the
+                // SEP-2322 exchange; legacy stdio blocks synchronously.
+                $elicitContext = new ElicitationContext(
+                    session: $session,
+                    httpMode: false,
+                    toolName: $name,
+                    toolArguments: $arguments,
+                    exchange: $this->currentExchange,
+                );
+            }
+            if ($needsInput && $session instanceof ServerSession) {
+                $inputContext = new InputContext($session, $this->currentExchange);
+            }
+
+            $ordered = $this->matchNamedParameters($callback, $arguments, $elicitContext, null, null, $inputContext);
 
             $result = $callback(...$ordered);
 
@@ -670,6 +949,78 @@ class McpServer
     public function sessionStore(SessionStoreInterface $store): self
     {
         $this->sessionStore = $store;
+        return $this;
+    }
+
+    /**
+     * [Added] Set the subscription bus backing `subscriptions/listen`
+     * (SEP-2575, revision 2026-07-28).
+     *
+     * The bus carries change events between the request that causes a
+     * change and the request holding a listen stream open — on typical
+     * PHP hosting those are different processes, so use
+     * {@see \Mcp\Server\Subscriptions\FileSubscriptionBus} there. The
+     * publish helpers below write to this bus and, on stdio, also deliver
+     * to in-session subscriptions.
+     *
+     * @return self For method chaining
+     */
+    public function subscriptionBus(\Mcp\Server\Subscriptions\SubscriptionBusInterface $bus): self
+    {
+        $this->subscriptionBus = $bus;
+        $this->httpOptions['subscription_bus'] = $bus;
+        // Note: this deliberately does NOT register legacy
+        // resources/subscribe handlers or flip the legacy subscribe
+        // capability — McpServer has no legacy update-delivery channel,
+        // and advertising one would let pre-2026 clients subscribe into
+        // silence. The modern resourceSubscriptions filter is honored
+        // independently: subscriptions/listen gates it on actual
+        // deliverability (this bus on HTTP, the in-session channel on
+        // stdio), and the acknowledgement frame is the spec's signal of
+        // what the server agreed to honor.
+        return $this;
+    }
+
+    /**
+     * [Added] Announce that the tool list changed: notifies active
+     * subscriptions/listen channels (via the configured bus and, on
+     * stdio, in-session subscriptions).
+     */
+    public function publishToolsListChanged(): self
+    {
+        return $this->publishSubscriptionEvent('notifications/tools/list_changed');
+    }
+
+    /** [Added] Announce that the prompt list changed. */
+    public function publishPromptsListChanged(): self
+    {
+        return $this->publishSubscriptionEvent('notifications/prompts/list_changed');
+    }
+
+    /** [Added] Announce that the resource list changed. */
+    public function publishResourcesListChanged(): self
+    {
+        return $this->publishSubscriptionEvent('notifications/resources/list_changed');
+    }
+
+    /** [Added] Announce that a specific resource's contents changed. */
+    public function publishResourceUpdated(string $uri): self
+    {
+        return $this->publishSubscriptionEvent('notifications/resources/updated', ['uri' => $uri]);
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     */
+    private function publishSubscriptionEvent(string $method, array $params = []): self
+    {
+        $this->subscriptionBus?->publish($method, $params);
+
+        $session = $this->server->getSession();
+        if ($session instanceof ServerSession && !($session instanceof HttpServerSession)) {
+            // stdio: subscriptions live in-session; forward directly.
+            $session->deliverSubscriptionNotification($method, $params);
+        }
         return $this;
     }
 
@@ -973,8 +1324,17 @@ class McpServer
 
             $handler = $this->toolHandlers[$name];
 
+            // SEP-2322 (2026-07-28): build the multi-round-trip exchange
+            // from the verified requestState plus this round's
+            // inputResponses. Tampered/expired state is rejected here.
+            $this->currentExchange = $this->buildInputExchange($params, 'tools/call', (string) $name);
+
             try {
                 $result = $handler($arguments, $meta);
+            } catch (InputRequiredSuspendException $e) {
+                // The handler needs client-side input: answer with the
+                // SEP-2322 InputRequiredResult instead of a normal result.
+                return $this->buildInputRequiredResult($e, 'tools/call', (string) $name);
             } catch (ClientRequestSuspendException $e) {
                 throw $e; // Must propagate to HttpServerSession for suspend/resume
             } catch (\Mcp\Shared\McpError $e) {
@@ -993,6 +1353,8 @@ class McpServer
                     content: [new TextContent(text: 'Error: ' . $e->getMessage())],
                     isError: true
                 );
+            } finally {
+                $this->currentExchange = null;
             }
 
             return $result;
@@ -1011,7 +1373,17 @@ class McpServer
             }
 
             $handler = $this->promptHandlers[$name];
-            return $handler($arguments);
+
+            // SEP-2322: prompts/get is one of the three methods that may
+            // answer InputRequiredResult on the modern path.
+            $this->currentExchange = $this->buildInputExchange($params, 'prompts/get', (string) $name);
+            try {
+                return $handler($arguments);
+            } catch (InputRequiredSuspendException $e) {
+                return $this->buildInputRequiredResult($e, 'prompts/get', (string) $name);
+            } finally {
+                $this->currentExchange = null;
+            }
         });
 
         $this->server->registerHandler('resources/list', function () {
@@ -1265,7 +1637,7 @@ class McpServer
      * @param SamplingContext|null $samplingContext Optional context to inject
      * @return array<int, mixed> Ordered arguments matching the callback's parameter list
      */
-    protected function matchNamedParameters(callable $callback, array $arguments, ?ElicitationContext $elicitContext = null, ?ProgressContext $progressContext = null, ?SamplingContext $samplingContext = null): array
+    protected function matchNamedParameters(callable $callback, array $arguments, ?ElicitationContext $elicitContext = null, ?ProgressContext $progressContext = null, ?SamplingContext $samplingContext = null, ?InputContext $inputContext = null): array
     {
         $reflection = new ReflectionFunction(\Closure::fromCallable($callback));
         $parameters = $reflection->getParameters();
@@ -1285,6 +1657,12 @@ class McpServer
             // Inject SamplingContext
             if ($typeName === SamplingContext::class) {
                 $ordered[] = $samplingContext;
+                continue;
+            }
+
+            // Inject InputContext (SEP-2322 batch input gathering)
+            if ($typeName === InputContext::class) {
+                $ordered[] = $inputContext;
                 continue;
             }
 
@@ -1321,6 +1699,22 @@ class McpServer
         foreach ($reflection->getParameters() as $param) {
             $type = $param->getType();
             if ($type instanceof ReflectionNamedType && $type->getName() === ElicitationContext::class) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Check if a callback has an InputContext parameter (SEP-2322 batch
+     * input gathering).
+     */
+    protected function callbackNeedsInputContext(callable $callback): bool
+    {
+        $reflection = new ReflectionFunction(\Closure::fromCallable($callback));
+        foreach ($reflection->getParameters() as $param) {
+            $type = $param->getType();
+            if ($type instanceof ReflectionNamedType && $type->getName() === InputContext::class) {
                 return true;
             }
         }

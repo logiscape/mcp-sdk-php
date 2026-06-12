@@ -67,6 +67,15 @@ class OAuthConfiguration
      *        endpoints (/authorize, /token, /register) at the server root. Default false. MCP
      *        2025-06-18+ requires RFC 9728 PRM, so this flag MUST remain false for 2025-06-18+
      *        servers.
+     * @param bool $useClientCredentialsGrant Use the OAuth client_credentials grant instead of
+     *        the interactive authorization code flow. Requires pre-registered clientCredentials
+     *        with either a client_secret (client_secret_basic/client_secret_post) or a private
+     *        key (private_key_jwt). No browser, PKCE, or redirect is involved.
+     * @param CrossAppAccessConfiguration|null $crossAppAccess SEP-990 cross-app access
+     *        configuration. When set, tokens are obtained via RFC 8693 token exchange at the
+     *        IdP followed by an RFC 7523 jwt-bearer grant at the authorization server, instead
+     *        of the interactive authorization code flow. Requires pre-registered
+     *        clientCredentials for the authorization server.
      */
     public function __construct(
         private ?ClientCredentials $clientCredentials = null,
@@ -83,6 +92,8 @@ class OAuthConfiguration
         private bool $verifyTls = true,
         private ?string $authorizationServerUrl = null,
         private bool $enableLegacyOAuthFallback = false,
+        private bool $useClientCredentialsGrant = false,
+        private ?CrossAppAccessConfiguration $crossAppAccess = null,
     ) {
         if ($tokenStorage === null) {
             // Warn about MemoryTokenStorage in web contexts
@@ -235,5 +246,21 @@ class OAuthConfiguration
     public function isLegacyOAuthFallbackEnabled(): bool
     {
         return $this->enableLegacyOAuthFallback;
+    }
+
+    /**
+     * Check if the client_credentials grant should be used.
+     */
+    public function isClientCredentialsGrantEnabled(): bool
+    {
+        return $this->useClientCredentialsGrant;
+    }
+
+    /**
+     * Get the SEP-990 cross-app access configuration, if any.
+     */
+    public function getCrossAppAccess(): ?CrossAppAccessConfiguration
+    {
+        return $this->crossAppAccess;
     }
 }

@@ -61,6 +61,10 @@ class Config
         'sse_event_log_capacity' => 64,   // Max events retained per session for resumable replay
         'sse_standalone_get_idle_ms' => 0,// How long an idle standalone-GET SSE stream stays open (0 = close immediately)
         'sse_mode' => 'auto',             // SSE emission mode: 'auto' | 'streaming' | 'buffered'
+        'subscription_bus' => null,       // SubscriptionBusInterface for subscriptions/listen event fan-out (null = no cross-request events)
+        'listen_max_ms' => 30000,         // Max lifetime of a subscriptions/listen stream before the server closes it
+        'listen_poll_ms' => 50,           // Bus poll interval inside the listen loop
+        'listen_keepalive_ms' => 250,     // SSE comment keep-alive interval (also surfaces client aborts)
     ];
     
     /**

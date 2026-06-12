@@ -14,9 +14,6 @@
  *   - Never swallow errors — if a scenario fails, exit 1.
  *   - Use the SDK's public Client/ClientSession API.
  *   - Unknown/unimplemented scenarios exit 1 with a clear message.
- *   - Scenarios that require unimplemented grant types (client_credentials,
- *     jwt-bearer) fail with a clear message naming the missing feature,
- *     rather than falling through to the generic authorization-code flow.
  *
  * The conformance runner spawns this script with:
  *   - MCP_CONFORMANCE_SCENARIO env var (scenario name)
@@ -30,10 +27,13 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use Mcp\Client\Client;
 use Mcp\Client\ClientSession;
+use Mcp\Client\Auth\CrossAppAccessConfiguration;
 use Mcp\Client\Auth\OAuthConfiguration;
 use Mcp\Client\Auth\Callback\HeadlessCallbackHandler;
 use Mcp\Client\Auth\Registration\ClientCredentials;
 use Mcp\Client\Auth\Token\MemoryTokenStorage;
+use Mcp\Shared\McpError;
+use Mcp\Shared\Version;
 use Mcp\Types\ElicitationCreateRequest;
 use Mcp\Types\ElicitationCreateResult;
 
@@ -106,6 +106,33 @@ function connectToServerNoSse(string $serverUrl): ClientSession
 {
     $client = new Client();
     return $client->connect($serverUrl, [], ['autoSse' => false]);
+}
+
+/**
+ * The modern wire version for forced-modern (2026-07-28) scenarios:
+ * MCP_CONFORMANCE_PROTOCOL_VERSION when the runner provides it, otherwise
+ * the draft-track identifier the 0.2.0-alpha conformance tool speaks.
+ */
+function conformanceModernWireVersion(): string
+{
+    $env = getenv('MCP_CONFORMANCE_PROTOCOL_VERSION');
+    return ($env !== false && $env !== '') ? $env : Version::DRAFT_MODERN_PROTOCOL_VERSION;
+}
+
+/**
+ * Connect in forced-modern mode (protocolMode 'modern'): no server/discover
+ * probe, no initialize — the draft-suite mocks answer -32601 to both, and
+ * the stateless 2026-07-28 model needs no pre-flight. The client simply
+ * starts sending enveloped requests with the given wire version.
+ */
+function connectToServerModern(string $serverUrl): ClientSession
+{
+    $client = new Client();
+    return $client->connect($serverUrl, [], [
+        'autoSse' => false,
+        'protocolMode' => 'modern',
+        'protocolVersion' => conformanceModernWireVersion(),
+    ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +383,204 @@ function scenarioJsonSchemaRefNoDeref(string $serverUrl): void
 }
 
 // ---------------------------------------------------------------------------
+// Scenario: request-metadata (SEP-2575)
+//
+// The mock rejects the FIRST request with -32004 UnsupportedProtocolVersion
+// carrying supported:["DRAFT-2026-v1"]. Connect with protocolMode 'auto':
+// negotiate() retries the probe with the advertised version and enters
+// modern mode speaking it; every subsequent request carries the matching
+// envelope and MCP-Protocol-Version header.
+// ---------------------------------------------------------------------------
+
+function scenarioRequestMetadata(string $serverUrl): void
+{
+    $client = new Client();
+    $session = $client->connect($serverUrl, [], ['autoSse' => false]);
+
+    fwrite(STDERR, "Negotiated wire version: " . ($session->getModernWireVersion() ?? 'legacy') . "\n");
+
+    $toolsResult = $session->listTools();
+    fwrite(STDERR, "Listed " . count($toolsResult->tools ?? []) . " tools\n");
+
+    $session->callTool('test_headers', []);
+    fwrite(STDERR, "Called test_headers\n");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: http-standard-headers (SEP-2243)
+//
+// Forced modern. Exercises Mcp-Method on every request and Mcp-Name on the
+// name-bearing methods: tools/call (params.name, including a hyphenated
+// name), resources/read (params.uri VERBATIM — not re-encoded), and
+// prompts/get. The mock measures headers; my-hyphenated-tool may not exist
+// server-side, so a JSON-RPC error from it is tolerated.
+// ---------------------------------------------------------------------------
+
+function scenarioHttpStandardHeaders(string $serverUrl): void
+{
+    $session = connectToServerModern($serverUrl);
+
+    $session->listTools();
+    fwrite(STDERR, "tools/list ok\n");
+
+    $session->callTool('test_headers', []);
+    fwrite(STDERR, "tools/call test_headers ok\n");
+
+    try {
+        $session->callTool('my-hyphenated-tool', []);
+        fwrite(STDERR, "tools/call my-hyphenated-tool ok\n");
+    } catch (McpError $e) {
+        // Headers are what is measured; a server-side error is acceptable.
+        fwrite(STDERR, "tools/call my-hyphenated-tool errored (tolerated): {$e->getMessage()}\n");
+    }
+
+    $session->listResources();
+    fwrite(STDERR, "resources/list ok\n");
+
+    $session->readResource('file:///path/to/file%20name.txt');
+    fwrite(STDERR, "resources/read ok\n");
+
+    $session->listPrompts();
+    fwrite(STDERR, "prompts/list ok\n");
+
+    $session->getPrompt('test_prompt');
+    fwrite(STDERR, "prompts/get test_prompt ok\n");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: http-custom-headers (SEP-2243)
+//
+// Forced modern. tools/list caches each tool's x-mcp-header annotation map;
+// each subsequent tools/call mirrors the annotated arguments as
+// Mcp-Param-{name} headers (numbers/booleans stringified, empty string as a
+// present empty header, whitespace/non-ASCII/control values base64-wrapped,
+// null arguments omitted, unannotated arguments never mirrored). The
+// context supplies the exact tool calls; a documented fallback covers a
+// context-less run.
+// ---------------------------------------------------------------------------
+
+/**
+ * @param array<string, mixed>|null $context
+ */
+function scenarioHttpCustomHeaders(string $serverUrl, ?array $context): void
+{
+    $session = connectToServerModern($serverUrl);
+
+    // Cache annotation maps before calling.
+    $toolsResult = $session->listTools();
+    fwrite(STDERR, "Listed " . count($toolsResult->tools ?? []) . " tools\n");
+
+    $toolCalls = $context['toolCalls'] ?? null;
+    if (!is_array($toolCalls) || $toolCalls === []) {
+        $toolCalls = [
+            [
+                'name' => 'test_custom_headers',
+                'arguments' => [
+                    'region' => 'us-east1',
+                    'priority' => 42,
+                    'verbose' => false,
+                    'debug' => true,
+                    'empty_val' => '',
+                    'float_val' => 3.14159,
+                    'non_ascii_val' => 'Hello, 世界',
+                    'whitespace_val' => ' padded ',
+                    'control_char_val' => "line1\nline2",
+                    'crlf_val' => "line1\r\nline2",
+                    'tab_val' => "\tindented",
+                    'leading_space_val' => ' leading',
+                    'trailing_space_val' => 'trailing ',
+                    'internal_space_val' => 'us west 1',
+                    'method_val' => 'custom-method',
+                    'query' => 'SELECT 1',
+                ],
+            ],
+            [
+                'name' => 'test_custom_headers_null',
+                'arguments' => [
+                    'region' => 'us-east1',
+                    'priority' => 1,
+                    'verbose' => null,
+                    'query' => 'SELECT 1',
+                ],
+            ],
+        ];
+    }
+
+    foreach ($toolCalls as $i => $call) {
+        if (!is_array($call) || !isset($call['name']) || !is_string($call['name'])) {
+            throw new \RuntimeException("Malformed toolCalls[{$i}] in context");
+        }
+        $arguments = $call['arguments'] ?? [];
+        if (!is_array($arguments)) {
+            throw new \RuntimeException("Malformed toolCalls[{$i}].arguments in context");
+        }
+        $session->callTool($call['name'], $arguments);
+        fwrite(STDERR, "Called {$call['name']}\n");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: http-invalid-tool-headers (SEP-2243)
+//
+// Forced modern. The mock advertises tools whose x-mcp-header annotations
+// violate the spec (empty/typed-object/duplicate/charset-invalid names…).
+// The SDK must list tools, exclude every invalid tool (never calling one),
+// and still call the valid sibling.
+// ---------------------------------------------------------------------------
+
+function scenarioHttpInvalidToolHeaders(string $serverUrl): void
+{
+    $session = connectToServerModern($serverUrl);
+
+    $toolsResult = $session->listTools();
+    $names = array_map(static fn($t) => $t->name, $toolsResult->tools ?? []);
+    fwrite(STDERR, "Tools after annotation filtering: " . implode(', ', $names) . "\n");
+
+    $session->callTool('valid_tool', ['region' => 'us-west1']);
+    fwrite(STDERR, "Called valid_tool\n");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: sep-2322-client-request-state (SEP-2322)
+//
+// Forced modern (the mock answers -32601 to initialize AND server/discover).
+// test_mrtr_echo_state answers input_required with an elicitation/create
+// inputRequest plus a requestState the retry must echo byte-identically
+// under a new JSON-RPC id; test_mrtr_unrelated (called between MRTR tools)
+// must carry neither inputResponses nor requestState; test_mrtr_no_state's
+// retry must omit the requestState key entirely; test_mrtr_no_result_type
+// returns a result WITHOUT resultType and must not be retried.
+// ---------------------------------------------------------------------------
+
+function scenarioSep2322ClientRequestState(string $serverUrl): void
+{
+    $client = new Client();
+    $client->onElicit(
+        static function (ElicitationCreateRequest $request): ElicitationCreateResult {
+            fwrite(STDERR, "Servicing elicitation/create: {$request->message}\n");
+            return new ElicitationCreateResult(action: 'accept', content: ['confirmed' => true]);
+        }
+    );
+    $session = $client->connect($serverUrl, [], [
+        'autoSse' => false,
+        'protocolMode' => 'modern',
+        'protocolVersion' => conformanceModernWireVersion(),
+    ]);
+
+    foreach (
+        [
+            'test_mrtr_echo_state',
+            'test_mrtr_unrelated',
+            'test_mrtr_no_state',
+            'test_mrtr_no_result_type',
+        ] as $tool
+    ) {
+        $session->callTool($tool, []);
+        fwrite(STDERR, "Called {$tool}\n");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Scenario: auth/* - OAuth authorization-code scenarios
 //
 // Matches reference runAuthClient: connect with OAuth, listTools, then
@@ -398,6 +623,137 @@ function scenarioAuth(string $scenario, string $serverUrl, ?array $context): voi
 }
 
 // ---------------------------------------------------------------------------
+// Helper: verify authenticated access (listTools + test-tool) on a session
+// ---------------------------------------------------------------------------
+
+function verifyAuthenticatedAccess(ClientSession $session): void
+{
+    $initResult = $session->getInitializeResult();
+    fwrite(STDERR, "Protocol version: " . ($initResult->protocolVersion ?? 'unknown') . "\n");
+    fwrite(STDERR, "Server name: " . ($initResult->serverInfo->name ?? 'unknown') . "\n");
+
+    $toolsResult = $session->listTools();
+    fwrite(STDERR, "Listed " . count($toolsResult->tools ?? []) . " tools after auth\n");
+
+    $session->callTool('test-tool', []);
+    fwrite(STDERR, "Called test-tool successfully\n");
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: auth/client-credentials-jwt and auth/client-credentials-basic
+//
+// Drives the SDK's client_credentials grant (no browser, PKCE, or redirect).
+// The context supplies pre-registered credentials:
+//   - jwt:   {client_id, private_key_pem, signing_algorithm} -> private_key_jwt
+//            client authentication via an RFC 7523 JWT client assertion
+//   - basic: {client_id, client_secret} -> client_secret_basic authentication
+// ---------------------------------------------------------------------------
+
+/**
+ * @param array<string, mixed>|null $context
+ */
+function scenarioClientCredentials(string $scenario, string $serverUrl, ?array $context): void
+{
+    fwrite(STDERR, "Running client_credentials scenario: {$scenario}\n");
+
+    if ($context === null || !isset($context['client_id'])) {
+        throw new \RuntimeException(
+            "Scenario '{$scenario}' requires a context with client_id"
+        );
+    }
+
+    if (isset($context['private_key_pem'])) {
+        $credentials = new ClientCredentials(
+            clientId: $context['client_id'],
+            clientSecret: null,
+            tokenEndpointAuthMethod: ClientCredentials::AUTH_METHOD_PRIVATE_KEY_JWT,
+            privateKeyPem: $context['private_key_pem'],
+            signingAlgorithm: $context['signing_algorithm'] ?? 'ES256'
+        );
+    } else {
+        if (!isset($context['client_secret'])) {
+            throw new \RuntimeException(
+                "Scenario '{$scenario}' requires client_secret or private_key_pem in context"
+            );
+        }
+        $credentials = new ClientCredentials(
+            clientId: $context['client_id'],
+            clientSecret: $context['client_secret'],
+            tokenEndpointAuthMethod: ClientCredentials::AUTH_METHOD_CLIENT_SECRET_BASIC
+        );
+    }
+
+    $oauthConfig = new OAuthConfiguration(
+        clientCredentials: $credentials,
+        tokenStorage: new MemoryTokenStorage(),
+        verifyTls: false,
+        useClientCredentialsGrant: true,
+    );
+
+    $client = new Client();
+    $session = $client->connect($serverUrl, [], [
+        'oauth' => $oauthConfig,
+        'verifyTls' => false,
+        'autoSse' => false,
+    ]);
+
+    verifyAuthenticatedAccess($session);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: auth/cross-app-access-complete-flow (SEP-990)
+//
+// Drives the SDK's cross-app access flow: RFC 8693 token exchange at the IdP
+// (ID token -> ID-JAG audienced at the AS), then an RFC 7523 jwt-bearer grant
+// at the AS token endpoint with client_secret_basic authentication.
+// Context: {client_id, client_secret, idp_client_id, idp_id_token,
+//           idp_issuer, idp_token_endpoint}
+// ---------------------------------------------------------------------------
+
+/**
+ * @param array<string, mixed>|null $context
+ */
+function scenarioCrossAppAccess(string $scenario, string $serverUrl, ?array $context): void
+{
+    fwrite(STDERR, "Running cross-app access scenario: {$scenario}\n");
+
+    foreach (['client_id', 'client_secret', 'idp_client_id', 'idp_id_token', 'idp_token_endpoint'] as $key) {
+        if (!isset($context[$key])) {
+            throw new \RuntimeException("Scenario '{$scenario}' requires context key '{$key}'");
+        }
+    }
+
+    $credentials = new ClientCredentials(
+        clientId: $context['client_id'],
+        clientSecret: $context['client_secret'],
+        tokenEndpointAuthMethod: ClientCredentials::AUTH_METHOD_CLIENT_SECRET_BASIC
+    );
+
+    $crossAppAccess = new CrossAppAccessConfiguration(
+        idpTokenEndpoint: $context['idp_token_endpoint'],
+        idpIdToken: $context['idp_id_token'],
+        idpClientId: $context['idp_client_id'],
+        idpIssuer: $context['idp_issuer'] ?? null,
+    );
+
+    $oauthConfig = new OAuthConfiguration(
+        clientCredentials: $credentials,
+        tokenStorage: new MemoryTokenStorage(),
+        verifyTls: false,
+        crossAppAccess: $crossAppAccess,
+    );
+
+    $client = new Client();
+    $session = $client->connect($serverUrl, [], [
+        'oauth' => $oauthConfig,
+        'verifyTls' => false,
+        'autoSse' => false,
+    ]);
+
+    verifyAuthenticatedAccess($session);
+}
+
+// ---------------------------------------------------------------------------
 // Scenario dispatch
 // ---------------------------------------------------------------------------
 
@@ -410,30 +766,20 @@ try {
         'sse-retry' => scenarioSseRetry($serverUrl),
         'json-schema-ref-no-deref' => scenarioJsonSchemaRefNoDeref($serverUrl),
 
-        // --- Client credentials grant type (not implemented) ---
-        // These scenarios require grant_type=client_credentials which the SDK
-        // does not support. They need dedicated handlers, not the generic
-        // authorization-code flow, so they fail here with a clear message.
-        'auth/client-credentials-jwt' => throw new \RuntimeException(
-            "Scenario 'auth/client-credentials-jwt' requires the client_credentials "
-            . "grant type with private_key_jwt authentication (JWT client assertion), "
-            . "which is not yet implemented in the PHP client SDK"
-        ),
-        'auth/client-credentials-basic' => throw new \RuntimeException(
-            "Scenario 'auth/client-credentials-basic' requires the client_credentials "
-            . "grant type with client_secret_basic authentication, "
-            . "which is not yet implemented in the PHP client SDK"
-        ),
+        // --- 2026-07-28 draft-track transport scenarios (WS3 client side) ---
+        'request-metadata' => scenarioRequestMetadata($serverUrl),
+        'http-standard-headers' => scenarioHttpStandardHeaders($serverUrl),
+        'http-custom-headers' => scenarioHttpCustomHeaders($serverUrl, $context),
+        'http-invalid-tool-headers' => scenarioHttpInvalidToolHeaders($serverUrl),
+        'sep-2322-client-request-state' => scenarioSep2322ClientRequestState($serverUrl),
 
-        // --- Cross-app access (not implemented) ---
-        // This scenario requires token exchange (RFC 8693) at an IDP followed
-        // by a jwt-bearer grant (RFC 7523) at the AS. It needs a dedicated
-        // handler that performs these steps manually.
-        'auth/cross-app-access-complete-flow' => throw new \RuntimeException(
-            "Scenario 'auth/cross-app-access-complete-flow' requires token exchange "
-            . "(RFC 8693) and jwt-bearer grant (RFC 7523), "
-            . "which are not yet implemented in the PHP client SDK"
-        ),
+        // --- Client credentials grant (no browser, PKCE, or redirect) ---
+        'auth/client-credentials-jwt',
+        'auth/client-credentials-basic' => scenarioClientCredentials($scenario, $serverUrl, $context),
+
+        // --- Cross-app access (SEP-990): RFC 8693 token exchange at the IdP
+        //     followed by an RFC 7523 jwt-bearer grant at the AS ---
+        'auth/cross-app-access-complete-flow' => scenarioCrossAppAccess($scenario, $serverUrl, $context),
 
         default => str_starts_with($scenario, 'auth/')
             ? scenarioAuth($scenario, $serverUrl, $context)

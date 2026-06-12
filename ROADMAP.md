@@ -90,16 +90,12 @@ human-initiated.
 
 ### Near-term (next release cycle)
 
-- **Close optional conformance gaps, where we can do so spec-faithfully.**
-  The three expected failures in
+- **Close optional conformance gaps, where we can do so spec-faithfully** —
+  **done with v2 WS3**: the `client_credentials` grant (JWT assertions and
+  HTTP Basic client authentication) and the full cross-app-access flow
+  shipped with the WS3 authorization hardening, so
   [`conformance/conformance-baseline.yml`](conformance/conformance-baseline.yml)
-  are:
-  - `auth/client-credentials-jwt` — add `client_credentials` grant with JWT
-    assertions (`client_assertion`, `client_assertion_type`).
-  - `auth/client-credentials-basic` — add `client_credentials` grant with
-    HTTP Basic client authentication.
-  - `auth/cross-app-access-complete-flow` — the RFC 8707 `resource` parameter
-    is already wired; the remaining two of ten assertions need investigation.
+  is now empty and the stable suite passes 100% on both tracks.
 - **Continue tracking the spec.** Any mid-cycle SEP that reaches "Accepted"
   status is a candidate for inclusion in a `v2` pre-release (and for backport
   to `1.x` where low-risk).

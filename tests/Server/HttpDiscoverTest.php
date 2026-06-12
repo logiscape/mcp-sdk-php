@@ -80,12 +80,35 @@ final class HttpDiscoverTest extends TestCase
         ];
     }
 
+    /**
+     * Build a POST request carrying the SEP-2243 request-metadata headers a
+     * conforming modern client sends: MCP-Protocol-Version (mirroring the
+     * envelope's protocolVersion when present) and Mcp-Method (mirroring
+     * the body method). Tests that exercise header violations set/clear
+     * headers explicitly after calling this.
+     */
     private function postRequest(string $body, ?string $sessionId = null): HttpMessage
     {
         $request = new HttpMessage($body);
         $request->setMethod('POST');
         $request->setHeader('Content-Type', 'application/json');
         $request->setHeader('Accept', 'application/json, text/event-stream');
+
+        $decoded = json_decode($body, true);
+        if (is_array($decoded)) {
+            $metaVersion = $decoded['params']['_meta'][MetaKeys::PROTOCOL_VERSION] ?? null;
+            $isModernBody = is_string($metaVersion) || ($decoded['method'] ?? null) === 'server/discover';
+            if ($isModernBody) {
+                $request->setHeader(
+                    'MCP-Protocol-Version',
+                    is_string($metaVersion) ? $metaVersion : '2026-07-28'
+                );
+                if (isset($decoded['method']) && is_string($decoded['method'])) {
+                    $request->setHeader('Mcp-Method', $decoded['method']);
+                }
+            }
+        }
+
         if ($sessionId !== null) {
             $request->setHeader('Mcp-Session-Id', $sessionId);
         }
@@ -190,8 +213,7 @@ final class HttpDiscoverTest extends TestCase
         $store = new RecordingSessionStore();
         $runner = $this->makeRunner($store);
 
-        $request = new HttpMessage($this->discoverBody($this->validEnvelope()));
-        $request->setMethod('POST');
+        $request = $this->postRequest($this->discoverBody($this->validEnvelope()));
         $request->setHeader('Content-Type', 'text/plain');
         $request->setHeader('Accept', 'application/json');
 

@@ -147,6 +147,61 @@ class HttpServerSession extends ServerSession
         );
     }
 
+    /**
+     * Serve `subscriptions/listen` on the HTTP path (SEP-2575).
+     *
+     * The listen "response" is a long-lived SSE stream only the runner —
+     * which owns the SAPI output adapter — can produce: this override
+     * validates the request and filter exactly like the stdio path, then
+     * throws SubscriptionListenException up through message processing
+     * for HttpServerRunner to catch and stream. Servers without SSE
+     * support answer -32601 (HTTP 404), the spec's signal that
+     * subscriptions/listen is not supported here.
+     */
+    protected function handleSubscriptionsListen(RequestResponder $responder, ?RequestParams $params): void
+    {
+        $filter = $this->parseListenFilter($params);
+        if ($filter === null) {
+            $responder->sendResponse(new \Mcp\Shared\ErrorData(
+                code: -32602,
+                message: 'Invalid params: subscriptions/listen requires a notifications filter object'
+            ));
+            return;
+        }
+
+        // The HTTP binding can only honor a subscription when it can both
+        // hold the SSE stream open AND receive change events from other
+        // requests (the subscription bus — on PHP hosting, publisher and
+        // stream live in different processes). Without either, the
+        // feature is genuinely unsupported here: answer -32601 rather
+        // than acknowledging notification types that could never arrive.
+        $transport = $this->transport;
+        $bus = $transport instanceof \Mcp\Server\Transport\HttpServerTransport
+            ? $transport->getConfig()->get('subscription_bus')
+            : null;
+        if (!($transport instanceof \Mcp\Server\Transport\HttpServerTransport)
+            || !$transport->getConfig()->isSseEnabled()
+            || !$bus instanceof \Mcp\Server\Subscriptions\SubscriptionBusInterface
+        ) {
+            $responder->sendResponse(new \Mcp\Shared\ErrorData(
+                code: -32601,
+                message: 'Server does not support subscriptions/listen on this transport'
+            ));
+            return;
+        }
+
+        // The bus existence was just verified above, so resources/updated
+        // events ARE deliverable here whenever the server serves
+        // resources at all.
+        throw new SubscriptionListenException(
+            $responder->getRequestId(),
+            $filter->intersectWithCapabilities(
+                $this->initOptions->capabilities,
+                resourceUpdatesDeliverable: $this->initOptions->capabilities->resources !== null
+            )
+        );
+    }
+
     protected function startMessageProcessing(): void
     {
         $this->isInitialized = true;
@@ -714,8 +769,14 @@ class HttpServerSession extends ServerSession
     {
         $data = [
             'initializationState' => $this->initializationState->value,
+            // Deep-normalize to plain arrays: jsonSerialize() leaves nested
+            // capability objects (ClientCapabilities etc.) as objects, which
+            // survive a JSON-backed store but are silently DROPPED by
+            // fromArray()'s is_array() guards when the store keeps PHP
+            // values in memory — the client's declared capabilities (e.g.
+            // elicitation) would vanish between requests.
             'clientParams' => $this->clientParams
-                ? $this->clientParams->jsonSerialize()
+                ? json_decode((string) json_encode($this->clientParams->jsonSerialize()), true)
                 : null,
             'negotiatedProtocolVersion' => $this->negotiatedProtocolVersion,
             'nextRequestId' => $this->getNextRequestId(),

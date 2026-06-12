@@ -33,6 +33,7 @@ use Mcp\Client\Auth\Exception\AuthorizationRedirectException;
 use Mcp\Client\Auth\OAuthException;
 use Mcp\Client\Auth\Token\TokenSet;
 use Mcp\Client\Transport\HttpAuthenticationException;
+use Mcp\Shared\McpHeaders;
 use Mcp\Shared\MemoryStream;
 use Mcp\Types\JsonRpcMessage;
 use Mcp\Types\JSONRPCRequest;
@@ -340,22 +341,14 @@ class StreamableHttpTransport
             throw new RuntimeException('Failed to encode message: ' . json_last_error_msg());
         }
 
-        $additionalHeaders = [
-            'Content-Type' => 'application/json',
-            'Accept' => 'application/json, text/event-stream'
-        ];
-
-        // SEP-2575: a modern request carries its protocol version in the
-        // _meta envelope, and the MCP-Protocol-Version header MUST match
-        // it. Mirroring the header from the outgoing message makes the two
-        // equal by construction — covering the discover probe (before any
-        // era is established) and every per-request envelope afterwards.
-        // Legacy requests have no envelope and keep the session manager's
-        // post-initialize header behavior.
-        $envelopeVersion = $this->extractEnvelopeProtocolVersion($message);
-        if ($envelopeVersion !== null) {
-            $additionalHeaders['MCP-Protocol-Version'] = $envelopeVersion;
-        }
+        $additionalHeaders = array_merge(
+            [
+                'Content-Type' => 'application/json',
+                'Accept' => 'application/json, text/event-stream'
+            ],
+            $this->buildPerMessageHeaders($message)
+        );
+        $envelopeVersion = $additionalHeaders[McpHeaders::PROTOCOL_VERSION] ?? null;
 
         $headers = $this->prepareRequestHeaders($additionalHeaders);
 
@@ -1230,11 +1223,77 @@ class StreamableHttpTransport
     }
 
     /**
-     * Check if a message is an initialization message.
+     * Compute the per-message HTTP header additions for an outgoing
+     * JSON-RPC message.
      *
-     * @param JsonRpcMessage $message The message to check
-     * @return bool True if it's an initialization message
+     * SEP-2575: a modern request carries its protocol version in the
+     * `_meta` envelope, and the MCP-Protocol-Version header MUST match it.
+     * Mirroring the header from the outgoing message makes the two equal
+     * by construction — covering the discover probe (before any era is
+     * established) and every per-request envelope afterwards. Legacy
+     * requests have no envelope and keep the session manager's
+     * post-initialize header behavior.
+     *
+     * SEP-2243: every enveloped (modern-era) request and notification also
+     * carries `Mcp-Method` mirroring its JSON-RPC method, and the
+     * name-bearing methods (tools/call, prompts/get, resources/read, and
+     * the Tasks extension's task methods) carry `Mcp-Name` mirroring the
+     * identifying params field — verbatim, URIs are never re-encoded.
+     * Legacy messages get neither.
+     *
+     * Finally, any transient {@see JsonRpcMessage::$httpHeaderHints}
+     * stamped by the session (the Mcp-Param-* argument mirrors) are merged
+     * in last.
+     *
+     * @return array<string, string>
      */
+    protected function buildPerMessageHeaders(JsonRpcMessage $message): array
+    {
+        $headers = [];
+
+        $envelopeVersion = $this->extractEnvelopeProtocolVersion($message);
+        if ($envelopeVersion !== null) {
+            $headers[McpHeaders::PROTOCOL_VERSION] = $envelopeVersion;
+
+            $inner = $message->message;
+            if ($inner instanceof JSONRPCRequest || $inner instanceof JSONRPCNotification) {
+                $headers[McpHeaders::METHOD] = $inner->method;
+                $name = McpHeaders::expectedNameValue($inner->method, $this->paramsToArray($inner->params));
+                if ($name !== null) {
+                    $headers[McpHeaders::NAME] = $name;
+                }
+            }
+        }
+
+        if ($message->httpHeaderHints !== null) {
+            $headers = array_merge($headers, $message->httpHeaderHints);
+        }
+
+        return $headers;
+    }
+
+    /**
+     * Normalize an outgoing message's params (typed RequestParams /
+     * NotificationParams, stdClass, or already-decoded array) into a plain
+     * associative array for header derivation. Returns null when there are
+     * no params or the shape is not map-like.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function paramsToArray(mixed $params): ?array
+    {
+        if ($params === null) {
+            return null;
+        }
+        if ($params instanceof \JsonSerializable) {
+            $params = $params->jsonSerialize();
+        }
+        if ($params instanceof \stdClass) {
+            $params = (array) $params;
+        }
+        return is_array($params) ? $params : null;
+    }
+
     /**
      * Extract the SEP-2575 protocol version from an outgoing message's
      * `_meta` envelope, if it carries one. Used to mirror the value into
@@ -1284,6 +1343,12 @@ class StreamableHttpTransport
         return $id !== null && $this->idsEqual($id, $outboundId);
     }
 
+    /**
+     * Check if a message is an initialization message.
+     *
+     * @param JsonRpcMessage $message The message to check
+     * @return bool True if it's an initialization message
+     */
     private function isInitializationMessage(JsonRpcMessage $message): bool
     {
         // Examine the inner message to see if it's an initialize request
@@ -1326,10 +1391,13 @@ class StreamableHttpTransport
         // Add any additional headers for this specific request
         $headers = array_merge($headers, $additionalHeaders);
 
-        // Convert to cURL format (array of "Name: Value" strings)
+        // Convert to cURL format (array of "Name: Value" strings). An
+        // empty value needs libcurl's "Name;" form: "Name:" would remove
+        // the header instead of sending it empty, but SEP-2243 requires an
+        // empty-string tool argument to mirror as a present, empty header.
         $curlHeaders = [];
         foreach ($headers as $name => $value) {
-            $curlHeaders[] = "{$name}: {$value}";
+            $curlHeaders[] = $value === '' ? "{$name};" : "{$name}: {$value}";
         }
 
         return $curlHeaders;
@@ -1491,9 +1559,13 @@ class StreamableHttpTransport
      * dual-era negotiation (WS2) depends on this: the client must be able
      * to classify -32004/-32003/-32001 versus a legacy server's
      * -32601/-32602 from the typed error, not from an opaque transport
-     * exception. (Every message in this queue carries a request id —
-     * enqueueJsonRpcPayload() refuses id-less payloads — so there is no
-     * unroutable-error case left to treat as a transport failure.)
+     * exception. (Responses in this queue always carry a request id —
+     * enqueueJsonRpcPayload() refuses id-less response payloads — so there
+     * is no unroutable-error case left to treat as a transport failure.
+     * The queue may additionally hold id-less notifications and
+     * server-initiated requests: deliverServerInitiatedMessage() falls
+     * back to this same queue when no message dispatcher is registered or
+     * a synchronous dispatch fails, and the read loop drains them here.)
      *
      * @return JsonRpcMessage|null The received message or null if none available
      */

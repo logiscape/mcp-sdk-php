@@ -6,20 +6,16 @@
 #
 # Each entry documents WHY the test fails so SDK fixes can be targeted in future updates.
 #
-# Last updated: 2026-04-20
+# Last updated: 2026-06-12 (WS3 milestone)
 # Conformance tool version: 0.1.16
+#
+# Both lists are empty: the stable track passes 100% of its scenarios.
+# WS3's authorization hardening closed the last three client entries —
+# the client_credentials grant (private_key_jwt with ES256/RS256
+# assertions, and client_secret_basic) and the SEP-990 cross-app-access
+# flow (RFC 8693 token exchange at the IdP + RFC 7523 jwt-bearer at the
+# authorization server).
 
 server: []
 
-client:
-  # --- MCP Extensions: these are optional features that are not currently fully implemented ---
-  - auth/client-credentials-jwt
-    # No client_credentials grant_type or JWT assertion (client_assertion,
-    # client_assertion_type) implementation.
-
-  - auth/client-credentials-basic
-    # No client_credentials grant_type implementation.
-
-  - auth/cross-app-access-complete-flow
-    # 8 of 10 assertions pass. RFC 8707 resource parameter support exists
-    # but the full cross-app access flow has gaps.
+client: []

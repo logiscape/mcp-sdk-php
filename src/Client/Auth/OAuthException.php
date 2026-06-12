@@ -38,6 +38,8 @@ class OAuthException extends RuntimeException
     public const REASON_DISCOVERY_UNAVAILABLE = 'discovery_unavailable';
     public const REASON_DISCOVERY_VALIDATION_FAILED = 'discovery_validation_failed';
     public const REASON_PKCE_NOT_SUPPORTED = 'pkce_not_supported';
+    public const REASON_ISS_VALIDATION_FAILED = 'authorization_response_iss_validation_failed';
+    public const REASON_AUTH_SERVER_MIGRATION = 'authorization_server_migration';
 
     /**
      * OAuth error code (if available from the authorization server).
@@ -200,6 +202,41 @@ class OAuthException extends RuntimeException
         return new self(
             'Authorization server does not support PKCE with S256, which is required by MCP',
             reasonCode: self::REASON_PKCE_NOT_SUPPORTED
+        );
+    }
+
+    /**
+     * Create an exception for an RFC 9207 / SEP-2468 authorization response
+     * issuer identification failure.
+     *
+     * Thrown when the iss parameter of an authorization response is missing
+     * while the AS advertised authorization_response_iss_parameter_supported,
+     * or when it does not byte-for-byte match the expected issuer.
+     *
+     * @param string $reason The validation failure reason
+     * @return self
+     */
+    public static function issValidationFailed(string $reason): self
+    {
+        return new self(
+            "Authorization response issuer validation failed: {$reason}",
+            reasonCode: self::REASON_ISS_VALIDATION_FAILED
+        );
+    }
+
+    /**
+     * Create an exception for a SEP-2352 authorization server migration that
+     * cannot proceed automatically (e.g., pre-registered credentials are bound
+     * to the previous authorization server).
+     *
+     * @param string $reason The reason the migration cannot proceed
+     * @return self
+     */
+    public static function authServerMigrationBlocked(string $reason): self
+    {
+        return new self(
+            "Authorization server migration blocked: {$reason}",
+            reasonCode: self::REASON_AUTH_SERVER_MIGRATION
         );
     }
 

@@ -49,6 +49,10 @@ class AuthorizationRequest
      * @param string|null $clientSecret The OAuth client secret (if any)
      * @param string $tokenEndpointAuthMethod The authentication method for the token endpoint
      * @param string|null $resourceMetadataUrl Optional URL where resource metadata was found
+     * @param bool|null $issParameterSupported Whether the authorization server advertised
+     *        RFC 9207 authorization_response_iss_parameter_supported in its metadata. When
+     *        true, the authorization response MUST carry an iss parameter that matches the
+     *        issuer byte-for-byte (SEP-2468). Null when the advertisement is unknown.
      */
     public function __construct(
         public readonly string $authorizationUrl,
@@ -62,7 +66,8 @@ class AuthorizationRequest
         public readonly string $clientId,
         public readonly ?string $clientSecret,
         public readonly string $tokenEndpointAuthMethod,
-        public readonly ?string $resourceMetadataUrl = null
+        public readonly ?string $resourceMetadataUrl = null,
+        public readonly ?bool $issParameterSupported = null
     ) {
     }
 
@@ -86,6 +91,7 @@ class AuthorizationRequest
             'clientSecret' => $this->clientSecret,
             'tokenEndpointAuthMethod' => $this->tokenEndpointAuthMethod,
             'resourceMetadataUrl' => $this->resourceMetadataUrl,
+            'issParameterSupported' => $this->issParameterSupported,
         ];
     }
 
@@ -129,7 +135,8 @@ class AuthorizationRequest
             clientId: $data['clientId'],
             clientSecret: $data['clientSecret'] ?? null,
             tokenEndpointAuthMethod: $data['tokenEndpointAuthMethod'],
-            resourceMetadataUrl: $data['resourceMetadataUrl'] ?? null
+            resourceMetadataUrl: $data['resourceMetadataUrl'] ?? null,
+            issParameterSupported: $data['issParameterSupported'] ?? null
         );
     }
 }
