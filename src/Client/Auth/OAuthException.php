@@ -40,6 +40,7 @@ class OAuthException extends RuntimeException
     public const REASON_PKCE_NOT_SUPPORTED = 'pkce_not_supported';
     public const REASON_ISS_VALIDATION_FAILED = 'authorization_response_iss_validation_failed';
     public const REASON_AUTH_SERVER_MIGRATION = 'authorization_server_migration';
+    public const REASON_UNBOUND_CLIENT_CREDENTIALS = 'unbound_client_credentials';
 
     /**
      * OAuth error code (if available from the authorization server).
@@ -237,6 +238,30 @@ class OAuthException extends RuntimeException
         return new self(
             "Authorization server migration blocked: {$reason}",
             reasonCode: self::REASON_AUTH_SERVER_MIGRATION
+        );
+    }
+
+    /**
+     * Create an exception for pre-registered credentials that carry no
+     * issuer binding when the configuration requires one (the default).
+     * The Authorization Server Binding rule keys pre-registered
+     * credentials by the issuer that registered them; without it the
+     * binding cannot be enforced across processes.
+     *
+     * @param string $issuer The validated issuer the credentials were about to be presented to
+     * @return self
+     */
+    public static function unboundClientCredentials(string $issuer): self
+    {
+        return new self(
+            'Pre-registered client credentials have no issuer binding. The MCP '
+            . 'Authorization Server Binding rule requires pre-registered credentials '
+            . "to be keyed by the authorization server that issued them; set "
+            . "ClientCredentials::\$issuer (discovery selected {$issuer}), or set "
+            . 'OAuthConfiguration $allowUnboundClientCredentials = true to accept '
+            . 'the legacy 2025-11-25 behavior of pinning to the first validated '
+            . 'issuer for this process only.',
+            reasonCode: self::REASON_UNBOUND_CLIENT_CREDENTIALS
         );
     }
 

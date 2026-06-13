@@ -66,7 +66,40 @@ server:
     # warnings do not fail the scenario either way.
 
 client:
-  # --- One stale-tool entry (WS3 review round) ---
+  # --- Two stale-tool entries (WS3 review rounds) ---
+  - auth/pre-registration
+    # UPSTREAM SPEC/TOOL DRIFT, not pursued in the SDK: the 2026-07-28
+    # draft's Authorization Server Binding rule (client-registration
+    # page) requires pre-registered credentials to be keyed by the
+    # issuer that registered them ("MUST associate those credentials
+    # with the specific authorization server that issued them, keyed by
+    # the authorization server's `issuer` identifier"), but the pinned
+    # 0.2.0-alpha.2 tool (upstream commit 25fd4432) supplies only
+    # {client_id, client_secret} as scenario context — no issuer — even
+    # though the scenario is tagged DRAFT-2026-v1 and the AS URL is
+    # known when the context is built. The SDK's draft-default is
+    # mandatory issuer binding, so the draft-track everything-client
+    # (spawned with --track=draft) correctly refuses to send a token
+    # request with unbound credentials and the scenario's
+    # pre-registration-auth check fails ("Client did not make a token
+    # request"; 2/3 checks pass). The stable track still passes 14/14 —
+    # there the published 2025-11-25 spec has no binding rule and the
+    # everything-client opts into the SDK's explicit
+    # allowUnboundClientCredentials legacy compatibility.
+    #
+    # NOTE: --suite draft selects only DRAFT-2026-v1-exclusive scenarios,
+    # and auth/pre-registration is tagged [2025-11-25, DRAFT-2026-v1], so
+    # it is NOT in the draft suite. run-conformance.php therefore runs it
+    # explicitly after the suite on the aggregate `draft`/`client-draft`
+    # gate (see DRAFT_CLIENT_EXTRA_SCENARIOS) so this entry is actually
+    # evaluated — otherwise a stale entry (upstream adds issuer context,
+    # or asserts the strict refusal) would never be checked and would pass
+    # CI silently. Keep DRAFT_CLIENT_EXTRA_SCENARIOS in sync with any
+    # client entry here that falls outside the draft suite.
+    # Re-check at every draft-pin bump: expect upstream to either add
+    # issuer context to the scenario or assert the strict refusal.
+    # Candidate for an upstream issue per SEP-2484. See the upstream
+    # drift record in docs/v2-development-plan.md (WS3).
   - http-custom-headers
     # UPSTREAM TOOL STALENESS, not pursued in the SDK: the scenario's
     # advertised tools annotate `number`-typed parameters

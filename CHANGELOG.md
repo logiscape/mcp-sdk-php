@@ -189,10 +189,18 @@ This file was introduced during the v1.7.x series. Structured entries below cove
     `application_type` on dynamic registration (derived native/web),
     SEP-2352 authorization-server migration (PRM re-fetched on 401 and on
     403 `insufficient_scope`, tokens/credentials never reused across
-    issuers, fresh registration at the new AS, and an in-process
-    migration marker — one that survives retries within the client
-    instance without retaining stale bearer tokens — when pre-registered
-    credentials block automatic migration), SEP-2207 `offline_access` gating on
+    issuers, fresh registration at the new AS, and issuer-bound
+    pre-registered credentials per the spec's Authorization Server
+    Binding rule: the new `ClientCredentials::$issuer` names the AS the
+    credentials were registered with and is enforced before every grant
+    flow — durably across PHP processes; it is required by default
+    (unbound pre-registered credentials are rejected with a typed
+    error), with the explicit
+    `OAuthConfiguration::$allowUnboundClientCredentials` legacy opt-in
+    restoring the published-spec behavior of pinning to the first
+    validated issuer for the lifetime of the OAuthClient instance, and
+    bearer tokens bound to a previous issuer
+    are always deleted when migration is detected), SEP-2207 `offline_access` gating on
     `scopes_supported` — plus the `client_credentials` grant
     (private_key_jwt with ES256/RS256 assertions including DER→raw
     signature conversion, and client_secret_basic) and the SEP-990
@@ -281,13 +289,53 @@ This file was introduced during the v1.7.x series. Structured entries below cove
     modern-declared session — rejected `-32602` for lacking the `_meta`
     envelope — which also carried the prior request's headers and
     authenticated principal.
-  - The SEP-2352 migration block for pre-registered credentials now
-    survives retries within the client instance: the old issuer is
-    retained in an in-process migration marker, so rejected bearer tokens
-    are discarded immediately while a retried 401 still cannot skip the
-    guard and present old credentials to the new authorization server.
-    (The marker is per-instance; durable cross-process binding requires
-    issuer-bound pre-registered credentials, a planned follow-up.)
+  - The SEP-2352 migration block for pre-registered credentials is no
+    longer single-shot: rejected bearer tokens are discarded immediately,
+    yet a retried 401 still cannot skip the guard and present old
+    credentials to the new authorization server. Implemented via the
+    spec's Authorization Server Binding model rather than mutable
+    migration state: `ClientCredentials::$issuer` (new) binds the
+    credentials to the AS they were registered with, enforced in
+    `getClientCredentials()` after issuer validation and before every
+    grant flow — durable across PHP processes, and self-healing once the
+    operator configures credentials bound to the new issuer. Unbound
+    (legacy) credentials are pinned to the first validated issuer —
+    from first use or from the stored tokens' issuer when a migration is
+    detected — for the lifetime of the OAuthClient instance, and the pin
+    now logs a warning recommending `ClientCredentials::$issuer` since an
+    unbound pin cannot protect a fresh process (e.g. each PHP-FPM
+    request). A follow-up review round tightened the binding: issuer
+    binding comparisons are exact code-point equality per RFC 8414 §3.3
+    (no scheme/host case folding, default-port or trailing-slash
+    normalization — those remain only in token-based migration
+    *detection*, where normalization cannot grant access), and
+    multi-AS protected-resource metadata is now resolved in favor of the
+    bound (or pinned) issuer when it appears anywhere in
+    `authorization_servers` (RFC 9728 §7.6 assigns AS selection to the
+    client) instead of always selecting the first entry and then
+    rejecting the connection. The webclient reference now collects the
+    issuer alongside pre-registered credentials and persists it
+    through the callback exchange. The follow-up also confirmed the
+    remaining unbound-credentials exposure was upstream drift (the
+    pinned alpha conformance tool supplies pre-registered credentials
+    without the issuer context the draft's binding rule requires) and
+    aligned the SDK with the spec: **issuer binding is now mandatory by
+    default** — pre-registered credentials without
+    `ClientCredentials::$issuer` are rejected before any authorization
+    or token request with a typed
+    `REASON_UNBOUND_CLIENT_CREDENTIALS` error — and the per-process
+    first-use pinning survives only behind the new explicit
+    `OAuthConfiguration::$allowUnboundClientCredentials` legacy-compat
+    flag (published 2025-11-25 behavior). The drift is recorded in
+    `docs/v2-development-plan.md` (WS3) with the pinned tool version and
+    upstream commit, the draft-track conformance client now runs the
+    strict default (`auth/pre-registration` baselined with its root
+    cause), and the stable-track client opts into the legacy flag. The
+    webclient reference is strict by default to match: its connection
+    form requires the issuer when a Client ID is supplied and gates the
+    legacy unbound mode behind an explicit, clearly-warned "Allow unbound
+    credentials (legacy)" checkbox (it had previously hard-coded the flag
+    on, which silently reopened the cross-process exposure on PHP-FPM).
   - The SEP-2352 migration guard also runs on the 403
     `insufficient_scope` path (PRM cache bypassed, issuer change
     detected) — previously only the 401 path checked, so a step-up flow

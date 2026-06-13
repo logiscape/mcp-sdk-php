@@ -29,6 +29,16 @@ curated independently: alpha-line churn re-curates only the draft baseline,
 never the stable one. When the stable `0.2.0` tool ships (around the final
 spec), the tracks converge back to a single pin and a single baseline.
 
+The runner also tells `everything-client.php` which track spawned it
+(`--track=draft` is appended to the client command on the draft track):
+the draft track runs the SDK's spec-aligned defaults, while the stable
+track opts into the SDK's explicit published-spec compatibility options
+where stable scenarios assume them (currently
+`allowUnboundClientCredentials`, because the tool supplies pre-registered
+credentials without the issuer context the `2026-07-28` Authorization
+Server Binding rule requires — see the `auth/pre-registration` entry in
+the draft baseline).
+
 ## Files
 
 | File                              | Purpose                                                                 |

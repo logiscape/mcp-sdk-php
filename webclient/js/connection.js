@@ -25,6 +25,8 @@ export function registerConnection(app) {
     verifyTls: document.getElementById('field-verify-tls'),
     oauthClientId: document.getElementById('field-oauth-client-id'),
     oauthClientSecret: document.getElementById('field-oauth-client-secret'),
+    oauthIssuer: document.getElementById('field-oauth-issuer'),
+    oauthAllowUnbound: document.getElementById('field-oauth-allow-unbound'),
   };
 
   // Transport toggle
@@ -132,6 +134,8 @@ export function registerConnection(app) {
           enabled: true,
           clientId: dom.oauthClientId.value.trim() || undefined,
           clientSecret: dom.oauthClientSecret.value.trim() || undefined,
+          issuer: dom.oauthIssuer.value.trim() || undefined,
+          allowUnbound: dom.oauthAllowUnbound.checked || undefined,
         }
       : null;
     return {
@@ -217,6 +221,8 @@ export function registerConnection(app) {
           ? 'Client credentials stored (disconnect to change)'
           : (prefill.oauth.hasClientId ? 'Client ID supplied (hidden)' : '');
         dom.oauthClientSecret.placeholder = 'Client secret hidden (disconnect to change)';
+        dom.oauthIssuer.value = prefill.oauth.issuer ?? '';
+        dom.oauthAllowUnbound.checked = prefill.oauth.allowUnbound === true;
       }
     }
     app.emit('connected', {

@@ -100,7 +100,8 @@ final class OAuthClientScopeAndGrantTest extends TestCase
         ?CrossAppAccessConfiguration $crossAppAccess = null
     ): array {
         $config = new OAuthConfiguration(
-            clientCredentials: $credentials ?? new ClientCredentials('test-client', null, 'none'),
+            clientCredentials: $credentials
+                ?? new ClientCredentials('test-client', null, 'none', issuer: self::ISSUER),
             tokenStorage: new MemoryTokenStorage(),
             authCallback: $callback,
             additionalScopes: $additionalScopes,
@@ -277,7 +278,8 @@ final class OAuthClientScopeAndGrantTest extends TestCase
             credentials: new ClientCredentials(
                 clientId: 'cc-client',
                 clientSecret: null,
-                tokenEndpointAuthMethod: ClientCredentials::AUTH_METHOD_PRIVATE_KEY_JWT
+                tokenEndpointAuthMethod: ClientCredentials::AUTH_METHOD_PRIVATE_KEY_JWT,
+                issuer: self::ISSUER
             )
         );
 

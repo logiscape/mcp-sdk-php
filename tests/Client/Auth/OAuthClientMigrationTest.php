@@ -50,6 +50,12 @@ use RuntimeException;
  *   - surface a clear error for pre-registered credentials bound to the
  *     previous AS rather than silently reusing them — durably on retries,
  *     while still deleting bearer tokens bound to the old issuer.
+ *
+ * Pre-registered credentials carry their binding per the spec's
+ * Authorization Server Binding rule: ClientCredentials::$issuer names the
+ * AS they were registered with and is enforced before every grant flow
+ * (cross-process durable). Unbound credentials are pinned to the first
+ * validated issuer for the lifetime of the OAuthClient instance.
  */
 final class OAuthClientMigrationTest extends TestCase
 {
@@ -106,7 +112,8 @@ final class OAuthClientMigrationTest extends TestCase
      */
     private function createClient(
         AuthorizationCallbackInterface $callback,
-        ?ClientCredentials $preRegistered = null
+        ?ClientCredentials $preRegistered = null,
+        bool $allowUnbound = false
     ): array {
         $storage = new MemoryTokenStorage();
 
@@ -115,6 +122,7 @@ final class OAuthClientMigrationTest extends TestCase
             tokenStorage: $storage,
             authCallback: $callback,
             redirectUri: 'http://127.0.0.1/callback',
+            allowUnboundClientCredentials: $allowUnbound,
         );
 
         $client = new OAuthClient($config);
@@ -262,13 +270,17 @@ final class OAuthClientMigrationTest extends TestCase
      * stored tokens before raising the pre-registered-credentials error,
      * which disarmed migration detection on retry. The block must survive
      * any number of retries without retaining the rejected bearer token.
+     * Runs in the legacy unbound mode (allowUnbound) because that is the
+     * mode where retry-survival depends on the issuer pin rather than on
+     * the default unbound rejection.
      */
     public function testMigrationBlockWithPreRegisteredCredentialsSurvivesRetry(): void
     {
         $callback = $this->makeHaltingCallback();
         [$client, $mockDiscovery, , $storage] = $this->createClient(
             $callback,
-            preRegistered: new ClientCredentials('pre-registered-id', 'secret', 'client_secret_basic')
+            preRegistered: new ClientCredentials('pre-registered-id', 'secret', 'client_secret_basic'),
+            allowUnbound: true
         );
 
         $storage->store(self::RESOURCE_URL, $this->makeAs1Tokens());
@@ -470,5 +482,382 @@ final class OAuthClientMigrationTest extends TestCase
         }
 
         $this->assertStringContainsString('client_id=as1-client-id', (string) $callback->capturedAuthUrl);
+    }
+
+    /**
+     * Issuer-bound pre-registered credentials (draft spec, Authorization
+     * Server Binding: credentials MUST be keyed by the issuer they were
+     * registered with). The binding lives in configuration, so it survives
+     * process boundaries: even with NO stored tokens — a fresh PHP worker
+     * after the old tokens were already deleted — discovery selecting a
+     * different issuer is blocked before any authorization request is built.
+     */
+    public function testBoundCredentialsBlockMigrationWithoutStoredTokens(): void
+    {
+        $callback = $this->makeHaltingCallback();
+        [$client, $mockDiscovery] = $this->createClient(
+            $callback,
+            preRegistered: new ClientCredentials(
+                'pre-registered-id',
+                'secret',
+                'client_secret_basic',
+                issuer: self::AS1_ISSUER
+            )
+        );
+
+        $mockDiscovery->method('discoverResourceMetadata')
+            ->willReturn(new ProtectedResourceMetadata(
+                resource: self::RESOURCE_URL,
+                authorizationServers: [self::AS2_ISSUER],
+            ));
+        $mockDiscovery->method('discoverAuthorizationServerMetadata')
+            ->willReturn($this->makeAsMetadata(self::AS2_ISSUER));
+
+        try {
+            $client->handleUnauthorized(self::RESOURCE_URL, []);
+            $this->fail('Expected OAuthException');
+        } catch (OAuthException $e) {
+            $this->assertSame(OAuthException::REASON_AUTH_SERVER_MIGRATION, $e->getReasonCode());
+            $this->assertStringContainsString(self::AS1_ISSUER, $e->getMessage());
+            $this->assertStringContainsString(self::AS2_ISSUER, $e->getMessage());
+        }
+
+        $this->assertNull(
+            $callback->capturedAuthUrl ?? null,
+            'Credentials bound to AS1 must never start an authorization request at AS2'
+        );
+    }
+
+    /**
+     * The positive side of issuer binding: bound credentials whose issuer
+     * matches the discovered authorization server are used normally.
+     */
+    public function testBoundCredentialsMatchingDiscoveredIssuerProceed(): void
+    {
+        $callback = $this->makeHaltingCallback();
+        [$client, $mockDiscovery] = $this->createClient(
+            $callback,
+            preRegistered: new ClientCredentials(
+                'pre-registered-id',
+                'secret',
+                'client_secret_basic',
+                issuer: self::AS2_ISSUER
+            )
+        );
+
+        $mockDiscovery->method('discoverResourceMetadata')
+            ->willReturn(new ProtectedResourceMetadata(
+                resource: self::RESOURCE_URL,
+                authorizationServers: [self::AS2_ISSUER],
+            ));
+        $mockDiscovery->method('discoverAuthorizationServerMetadata')
+            ->willReturn($this->makeAsMetadata(self::AS2_ISSUER));
+
+        try {
+            $client->handleUnauthorized(self::RESOURCE_URL, []);
+            $this->fail('Expected the halting callback to abort the flow');
+        } catch (RuntimeException $e) {
+            $this->assertSame('HALT_BEFORE_TOKEN_REQUEST', $e->getMessage());
+        }
+
+        $this->assertStringStartsWith(self::AS2_ISSUER . '/authorize', (string) $callback->capturedAuthUrl);
+        $this->assertStringContainsString('client_id=pre-registered-id', (string) $callback->capturedAuthUrl);
+    }
+
+    /**
+     * Remediation self-heals: after the operator provisions credentials
+     * bound to the NEW issuer, a migration 401 deletes the old tokens and
+     * the flow proceeds at the new authorization server — no manual token
+     * storage cleanup and no lingering block.
+     */
+    public function testRemediatedBoundCredentialsProceedAfterMigration(): void
+    {
+        $callback = $this->makeHaltingCallback();
+        [$client, $mockDiscovery, , $storage] = $this->createClient(
+            $callback,
+            preRegistered: new ClientCredentials(
+                'as2-registered-id',
+                'secret',
+                'client_secret_basic',
+                issuer: self::AS2_ISSUER
+            )
+        );
+
+        $storage->store(self::RESOURCE_URL, $this->makeAs1Tokens());
+        $this->seedStalePrmCache($client);
+
+        $mockDiscovery->expects($this->once())
+            ->method('discoverResourceMetadata')
+            ->with(self::RESOURCE_URL)
+            ->willReturn(new ProtectedResourceMetadata(
+                resource: self::RESOURCE_URL,
+                authorizationServers: [self::AS2_ISSUER],
+            ));
+        $mockDiscovery->method('discoverAuthorizationServerMetadata')
+            ->willReturn($this->makeAsMetadata(self::AS2_ISSUER));
+
+        try {
+            $client->handleUnauthorized(self::RESOURCE_URL, []);
+            $this->fail('Expected the halting callback to abort the flow');
+        } catch (RuntimeException $e) {
+            $this->assertSame('HALT_BEFORE_TOKEN_REQUEST', $e->getMessage());
+        }
+
+        $this->assertNull(
+            $storage->retrieve(self::RESOURCE_URL),
+            'Tokens bound to the previous authorization server must be discarded'
+        );
+        $this->assertStringStartsWith(self::AS2_ISSUER . '/authorize', (string) $callback->capturedAuthUrl);
+        $this->assertStringContainsString('client_id=as2-registered-id', (string) $callback->capturedAuthUrl);
+    }
+
+    /**
+     * Default (spec-aligned) behavior: pre-registered credentials without
+     * an issuer binding are rejected before any authorization or token
+     * request is made. The Authorization Server Binding rule requires
+     * credentials to be keyed by issuer; without one the client cannot
+     * enforce the binding across processes, so it refuses with an
+     * actionable error instead of trusting the first discovered AS.
+     */
+    public function testUnboundCredentialsRejectedByDefault(): void
+    {
+        $callback = $this->makeHaltingCallback();
+        [$client, $mockDiscovery] = $this->createClient(
+            $callback,
+            preRegistered: new ClientCredentials('pre-registered-id', 'secret', 'client_secret_basic')
+        );
+
+        $mockDiscovery->method('discoverResourceMetadata')
+            ->willReturn(new ProtectedResourceMetadata(
+                resource: self::RESOURCE_URL,
+                authorizationServers: [self::AS1_ISSUER],
+            ));
+        $mockDiscovery->method('discoverAuthorizationServerMetadata')
+            ->willReturn($this->makeAsMetadata(self::AS1_ISSUER));
+
+        try {
+            $client->handleUnauthorized(self::RESOURCE_URL, []);
+            $this->fail('Expected OAuthException');
+        } catch (OAuthException $e) {
+            $this->assertSame(OAuthException::REASON_UNBOUND_CLIENT_CREDENTIALS, $e->getReasonCode());
+            $this->assertStringContainsString('issuer', $e->getMessage());
+            $this->assertStringContainsString('allowUnboundClientCredentials', $e->getMessage());
+        }
+
+        $this->assertNull(
+            $callback->capturedAuthUrl ?? null,
+            'No authorization request may be started with unbound credentials'
+        );
+    }
+
+    /**
+     * Legacy compatibility (published 2025-11-25 behavior, explicit
+     * opt-in via allowUnboundClientCredentials): unbound pre-registered
+     * credentials are pinned to the first validated issuer they are used
+     * with in this instance. A later discovery resolving to a DIFFERENT
+     * issuer — here via a second resource served by another authorization
+     * server — must not silently carry the same credentials there.
+     */
+    public function testUnboundCredentialsPinnedToFirstValidatedIssuer(): void
+    {
+        $resource2 = 'https://api2.example.com/mcp';
+        $callback = $this->makeHaltingCallback();
+        [$client, $mockDiscovery] = $this->createClient(
+            $callback,
+            preRegistered: new ClientCredentials('pre-registered-id', 'secret', 'client_secret_basic'),
+            allowUnbound: true
+        );
+
+        $mockDiscovery->method('discoverResourceMetadata')
+            ->willReturnCallback(fn (string $url) => new ProtectedResourceMetadata(
+                resource: $url,
+                authorizationServers: [
+                    $url === self::RESOURCE_URL ? self::AS1_ISSUER : self::AS2_ISSUER,
+                ],
+            ));
+        $mockDiscovery->method('discoverAuthorizationServerMetadata')
+            ->willReturnCallback(fn (string $url) => $this->makeAsMetadata($url));
+
+        // First use: validated issuer AS1 — the credentials are pinned to it.
+        try {
+            $client->handleUnauthorized(self::RESOURCE_URL, []);
+            $this->fail('Expected the halting callback to abort the flow');
+        } catch (RuntimeException $e) {
+            $this->assertSame('HALT_BEFORE_TOKEN_REQUEST', $e->getMessage());
+        }
+        $this->assertStringStartsWith(self::AS1_ISSUER . '/authorize', (string) $callback->capturedAuthUrl);
+
+        // Second resource resolves to AS2: the pinned credentials must not follow.
+        try {
+            $client->handleUnauthorized($resource2, []);
+            $this->fail('Expected OAuthException');
+        } catch (OAuthException $e) {
+            $this->assertSame(OAuthException::REASON_AUTH_SERVER_MIGRATION, $e->getReasonCode());
+        }
+        $this->assertStringStartsWith(
+            self::AS1_ISSUER . '/authorize',
+            (string) $callback->capturedAuthUrl,
+            'No authorization request may have been started at AS2'
+        );
+    }
+
+    /**
+     * Multi-AS selection (RFC 9728 §7.6: the client selects among
+     * advertised authorization servers): when PRM lists several entries
+     * and the configured credentials are bound to one of them, that one
+     * is selected — not rejected because the first entry differs.
+     */
+    public function testBoundCredentialsSelectMatchingAuthorizationServerFromList(): void
+    {
+        $callback = $this->makeHaltingCallback();
+        [$client, $mockDiscovery] = $this->createClient(
+            $callback,
+            preRegistered: new ClientCredentials(
+                'as2-registered-id',
+                'secret',
+                'client_secret_basic',
+                issuer: self::AS2_ISSUER
+            )
+        );
+
+        $mockDiscovery->method('discoverResourceMetadata')
+            ->willReturn(new ProtectedResourceMetadata(
+                resource: self::RESOURCE_URL,
+                authorizationServers: [self::AS1_ISSUER, self::AS2_ISSUER],
+            ));
+        $mockDiscovery->method('discoverAuthorizationServerMetadata')
+            ->willReturnCallback(fn (string $url) => $this->makeAsMetadata($url));
+
+        try {
+            $client->handleUnauthorized(self::RESOURCE_URL, []);
+            $this->fail('Expected the halting callback to abort the flow');
+        } catch (RuntimeException $e) {
+            $this->assertSame('HALT_BEFORE_TOKEN_REQUEST', $e->getMessage());
+        }
+
+        $this->assertStringStartsWith(
+            self::AS2_ISSUER . '/authorize',
+            (string) $callback->capturedAuthUrl,
+            'The AS the credentials are bound to must be selected from the list'
+        );
+        $this->assertStringContainsString('client_id=as2-registered-id', (string) $callback->capturedAuthUrl);
+    }
+
+    /**
+     * The pinned issuer of unbound credentials (legacy opt-in mode)
+     * participates in multi-AS selection the same way, so a reordered
+     * authorization_servers list does not spuriously block an instance
+     * that already pinned one of its entries.
+     */
+    public function testPinnedIssuerPreferredInMultiAsList(): void
+    {
+        $resource2 = 'https://api2.example.com/mcp';
+        $callback = $this->makeHaltingCallback();
+        [$client, $mockDiscovery] = $this->createClient(
+            $callback,
+            preRegistered: new ClientCredentials('pre-registered-id', 'secret', 'client_secret_basic'),
+            allowUnbound: true
+        );
+
+        $mockDiscovery->method('discoverResourceMetadata')
+            ->willReturnCallback(fn (string $url) => new ProtectedResourceMetadata(
+                resource: $url,
+                authorizationServers: $url === self::RESOURCE_URL
+                    ? [self::AS1_ISSUER]
+                    : [self::AS2_ISSUER, self::AS1_ISSUER],
+            ));
+        $mockDiscovery->method('discoverAuthorizationServerMetadata')
+            ->willReturnCallback(fn (string $url) => $this->makeAsMetadata($url));
+
+        // First use pins AS1.
+        try {
+            $client->handleUnauthorized(self::RESOURCE_URL, []);
+            $this->fail('Expected the halting callback to abort the flow');
+        } catch (RuntimeException $e) {
+            $this->assertSame('HALT_BEFORE_TOKEN_REQUEST', $e->getMessage());
+        }
+        $this->assertStringStartsWith(self::AS1_ISSUER . '/authorize', (string) $callback->capturedAuthUrl);
+
+        // The second resource lists AS1 too (just not first): AS1 is
+        // selected and the flow proceeds instead of blocking on the pin.
+        try {
+            $client->handleUnauthorized($resource2, []);
+            $this->fail('Expected the halting callback to abort the flow');
+        } catch (RuntimeException $e) {
+            $this->assertSame('HALT_BEFORE_TOKEN_REQUEST', $e->getMessage());
+        }
+        $this->assertStringStartsWith(self::AS1_ISSUER . '/authorize', (string) $callback->capturedAuthUrl);
+    }
+
+    /**
+     * Issuer identifiers are security keys: RFC 8414 requires the issuer
+     * to be compared without normalization, so a binding that differs
+     * only by a default port (or trailing slash, or host case) from the
+     * validated metadata issuer is a MISMATCH, not a match.
+     */
+    public function testIssuerBindingComparisonIsExact(): void
+    {
+        $callback = $this->makeHaltingCallback();
+        [$client, $mockDiscovery] = $this->createClient(
+            $callback,
+            preRegistered: new ClientCredentials(
+                'pre-registered-id',
+                'secret',
+                'client_secret_basic',
+                issuer: 'https://as2.example.com:443'
+            )
+        );
+
+        $mockDiscovery->method('discoverResourceMetadata')
+            ->willReturn(new ProtectedResourceMetadata(
+                resource: self::RESOURCE_URL,
+                authorizationServers: [self::AS2_ISSUER],
+            ));
+        $mockDiscovery->method('discoverAuthorizationServerMetadata')
+            ->willReturn($this->makeAsMetadata(self::AS2_ISSUER));
+
+        try {
+            $client->handleUnauthorized(self::RESOURCE_URL, []);
+            $this->fail('Expected OAuthException');
+        } catch (OAuthException $e) {
+            $this->assertSame(OAuthException::REASON_AUTH_SERVER_MIGRATION, $e->getReasonCode());
+            $this->assertStringContainsString('https://as2.example.com:443', $e->getMessage());
+            $this->assertStringContainsString(self::AS2_ISSUER, $e->getMessage());
+        }
+
+        $this->assertNull($callback->capturedAuthUrl ?? null);
+    }
+
+    /**
+     * AUTH_METHOD_AUTO resolution rebuilds the credentials with the
+     * negotiated method; the issuer binding must survive that rebuild.
+     */
+    public function testAutoMethodResolutionPreservesIssuerBinding(): void
+    {
+        $callback = $this->makeHaltingCallback();
+        [$client] = $this->createClient($callback);
+
+        $method = new \ReflectionMethod(OAuthClient::class, 'resolveAuthMethodFromMetadata');
+        $method->setAccessible(true);
+
+        $resolved = $method->invoke(
+            $client,
+            new ClientCredentials(
+                'pre-registered-id',
+                'secret',
+                ClientCredentials::AUTH_METHOD_AUTO,
+                issuer: self::AS1_ISSUER
+            ),
+            new AuthorizationServerMetadata(
+                issuer: self::AS1_ISSUER,
+                authorizationEndpoint: self::AS1_ISSUER . '/authorize',
+                tokenEndpoint: self::AS1_ISSUER . '/token',
+                tokenEndpointAuthMethodsSupported: ['client_secret_basic'],
+            )
+        );
+
+        $this->assertInstanceOf(ClientCredentials::class, $resolved);
+        $this->assertSame(ClientCredentials::AUTH_METHOD_CLIENT_SECRET_BASIC, $resolved->tokenEndpointAuthMethod);
+        $this->assertSame(self::AS1_ISSUER, $resolved->issuer);
     }
 }

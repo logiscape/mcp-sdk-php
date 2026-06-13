@@ -58,13 +58,27 @@ class ClientCredentials
      *        client authentication (RFC 7523)
      * @param string|null $signingAlgorithm JWS algorithm for private_key_jwt client
      *        assertions (e.g. 'ES256', 'RS256')
+     * @param string|null $issuer Issuer identifier of the authorization server
+     *        these credentials are registered with. The MCP spec's
+     *        Authorization Server Binding rule requires pre-registered
+     *        credentials to be keyed by issuer and never presented to a
+     *        different authorization server; setting this makes the
+     *        OAuthClient enforce that durably, including across PHP
+     *        processes. Leaving it null is rejected by default — the
+     *        OAuthClient refuses the credentials before any authorization
+     *        or token request — unless
+     *        OAuthConfiguration::$allowUnboundClientCredentials is enabled,
+     *        which restores the legacy behavior of pinning the credentials
+     *        to the first issuer they are validated against, for the
+     *        lifetime of the OAuthClient instance only.
      */
     public function __construct(
         public readonly string $clientId,
         public readonly ?string $clientSecret = null,
         public readonly string $tokenEndpointAuthMethod = self::AUTH_METHOD_CLIENT_SECRET_POST,
         public readonly ?string $privateKeyPem = null,
-        public readonly ?string $signingAlgorithm = null
+        public readonly ?string $signingAlgorithm = null,
+        public readonly ?string $issuer = null
     ) {
     }
 

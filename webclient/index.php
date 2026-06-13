@@ -66,6 +66,11 @@ function buildPrefill(array $cfg): array
             'hasClientId' => !empty($oauth['clientId'])
                 || !empty($oauth['credentials']['clientId']),
             'hasStoredCredentials' => !empty($oauth['credentials']),
+            // The issuer is the authorization server's public URL, not a
+            // secret, so it round-trips through the prefill like the URL.
+            'issuer' => (string)($oauth['issuer'] ?? $oauth['credentials']['issuer'] ?? ''),
+            // Non-secret toggle: round-trip so the legacy checkbox restores.
+            'allowUnbound' => !empty($oauth['allowUnbound']),
         ];
     }
     return $prefill;
@@ -203,6 +208,18 @@ $base = $base === '/' || $base === '\\' ? '' : rtrim(str_replace('\\', '/', $bas
                                         <div class="col-md-6">
                                             <label for="field-oauth-client-secret" class="form-label">Client Secret (optional)</label>
                                             <input type="password" class="form-control" id="field-oauth-client-secret">
+                                        </div>
+                                        <div class="col-12">
+                                            <label for="field-oauth-issuer" class="form-label">Authorization Server Issuer (required with a Client ID)</label>
+                                            <input type="url" class="form-control" id="field-oauth-issuer" placeholder="https://auth.example.com">
+                                            <div class="form-text">The authorization server your client was registered with. Pre-registered credentials are only ever presented to this issuer. Required when you supply a Client ID, unless you enable the legacy option below.</div>
+                                        </div>
+                                        <div class="col-12">
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" id="field-oauth-allow-unbound">
+                                                <label class="form-check-label" for="field-oauth-allow-unbound">Allow unbound credentials (legacy)</label>
+                                                <div class="form-text text-warning-emphasis">Legacy compatibility only. Lets a Client ID be used without an issuer, pinning it to the first authorization server discovered per request. On per-request hosting (PHP-FPM) the pin does not persist, so a hostile server could receive your credentials. Leave off and set the issuer above unless you specifically need the older behavior.</div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>

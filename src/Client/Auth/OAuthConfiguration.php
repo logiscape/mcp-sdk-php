@@ -43,7 +43,11 @@ class OAuthConfiguration
     /**
      * Create OAuth configuration.
      *
-     * @param ClientCredentials|null $clientCredentials Pre-registered client credentials
+     * @param ClientCredentials|null $clientCredentials Pre-registered client credentials.
+     *        Set ClientCredentials::$issuer to the authorization server they were
+     *        registered with — the spec requires pre-registered credentials to be
+     *        keyed by issuer, and the binding is what lets the client refuse to
+     *        present them to a different authorization server across PHP processes.
      * @param TokenStorageInterface|null $tokenStorage Token persistence storage.
      *        NOTE: Default MemoryTokenStorage only persists tokens for the PHP
      *        process lifetime. For web applications, use FileTokenStorage instead.
@@ -76,6 +80,15 @@ class OAuthConfiguration
      *        IdP followed by an RFC 7523 jwt-bearer grant at the authorization server, instead
      *        of the interactive authorization code flow. Requires pre-registered
      *        clientCredentials for the authorization server.
+     * @param bool $allowUnboundClientCredentials Accept pre-registered clientCredentials that
+     *        have no ClientCredentials::$issuer binding. The 2026-07-28 draft's Authorization
+     *        Server Binding rule requires pre-registered credentials to be keyed by the issuer
+     *        that registered them, so by default unbound credentials are rejected with an
+     *        actionable error before any authorization or token request. Setting this true
+     *        restores the published-spec (2025-11-25) behavior: the credentials are pinned to
+     *        the first validated issuer for the lifetime of the OAuthClient instance (with a
+     *        warning logged) — note the pin cannot protect a fresh process, e.g. each PHP-FPM
+     *        request starts unpinned. Default false.
      */
     public function __construct(
         private ?ClientCredentials $clientCredentials = null,
@@ -94,6 +107,7 @@ class OAuthConfiguration
         private bool $enableLegacyOAuthFallback = false,
         private bool $useClientCredentialsGrant = false,
         private ?CrossAppAccessConfiguration $crossAppAccess = null,
+        private bool $allowUnboundClientCredentials = false,
     ) {
         if ($tokenStorage === null) {
             // Warn about MemoryTokenStorage in web contexts
@@ -116,6 +130,15 @@ class OAuthConfiguration
     public function getClientCredentials(): ?ClientCredentials
     {
         return $this->clientCredentials;
+    }
+
+    /**
+     * Whether pre-registered credentials without an issuer binding are
+     * accepted (legacy 2025-11-25 compatibility) instead of rejected.
+     */
+    public function allowsUnboundClientCredentials(): bool
+    {
+        return $this->allowUnboundClientCredentials;
     }
 
     /**

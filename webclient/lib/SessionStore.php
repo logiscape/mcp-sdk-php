@@ -279,7 +279,7 @@ final class SessionStore
      * callback exchange so `buildOAuthConfiguration()` can feed them to every
      * subsequent `OAuthConfiguration` instance that drives token refresh.
      *
-     * @param array{clientId: string, clientSecret: ?string, tokenEndpointAuthMethod: string} $credentials
+     * @param array{clientId: string, clientSecret: ?string, tokenEndpointAuthMethod: string, issuer: string} $credentials
      */
     public function rememberClientCredentials(array $credentials): void
     {
@@ -423,6 +423,12 @@ final class SessionStore
         if (!empty($oauth['clientSecret'])) {
             $out['clientSecret'] = (string)$oauth['clientSecret'];
         }
+        if (!empty($oauth['issuer'])) {
+            $out['issuer'] = (string)$oauth['issuer'];
+        }
+        if (!empty($oauth['allowUnbound'])) {
+            $out['allowUnbound'] = true;
+        }
         if (!empty($oauth['credentials']) && is_array($oauth['credentials'])) {
             $out['credentials'] = $oauth['credentials'];
         }
@@ -481,13 +487,15 @@ final class SessionStore
             $credentials = new ClientCredentials(
                 (string)$stored['clientId'],
                 isset($stored['clientSecret']) ? (string)$stored['clientSecret'] : null,
-                (string)($stored['tokenEndpointAuthMethod'] ?? ClientCredentials::AUTH_METHOD_AUTO)
+                (string)($stored['tokenEndpointAuthMethod'] ?? ClientCredentials::AUTH_METHOD_AUTO),
+                issuer: isset($stored['issuer']) ? (string)$stored['issuer'] : null
             );
         } elseif (!empty($oauth['clientId'])) {
             $credentials = new ClientCredentials(
                 (string)$oauth['clientId'],
                 isset($oauth['clientSecret']) ? (string)$oauth['clientSecret'] : null,
-                ClientCredentials::AUTH_METHOD_AUTO
+                ClientCredentials::AUTH_METHOD_AUTO,
+                issuer: !empty($oauth['issuer']) ? (string)$oauth['issuer'] : null
             );
         }
 
@@ -502,6 +510,14 @@ final class SessionStore
             tokenStorage: $tokenStorage,
             authCallback: $callback,
             verifyTls: (bool)($config['verifyTls'] ?? true),
+            // Strict by default: a Client ID without an issuer is rejected,
+            // matching the SDK's spec-aligned default. The legacy
+            // per-request pinning behavior is only restored when the user
+            // explicitly ticks the clearly-warned "Allow unbound
+            // credentials (legacy)" box on the connection form. Irrelevant
+            // when the issuer is set — bound credentials are always
+            // strictly enforced regardless of this flag.
+            allowUnboundClientCredentials: !empty($oauth['allowUnbound']),
         );
     }
 

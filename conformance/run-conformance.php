@@ -21,9 +21,9 @@
  *   php conformance/run-conformance.php client        # Run client tests only
  *   php conformance/run-conformance.php server <scenario>  # Run a single server scenario
  *   php conformance/run-conformance.php client <scenario>  # Run a single client scenario
- *   php conformance/run-conformance.php draft          # Run both server and client draft-suite tests
+ *   php conformance/run-conformance.php draft          # Run both server and client draft tests (suite + baselined scenarios the suite omits)
  *   php conformance/run-conformance.php server-draft   # Draft server tests only
- *   php conformance/run-conformance.php client-draft   # Draft client tests only
+ *   php conformance/run-conformance.php client-draft   # Draft client tests (suite + baselined scenarios the suite omits)
  *   php conformance/run-conformance.php server-draft <scenario>  # Single draft server scenario
  *   php conformance/run-conformance.php client-draft <scenario>  # Single draft client scenario
  *
@@ -56,6 +56,19 @@ $verbose = ($_SERVER['CONFORMANCE_VERBOSE'] ?? getenv('CONFORMANCE_VERBOSE') ?: 
 // Client suites: all (default), core, extensions, auth, metadata, sep-835
 $serverSuite = $_SERVER['CONFORMANCE_SERVER_SUITE'] ?? getenv('CONFORMANCE_SERVER_SUITE') ?: 'active';
 $clientSuite = $_SERVER['CONFORMANCE_CLIENT_SUITE'] ?? getenv('CONFORMANCE_CLIENT_SUITE') ?: 'all';
+
+// Draft client scenarios that carry a conformance-draft-baseline.yml entry
+// but are NOT selected by `--suite draft` (the draft suite only includes
+// scenarios tagged exclusively DRAFT-2026-v1; auth/pre-registration is tagged
+// [2025-11-25, DRAFT-2026-v1], so it lands in the stable suite's namespace,
+// not the draft one). The conformance tool only evaluates the baseline against
+// scenarios it actually runs, so without an explicit run these entries are
+// never checked — a stale entry (upstream fixes the scenario, or adds the
+// missing issuer context) would pass CI silently. The aggregate `draft` and
+// `client-draft` gates run each of these explicitly after the suite. Keep this
+// list in sync with the draft baseline's client entries that fall outside the
+// draft suite; re-check at every draft-pin bump.
+const DRAFT_CLIENT_EXTRA_SCENARIOS = ['auth/pre-registration'];
 
 $conformanceDir = __DIR__;
 $projectDir = dirname($conformanceDir);
@@ -112,12 +125,12 @@ switch ($mode) {
 
     case 'client-draft':
         $conformanceCmd = resolveConformanceTool($projectDir, 'conformance-draft');
-        exit(runClientTests('draft', $scenario, $verbose, $draftBaseline, $clientScript, $phpBinary, $conformanceCmd));
+        exit(runClientDraftTests($scenario, $verbose, $draftBaseline, $clientScript, $phpBinary, $conformanceCmd));
 
     case 'draft':
         $conformanceCmd = resolveConformanceTool($projectDir, 'conformance-draft');
         $serverExit = runServerTests($port, 'draft', $scenario, $verbose, $draftBaseline, $serverScript, $phpBinary, $conformanceCmd, $serverProcess);
-        $clientExit = runClientTests('draft', $scenario, $verbose, $draftBaseline, $clientScript, $phpBinary, $conformanceCmd);
+        $clientExit = runClientDraftTests($scenario, $verbose, $draftBaseline, $clientScript, $phpBinary, $conformanceCmd);
         exit($serverExit !== 0 ? $serverExit : $clientExit);
 
     default:
@@ -317,6 +330,14 @@ function runClientTests(
     // escaped once when passed as --command to the conformance tool below.
     $clientCommand = "$phpBinary $clientScript";
 
+    // Tell the everything-client which track it is validating. The draft
+    // track runs the SDK's spec-aligned defaults (e.g. mandatory issuer
+    // binding for pre-registered credentials); the stable track opts into
+    // the published-spec legacy behaviors those scenarios assume.
+    if ($suite === 'draft') {
+        $clientCommand .= ' --track=draft';
+    }
+
     $cmd = sprintf(
         '%s client --command %s --expected-failures %s',
         $conformanceCmd,
@@ -335,6 +356,41 @@ function runClientTests(
     }
 
     passthru($cmd, $exitCode);
+
+    return $exitCode;
+}
+
+/**
+ * Run the draft client gate: the draft suite, plus every baselined scenario
+ * the suite omits (DRAFT_CLIENT_EXTRA_SCENARIOS), so those baseline entries
+ * are actually evaluated and a stale entry fails CI instead of going unnoticed.
+ *
+ * A single explicit scenario request (e.g. `client-draft auth/pre-registration`)
+ * runs only that scenario and skips the extras — the caller asked for one thing.
+ * The aggregate run (no scenario) returns the first non-zero exit code across
+ * the suite and the extras, so any regression or stale entry propagates.
+ */
+function runClientDraftTests(
+    ?string $scenario,
+    bool $verbose,
+    string $baseline,
+    string $clientScript,
+    string $phpBinary,
+    string $conformanceCmd
+): int {
+    if ($scenario !== null) {
+        return runClientTests('draft', $scenario, $verbose, $baseline, $clientScript, $phpBinary, $conformanceCmd);
+    }
+
+    $exitCode = runClientTests('draft', null, $verbose, $baseline, $clientScript, $phpBinary, $conformanceCmd);
+
+    foreach (DRAFT_CLIENT_EXTRA_SCENARIOS as $extraScenario) {
+        echo "\n=== Running draft-baselined client scenario omitted by the draft suite: $extraScenario ===\n";
+        $extraExit = runClientTests('draft', $extraScenario, $verbose, $baseline, $clientScript, $phpBinary, $conformanceCmd);
+        if ($extraExit !== 0 && $exitCode === 0) {
+            $exitCode = $extraExit;
+        }
+    }
 
     return $exitCode;
 }

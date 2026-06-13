@@ -111,7 +111,8 @@ try {
         clientCredentials: new ClientCredentials(
             $authRequest->clientId,
             $authRequest->clientSecret,
-            $authRequest->tokenEndpointAuthMethod
+            $authRequest->tokenEndpointAuthMethod,
+            issuer: $authRequest->issuer
         ),
         tokenStorage: $tokenStorage,
         verifyTls: $verifyTls,
@@ -130,6 +131,10 @@ try {
             'clientId' => $authRequest->clientId,
             'clientSecret' => $authRequest->clientSecret,
             'tokenEndpointAuthMethod' => $authRequest->tokenEndpointAuthMethod,
+            // Authorization Server Binding: the credentials belong to the
+            // issuer this flow ran against; persisting it keeps the binding
+            // enforceable on later (separate-process) requests.
+            'issuer' => $authRequest->issuer,
         ];
         $store->storePendingOauth($state, [
             'serverConfig' => $serverConfig,

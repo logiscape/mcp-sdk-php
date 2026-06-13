@@ -731,10 +731,13 @@ $callbackHandler = new LoopbackCallbackHandler(
 
 // Register an OAuth client with your authorization server out of band, then
 // supply the issued client_id (and client_secret if it gave you one) here.
+// `issuer` names the authorization server the credentials were registered
+// with; the SDK refuses to present them to any other server.
 $credentials = new ClientCredentials(
     clientId: 'my-mcp-cli',
     clientSecret: 'super-secret-string',
     tokenEndpointAuthMethod: ClientCredentials::AUTH_METHOD_AUTO,
+    issuer: 'https://auth.example.com',
 );
 
 $oauthConfig = new OAuthConfiguration(
@@ -767,6 +770,7 @@ $client->close();
 A few things to note:
 
 - **`AUTH_METHOD_AUTO` is usually the right choice.** It lets the SDK pick `client_secret_post`, `client_secret_basic`, or `none` based on the authorization server's metadata. Override it explicitly only if you have a specific reason.
+- **`issuer` is required on pre-registered credentials.** Credentials belong to exactly one authorization server, and the spec requires clients to key them by issuer. With `issuer` set, the SDK raises a clear error — instead of leaking your `client_id`/`client_secret` — if the MCP server's metadata ever points at a different authorization server (a migration, or a hostile server). By default the SDK rejects pre-registered credentials that omit it. If you must interoperate with a setup where the issuer genuinely isn't known in advance, set `OAuthConfiguration::$allowUnboundClientCredentials` to `true` to restore the older published-spec (2025-11-25) behavior: the credentials are pinned to the first authorization server discovery validates, but only for the current PHP process — the pin cannot protect the next request on per-request runtimes like PHP-FPM.
 - **Always use `FileTokenStorage` outside of trivial scripts.** The default `MemoryTokenStorage` only persists tokens for the lifetime of the PHP process, so the next run would re-prompt the user.
 - **Encrypt token files.** Pass an encryption secret to `FileTokenStorage` so a dropped backup or rogue cron job can't lift refresh tokens off disk. The cipher is AES-256-GCM with a SHA-256-derived key.
 - **Auto-refresh is on by default.** When `OAuthConfiguration::$autoRefresh` is `true` (the default) the SDK refreshes tokens within `refreshBuffer` seconds (default 60) of expiry, transparently to your code.
@@ -974,12 +978,14 @@ $tokenStorage = new FileTokenStorage(
     encryptionSecret: getenv('TOKEN_ENC_SECRET'),
 );
 
-// Build a minimal config just for the code exchange.
+// Build a minimal config just for the code exchange. The AuthorizationRequest
+// recorded which issuer the flow ran against; carry it onto the credentials.
 $oauthConfig = new OAuthConfiguration(
     clientCredentials: new ClientCredentials(
         clientId: $authRequest->clientId,
         clientSecret: $authRequest->clientSecret,
         tokenEndpointAuthMethod: $authRequest->tokenEndpointAuthMethod,
+        issuer: $authRequest->issuer,
     ),
     tokenStorage: $tokenStorage,
 );

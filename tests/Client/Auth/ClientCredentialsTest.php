@@ -46,6 +46,24 @@ final class ClientCredentialsTest extends TestCase
     }
 
     /**
+     * The issuer binding (Authorization Server Binding rule) is optional
+     * and defaults to unbound; when set it is retained verbatim.
+     */
+    public function testIssuerBindingDefaultsToNullAndIsRetained(): void
+    {
+        $unbound = new ClientCredentials(clientId: 'my-client');
+        $this->assertNull($unbound->issuer);
+
+        $bound = new ClientCredentials(
+            clientId: 'my-client',
+            clientSecret: 'my-secret',
+            tokenEndpointAuthMethod: ClientCredentials::AUTH_METHOD_CLIENT_SECRET_BASIC,
+            issuer: 'https://auth.example.com'
+        );
+        $this->assertSame('https://auth.example.com', $bound->issuer);
+    }
+
+    /**
      * Test confidential client with client_secret_post.
      */
     public function testConfidentialClientSecretPost(): void

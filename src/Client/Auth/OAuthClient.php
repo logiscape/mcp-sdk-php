@@ -78,16 +78,19 @@ class OAuthClient implements OAuthClientInterface
     private array $clientCredentialsCache = [];
 
     /**
-     * Pre-registered credential migrations blocked for this client instance.
+     * Issuer the UNBOUND pre-registered credentials are pinned to.
      *
-     * The old bearer tokens are deleted immediately, but this marker keeps a
-     * retried challenge from silently reusing credentials bound to the old
-     * issuer. A fresh OAuthClient/configuration is required after credentials
-     * for the new issuer are provisioned.
-     *
-     * @var array<string, string> Resource URL => previous issuer
+     * The spec's Authorization Server Binding rule requires pre-registered
+     * credentials to be keyed by issuer (ClientCredentials::$issuer). When
+     * the operator did not supply that binding, the credentials are pinned
+     * here to the first issuer they are validated against — either the
+     * first authorization server they are used with, or the issuer
+     * recorded on stored tokens when a migration is detected — so this
+     * instance can never silently present them to a different issuer.
+     * Bound credentials ignore this; their configured issuer is durable
+     * across processes and is enforced instead.
      */
-    private array $blockedPreRegisteredMigrations = [];
+    private ?string $pinnedPreRegisteredIssuer = null;
 
     /**
      * Set of authorization server URLs that were derived via the MCP 2025-03-26
@@ -135,8 +138,7 @@ class OAuthClient implements OAuthClientInterface
         // server. Re-fetch the Protected Resource Metadata instead of trusting
         // the in-memory cache so an authorization_servers change is observed.
         $storedTokens = $this->config->getTokenStorage()->retrieve($resourceUrl);
-        $migrationKey = $this->migrationKey($resourceUrl);
-        if ($storedTokens !== null || isset($this->blockedPreRegisteredMigrations[$migrationKey])) {
+        if ($storedTokens !== null) {
             unset($this->resourceMetadataCache[$resourceUrl]);
         }
 
@@ -152,11 +154,12 @@ class OAuthClient implements OAuthClientInterface
 
         // SEP-2352: detect an authorization server migration. Tokens and
         // client credentials are bound to the issuer that produced them and
-        // MUST NOT be presented to a different authorization server.
+        // MUST NOT be presented to a different authorization server. (The
+        // issuer binding on pre-registered credentials is enforced
+        // independently in getClientCredentials(), so a migration is caught
+        // even when no stored tokens witness the previous issuer.)
         if ($storedTokens !== null) {
             $this->handleIssuerChangeIfAny($resourceUrl, $storedTokens, $authServerMetadata);
-        } else {
-            $this->enforceBlockedMigrationIfAny($resourceUrl, $authServerMetadata);
         }
 
         // Step 4: Determine scopes to request (per MCP spec)
@@ -239,10 +242,13 @@ class OAuthClient implements OAuthClientInterface
      *
      *   - Stored tokens are discarded immediately (they are bound to the old
      *     AS and must not continue to be presented after migration is known).
-     *   - Pre-registered credentials cannot be assumed valid at the new AS;
-     *     since they were established with the previous server, reusing them
-     *     would leak the old client identity, so a clear error is raised and
-     *     an in-memory marker keeps retries blocked after token deletion.
+     *   - Pre-registered credentials bound to the NEW issuer mean the
+     *     operator has already remediated: the flow proceeds at the new AS
+     *     with its own credentials.
+     *   - Pre-registered credentials bound to any other issuer — explicitly,
+     *     by an earlier pin, or by the token evidence for unbound
+     *     credentials (which get pinned to the previous issuer here) — raise
+     *     a clear error instead of being presented to the new server.
      *   - Cached dynamic client credentials remain keyed by the OLD issuer,
      *     so the new issuer naturally triggers a fresh registration — the old
      *     client_id is never presented to the new authorization server.
@@ -273,39 +279,27 @@ class OAuthClient implements OAuthClientInterface
         $this->config->getTokenStorage()->remove($resourceUrl);
 
         // Pre-registered credentials are bound to the AS they were registered
-        // with. Spec (SEP-2352): credentials MUST NOT be reused across
-        // authorization servers. Preserve the old issuer separately so retries
-        // stay blocked without retaining a rejected bearer token.
-        if ($this->config->hasClientCredentials()) {
-            $this->blockedPreRegisteredMigrations[$this->migrationKey($resourceUrl)] = $previousIssuer;
-            $this->throwMigrationBlocked($resourceUrl, $previousIssuer, $authServerMetadata->issuer);
-        }
-    }
-
-    /**
-     * Keep a pre-registered migration blocked after the old tokens were
-     * deleted. If discovery points back to the original issuer, the migration
-     * has reverted and the marker can be cleared.
-     */
-    private function enforceBlockedMigrationIfAny(
-        string $resourceUrl,
-        AuthorizationServerMetadata $authServerMetadata
-    ): void {
-        $migrationKey = $this->migrationKey($resourceUrl);
-        $previousIssuer = $this->blockedPreRegisteredMigrations[$migrationKey] ?? null;
-        if ($previousIssuer === null) {
+        // with (spec, Authorization Server Binding: credentials MUST be keyed
+        // by issuer and MUST NOT be reused across authorization servers).
+        $credentials = $this->config->getClientCredentials();
+        if ($credentials === null) {
             return;
         }
-        if ($this->urlsMatch($previousIssuer, $authServerMetadata->issuer)) {
-            unset($this->blockedPreRegisteredMigrations[$migrationKey]);
+        $boundIssuer = $credentials->issuer ?? $this->pinnedPreRegisteredIssuer;
+        if ($boundIssuer === $authServerMetadata->issuer) {
+            // The configured credentials already belong to the new issuer
+            // (compared without normalization, RFC 8414) — the operator
+            // remediated the migration. The old tokens are gone; the grant
+            // flow proceeds at the new AS with its own credentials.
             return;
         }
-        $this->throwMigrationBlocked($resourceUrl, $previousIssuer, $authServerMetadata->issuer);
-    }
-
-    private function migrationKey(string $resourceUrl): string
-    {
-        return rtrim($resourceUrl, '/');
+        if ($credentials->issuer === null && $this->pinnedPreRegisteredIssuer === null) {
+            // Unbound credentials: the stored tokens are the only witness of
+            // the issuer they were used with. Pin them to it so retries in
+            // this instance stay blocked after the tokens are deleted.
+            $this->pinnedPreRegisteredIssuer = $previousIssuer;
+        }
+        $this->throwMigrationBlocked($resourceUrl, $boundIssuer ?? $previousIssuer, $authServerMetadata->issuer);
     }
 
     /**
@@ -318,9 +312,10 @@ class OAuthClient implements OAuthClientInterface
     ): never {
         throw OAuthException::authServerMigrationBlocked(
             "The authorization server for {$resourceUrl} changed from "
-            . "{$previousIssuer} to {$newIssuer}, but pre-registered "
-            . 'client credentials were configured for the previous server. '
-            . 'Obtain credentials registered with the new authorization server.'
+            . "{$previousIssuer} to {$newIssuer}, but the pre-registered "
+            . 'client credentials are bound to the previous server. Obtain '
+            . 'credentials registered with the new authorization server and '
+            . "configure them with issuer '{$newIssuer}'."
         );
     }
 
@@ -600,7 +595,8 @@ class OAuthClient implements OAuthClientInterface
         $credentials = new ClientCredentials(
             clientId: $request->clientId,
             clientSecret: $request->clientSecret,
-            tokenEndpointAuthMethod: $request->tokenEndpointAuthMethod
+            tokenEndpointAuthMethod: $request->tokenEndpointAuthMethod,
+            issuer: $request->issuer
         );
 
         // Build token request parameters
@@ -711,6 +707,13 @@ class OAuthClient implements OAuthClientInterface
      * falling back to the configured authorizationServerUrl if the
      * metadata has no authorization_servers entries.
      *
+     * Selection among multiple advertised authorization servers lies with
+     * the client (RFC 9728 §7.6): when the pre-registered credentials are
+     * bound (or pinned) to an issuer that appears in the list, that entry
+     * is selected — the spec's "use pre-registered client information if
+     * available" priority — instead of the first entry, which the binding
+     * guard would otherwise have to reject.
+     *
      * @param ProtectedResourceMetadata $resourceMetadata Discovered or synthetic resource metadata
      * @return string The authorization server URL
      * @throws OAuthException If no authorization server is available from any source
@@ -718,6 +721,18 @@ class OAuthClient implements OAuthClientInterface
     private function resolveAuthorizationServer(
         ProtectedResourceMetadata $resourceMetadata
     ): string {
+        $boundIssuer = $this->config->getClientCredentials()?->issuer
+            ?? $this->pinnedPreRegisteredIssuer;
+        if ($boundIssuer !== null
+            && $this->config->hasClientCredentials()
+            && in_array($boundIssuer, $resourceMetadata->authorizationServers, true)
+        ) {
+            $this->logger->debug('Selected the authorization server the pre-registered credentials are bound to', [
+                'issuer' => $boundIssuer,
+            ]);
+            return $boundIssuer;
+        }
+
         $authServerUrl = $resourceMetadata->getPrimaryAuthorizationServer();
 
         if ($authServerUrl !== null) {
@@ -978,6 +993,13 @@ class OAuthClient implements OAuthClientInterface
         if ($this->config->hasClientCredentials()) {
             $credentials = $this->config->getClientCredentials();
 
+            // Authorization Server Binding (spec MUST): pre-registered
+            // credentials are keyed by issuer and never presented to a
+            // different authorization server. Enforced here — after issuer
+            // validation, before any authorization or token request — so it
+            // covers every grant flow.
+            $this->assertPreRegisteredCredentialsMatchIssuer($credentials, $issuer);
+
             // When the caller explicitly opted into auto-discovery of the auth
             // method (AUTH_METHOD_AUTO), resolve it from AS metadata.
             if ($credentials->tokenEndpointAuthMethod === ClientCredentials::AUTH_METHOD_AUTO) {
@@ -1037,6 +1059,61 @@ class OAuthClient implements OAuthClientInterface
     }
 
     /**
+     * Enforce the Authorization Server Binding rule on pre-registered
+     * credentials: they belong to exactly one issuer and are never presented
+     * to another.
+     *
+     * Bound credentials (ClientCredentials::$issuer set) are checked against
+     * the validated issuer discovery selected — the binding lives in
+     * configuration, so it holds across PHP processes. Unbound credentials
+     * are rejected by default (the binding rule is a spec MUST and cannot be
+     * enforced without an issuer); with the explicit
+     * OAuthConfiguration::$allowUnboundClientCredentials legacy opt-in they
+     * are instead pinned to the first validated issuer they are used with
+     * in this instance — the published 2025-11-25 behavior, which cannot
+     * outlive the process.
+     *
+     * @param ClientCredentials $credentials The configured pre-registered credentials
+     * @param string $issuer The validated issuer about to receive them
+     * @throws OAuthException When the credentials are bound to a different issuer,
+     *         or are unbound without the legacy opt-in
+     */
+    private function assertPreRegisteredCredentialsMatchIssuer(
+        ClientCredentials $credentials,
+        string $issuer
+    ): void {
+        // Strict mode keys off the credentials' own issuer, never the pin:
+        // a pin derived from stored-token evidence must not let unbound
+        // credentials through when the configuration requires a binding.
+        if ($credentials->issuer === null && !$this->config->allowsUnboundClientCredentials()) {
+            throw OAuthException::unboundClientCredentials($issuer);
+        }
+
+        $boundIssuer = $credentials->issuer ?? $this->pinnedPreRegisteredIssuer;
+        if ($boundIssuer === null) {
+            $this->pinnedPreRegisteredIssuer = $issuer;
+            $this->logger->warning(
+                'Pre-registered credentials have no configured issuer; pinned to the first '
+                . 'validated issuer for this process only. Set ClientCredentials::$issuer '
+                . 'to enforce the binding across requests.',
+                ['issuer' => $issuer]
+            );
+            return;
+        }
+        // Issuer identifiers are compared without normalization (RFC 8414):
+        // a binding that differs even by a default port or trailing slash
+        // names a different issuer.
+        if ($boundIssuer !== $issuer) {
+            throw OAuthException::authServerMigrationBlocked(
+                "Pre-registered client credentials are bound to authorization server "
+                . "{$boundIssuer}, but discovery selected {$issuer}. Credentials must "
+                . 'not be reused across authorization servers; obtain credentials '
+                . "registered with {$issuer} and configure them with that issuer."
+            );
+        }
+    }
+
+    /**
      * Resolve the token endpoint auth method from AS metadata for
      * credentials that opted into auto-discovery (AUTH_METHOD_AUTO).
      *
@@ -1065,7 +1142,8 @@ class OAuthClient implements OAuthClientInterface
                     return new ClientCredentials(
                         $credentials->clientId,
                         $credentials->clientSecret,
-                        $method
+                        $method,
+                        issuer: $credentials->issuer
                     );
                 }
             }
@@ -1076,7 +1154,8 @@ class OAuthClient implements OAuthClientInterface
             return new ClientCredentials(
                 $credentials->clientId,
                 $credentials->clientSecret,
-                ClientCredentials::AUTH_METHOD_NONE
+                ClientCredentials::AUTH_METHOD_NONE,
+                issuer: $credentials->issuer
             );
         }
 

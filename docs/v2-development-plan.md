@@ -638,12 +638,9 @@ pre-registered-credentials migration block was single-shot: it discarded
 the stored tokens — whose recorded issuer was what armed migration
 detection — before throwing, so a retried 401 found no tokens, skipped
 the guard, and silently presented the old credentials to the new AS; the
-old issuer is now retained in an in-process migration marker, keeping
-retries within the client instance blocked while the rejected bearer
-tokens are discarded immediately (per-instance only — the `2026-07-28`
-draft's Authorization Server Binding section requires credentials keyed
-by issuer, so durable cross-process binding via issuer-bound
-pre-registered credentials is a planned follow-up). (3) The 403
+fixed first with an in-process migration marker, then superseded in the
+same review cycle by spec-model issuer binding (see the credential
+binding round below). (3) The 403
 `insufficient_scope` path had no SEP-2352 guard
 at all; it now busts the PRM cache and runs the same
 issuer-change check as the 401 path before any grant flow, closing the
@@ -663,6 +660,132 @@ execute and pass in the scope step-up scenarios (`auth/scope-step-up`
 21→23, `auth/scope-retry-limit` 22→26), exercised by the 403-path
 discovery re-fetch that fix (3) added; draft track unchanged at the two
 documented upstream-tool baseline entries.
+**Credential binding round (2026-06-12):** the in-process migration
+marker from review fix (2) was a workaround for a missing data-model
+concept the `2026-07-28` draft makes normative (Authorization Server
+Binding, client-registration page): clients using pre-registered
+credentials "MUST associate those credentials with the specific
+authorization server that issued them, keyed by the authorization
+server's `issuer` identifier", MUST NOT reuse them across authorization
+servers, and SHOULD surface an error when PRM points at a different
+issuer than the one the credentials were registered with. Implemented
+directly: `ClientCredentials` gains a trailing optional `issuer`
+binding, enforced in `OAuthClient::getClientCredentials()` after RFC
+8414 issuer validation and before every grant flow (authorization code,
+refresh, client_credentials, cross-app access) — so bound credentials
+are blocked from a migrated/hostile AS even in a fresh PHP process with
+no stored tokens, and the block self-heals once the operator configures
+credentials bound to the new issuer (no manual token-storage cleanup).
+Unbound (legacy) credentials are pinned to the first validated issuer
+per OAuthClient instance — from first use, or from the stored tokens'
+issuer when `handleIssuerChangeIfAny()` detects a migration — replacing
+the marker entirely; unbound mode remains supported because the
+conformance harness supplies pre-registered credentials without issuer
+context (the AS issuer is a runtime-chosen localhost port), and
+hard-rejecting unbound credentials would force a conformance-client
+workaround. `AuthorizationRequest::$issuer` is carried onto rebuilt
+credentials (code exchange, AUTH_METHOD_AUTO resolution), the webclient
+persists the issuer alongside captured credentials, and
+`docs/client-dev.md` documents the binding. Verified: `composer check`
+green (1154 tests, 6 new — cross-process block without stored tokens,
+matching-issuer pass-through, remediation self-healing, first-use
+pinning across resources, AUTO-resolution binding preservation, issuer
+field defaults); stable conformance 40 server + 325 client, zero
+failures, baselines empty (`auth/pre-registration`,
+`auth/token-endpoint-auth-*`, and cross-app scenarios exercise the
+unbound pinning path); draft track unchanged at the two documented
+upstream-tool baseline entries, `auth/authorization-server-migration`
+28/28.
+**Binding review round (2026-06-12):** a follow-up review of the
+credential binding raised three findings; all three were verified
+against the code and addressed with red-first regression tests. (1)
+Issuer *binding* comparisons used `urlsMatch()` normalization
+(scheme/host case folding, default-port and trailing-slash stripping),
+but RFC 8414 §3.3 requires the issuer to be byte-identical — binding
+enforcement and the remediation carve-out now compare with exact
+code-point equality, while `urlsMatch()` deliberately remains in
+token-based migration *detection* only, where normalization can only
+suppress a false migration alarm, never grant a mismatched issuer
+access. (2) Multi-AS selection ignored the binding:
+`resolveAuthorizationServer()` always took `authorization_servers[0]`
+and the binding check then rejected the connection even when the bound
+issuer appeared later in the list — the resolver now prefers the bound
+(or pinned) issuer when it appears anywhere in the PRM list, per RFC
+9728 §7.6 which assigns AS selection to the client. (3) The unbound
+pinning trade-off (each PHP-FPM request starts unbound) is retained for
+the documented conformance-harness reason, but is now louder and
+narrower: the pin logs a warning recommending
+`ClientCredentials::$issuer`, and the webclient reference collects an
+optional issuer on the connection form (round-tripped through the
+redacted prefill — the issuer is a public URL, not a secret) and feeds
+it into both the form-entered and callback-captured credential paths.
+Verified: `composer check` green (1157 tests, 3 new — bound-issuer
+selection from a multi-AS list, pinned-issuer preference across
+resources, exact-comparison rejection of a default-port issuer
+variant); stable conformance 40 server + 325 client, zero failures,
+baselines empty; draft track unchanged at the two documented
+upstream-tool baseline entries, `auth/authorization-server-migration`
+28/28.
+**Upstream drift: Authorization Server Binding vs the alpha conformance
+tool (recorded 2026-06-12, MONITOR at every draft-pin bump).** The
+binding review's finding (1) — unbound pre-registered credentials
+preserve the cross-process exposure — turned out to be a drift between
+the `2026-07-28` draft and the pinned alpha conformance tool, not an SDK
+judgment call. Verified against both sources: the draft's
+client-registration page makes binding unconditional ("MUST associate
+those credentials with the specific authorization server that issued
+them, keyed by the authorization server's `issuer` identifier") with no
+provision for issuer-less pre-registered credentials, while the pinned
+draft tool — `@modelcontextprotocol/conformance@0.2.0-alpha.2`, upstream
+commit `25fd44323ff3fe28967b95ea8105de47f674b7d8` (stable pin `0.1.16`,
+commit `21a9a2febd7100d7c17ac1021ee7f2ed9f66a1e0`) — supplies its
+`auth/pre-registration` scenario context as `{client_id, client_secret}`
+with no issuer, even though the scenario is tagged `DRAFT-2026-v1` in
+the tool's own scenario list and the mock AS URL is known when the
+context is built. Per the project policy for spec/tool drift, the SDK
+aligns with the spec and the misaligned scenario is baselined:
+mandatory issuer binding is now the SDK default (unbound pre-registered
+credentials are rejected before any authorization or token request with
+an actionable `REASON_UNBOUND_CLIENT_CREDENTIALS` error), and the
+first-use pinning behavior survives only behind the new explicit
+`OAuthConfiguration::$allowUnboundClientCredentials` legacy-compat flag
+(published 2025-11-25 behavior, where no binding rule exists). The
+conformance runner now passes `--track=draft` to `everything-client.php`
+on the draft track: the draft client runs the strict default (verified:
+`client-draft auth/pre-registration` fails its `pre-registration-auth`
+check with "Client did not make a token request", 2/3 — exactly the
+spec-mandated refusal — and is baselined in
+`conformance-draft-baseline.yml` with the missing-issuer-context root
+cause), while the stable client opts into the legacy flag (legitimate:
+the stable track validates the published spec, and the option is a
+documented public SDK path, not a bypass). `--suite draft` selects only
+DRAFT-2026-v1-exclusive scenarios and `auth/pre-registration` is tagged
+`[2025-11-25, DRAFT-2026-v1]`, so it is not in the draft suite; to keep
+the baseline entry from going stale unnoticed, `run-conformance.php`'s
+aggregate `draft`/`client-draft` gate runs it explicitly after the
+suite (via `DRAFT_CLIENT_EXTRA_SCENARIOS`) and propagates its exit code
+— verified by a negative test (removing the entry makes the aggregate
+`client-draft` exit non-zero, where before the change the scenario was
+never run). The webclient reference is strict by default too: its
+connection form requires the issuer when a Client ID is supplied and
+exposes the legacy unbound mode only behind an explicit, clearly-warned
+"Allow unbound credentials (legacy)" checkbox that sets
+`allowUnboundClientCredentials` (a later review found the webclient had
+been hard-coding that flag on, silently reopening the cross-process
+exposure on PHP-FPM — now off unless the box is ticked). **Monitoring:**
+at every draft-pin bump and at
+WS7 convergence, re-check whether upstream has added issuer context to
+the scenario (then bind and drop the baseline entry) or started
+asserting the strict refusal (then the entry leaves the baseline by
+passing); candidate for an upstream issue per SEP-2484. Verified:
+`composer check` green (1158 tests, 1 new — default rejection of
+unbound credentials; the pinning/retry tests now opt into the legacy
+flag, and incidental unbound fixtures in the iss-validation and
+scope/grant suites were bound to their test issuer); stable conformance
+40 server + 325 client, zero failures, baselines still empty; draft
+track regression-free with `auth/authorization-server-migration` 28/28
+and the new documented `auth/pre-registration` entry alongside the two
+existing upstream-staleness entries.
 
 ## WS4 — Tasks extension
 

@@ -77,7 +77,8 @@ final class OAuthClientIssValidationTest extends TestCase
             clientCredentials: new ClientCredentials(
                 clientId: 'pre-registered-client',
                 clientSecret: null,
-                tokenEndpointAuthMethod: ClientCredentials::AUTH_METHOD_NONE
+                tokenEndpointAuthMethod: ClientCredentials::AUTH_METHOD_NONE,
+                issuer: self::ISSUER
             ),
             tokenStorage: new MemoryTokenStorage(),
             authCallback: $callback,

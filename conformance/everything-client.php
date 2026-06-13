@@ -79,6 +79,22 @@ if ($argc < 2) {
 }
 $serverUrl = $argv[$argc - 1];
 
+// Which conformance track spawned us (run-conformance.php appends
+// --track=draft for the draft tool). The draft track validates the
+// 2026-07-28 draft and runs the SDK's spec-aligned defaults; the stable
+// track validates the published spec, where scenarios supply pre-registered
+// credentials without issuer context (the AS issuer is a runtime-chosen
+// localhost port), so it opts into the SDK's explicit 2025-11-25 legacy
+// compatibility for unbound credentials. See conformance/README.md and the
+// upstream-drift note in docs/v2-development-plan.md (WS3).
+$track = 'stable';
+foreach ($argv as $arg) {
+    if (str_starts_with($arg, '--track=')) {
+        $track = substr($arg, strlen('--track='));
+    }
+}
+define('CONFORMANCE_ALLOW_UNBOUND_CREDENTIALS', $track !== 'draft');
+
 fwrite(STDERR, "Scenario: {$scenario}\n");
 fwrite(STDERR, "Server URL: {$serverUrl}\n");
 if ($context !== null) {
@@ -186,6 +202,7 @@ function connectToServerWithAuth(
         redirectUri: CONFORMANCE_REDIRECT_URI,
         verifyTls: false,
         enableLegacyOAuthFallback: $legacyOAuthFallback,
+        allowUnboundClientCredentials: CONFORMANCE_ALLOW_UNBOUND_CREDENTIALS,
     );
 
     $httpOptions = [
@@ -688,6 +705,7 @@ function scenarioClientCredentials(string $scenario, string $serverUrl, ?array $
         tokenStorage: new MemoryTokenStorage(),
         verifyTls: false,
         useClientCredentialsGrant: true,
+        allowUnboundClientCredentials: CONFORMANCE_ALLOW_UNBOUND_CREDENTIALS,
     );
 
     $client = new Client();
@@ -741,6 +759,7 @@ function scenarioCrossAppAccess(string $scenario, string $serverUrl, ?array $con
         tokenStorage: new MemoryTokenStorage(),
         verifyTls: false,
         crossAppAccess: $crossAppAccess,
+        allowUnboundClientCredentials: CONFORMANCE_ALLOW_UNBOUND_CREDENTIALS,
     );
 
     $client = new Client();
