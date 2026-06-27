@@ -119,7 +119,7 @@ class StreamableHttpTransport
     /**
      * Optional timeout (seconds) bounding requests that carry the modern
      * SEP-2575 `_meta` envelope — i.e. the dual-era negotiation's
-     * `server/discover` probes (and their -32004 retries). Set by
+     * `server/discover` probes (and their -32022 retries). Set by
      * Client::connect() around negotiation and cleared afterwards, so the
      * probe honors the configured probe timeout instead of the transport's
      * full read timeout, while the legacy fallback `initialize` (which
@@ -565,13 +565,13 @@ class StreamableHttpTransport
         if ($statusCode >= 400) {
             // SEP-2575: modern servers deliver JSON-RPC errors with real
             // HTTP error statuses — 400 for UnsupportedProtocolVersionError
-            // (-32004), MissingRequiredClientCapabilityError (-32003), and
-            // header-validation failures (-32001); 404 with -32601 for
+            // (-32022), MissingRequiredClientCapabilityError (-32021), and
+            // header-validation failures (-32020); 404 with -32601 for
             // unknown or removed methods. When such a body answers the
             // in-flight request (its id matches), let it flow through the
             // normal response path below so the caller receives a typed
             // McpError carrying the code and data — the dual-era
-            // negotiation logic in ClientSession depends on seeing -32004
+            // negotiation logic in ClientSession depends on seeing -32022
             // rather than an opaque transport failure. Anything else
             // (empty or unrecognized bodies, legacy servers' plain-object
             // errors, 5xx) still fails fast exactly as before.
@@ -1557,7 +1557,7 @@ class StreamableHttpTransport
      * which surfaces them as typed McpError with code and data intact —
      * the same contract the stdio transport has always provided. The
      * dual-era negotiation (WS2) depends on this: the client must be able
-     * to classify -32004/-32003/-32001 versus a legacy server's
+     * to classify -32022/-32021/-32020 versus a legacy server's
      * -32601/-32602 from the typed error, not from an opaque transport
      * exception. (Responses in this queue always carry a request id —
      * enqueueJsonRpcPayload() refuses id-less response payloads — so there

@@ -128,9 +128,14 @@ version, the per-request `_meta` envelope, and the type-system changes.
   SEP-2322 ripple on *every* modern result; `"complete"` outside MRTR) and
   required `ttlMs`/`cacheScope` (the schema makes `DiscoverResult` a sixth
   SEP-2549 carrier). Error surfaces fixed by the schema:
-  `UnsupportedProtocolVersionError` is `-32004` with
+  `UnsupportedProtocolVersionError` is `-32022` with
   `data: {supported: string[], requested: string}`; missing-capability is
-  `-32003` with `data.requiredCapabilities`. Nothing replaces
+  `-32021` with `data.requiredCapabilities`. (These draft-only codes —
+  together with `HeaderMismatch` `-32020`, WS3 — are shown throughout this
+  plan at their post-renumber values per spec PR modelcontextprotocol#2907;
+  they were originally `-32004`/`-32003`/`-32001` and were reallocated when
+  the draft tool adopted #2907 at `0.2.0-alpha.5`. See the WS7 update for
+  the bump record.) Nothing replaces
   `notifications/initialized` — readiness is implicit per-request. (The
   handshake-removal and detection logic is WS2; the GET-SSE replacement is
   WS3.)
@@ -183,15 +188,15 @@ fields appear on additional result types in the final schema.
 all six review findings were assessed as WS1-scope and fixed: ephemeral
 discover sessions are now deleted from the session store rather than
 persisted unreachable; discover requests bypass the transport's legacy
-version-header gate so an unsupported version yields the spec's `-32004`
+version-header gate so an unsupported version yields the spec's `-32022`
 with the original request id and `data.supported`/`data.requested`, and the
-sessionless path maps the modern error codes (`-32602`/`-32003`/`-32004`)
+sessionless path maps the modern error codes (`-32602`/`-32021`/`-32022`)
 onto HTTP 400 as SEP-2575 mandates — discover responses are deliberately
 never SSE-framed, even on SSE-enabled servers, because the result is a
 single self-contained cacheable document and only a plain JSON response
 can carry those statuses (the status mapping for the *general*
 per-request modern path — including the removed-method 404s — lands with
-WS2's era detection; header/`_meta` mismatch `-32001` remains WS3); legacy clients now also get JSON-array
+WS2's era detection; header/`_meta` mismatch `-32020` remains WS3); legacy clients now also get JSON-array
 (PHP list) `structuredContent` stripped, not just scalars; the `_meta`
 envelope validation type-checks `clientInfo` (Implementation shape) and
 `clientCapabilities` (object, not array/scalar); explicit
@@ -202,7 +207,7 @@ other request family. Version constants and feature gating
 (`stateless_lifecycle`, `caching_hints`, `resource_not_found_invalid_params`,
 `json_schema_2020_12`), the `_meta` envelope types (`MetaKeys`),
 `server/discover` answering on stdio and HTTP with envelope validation and
-`-32004`, the `resultType`/`ttlMs`/`cacheScope` result surface with
+`-32022`, the `resultType`/`ttlMs`/`cacheScope` result surface with
 modern-stamping/legacy-stripping in `adaptResponseForClient()`, version-gated
 SEP-2164 error codes, SEP-2106 schema pass-through plus any-JSON
 `structuredContent`, and SEP-414 trace-context accessors (`TraceContext`)
@@ -288,7 +293,7 @@ finding: the spec repository renamed the draft wire identifier to the dated
 request — so the SDK accepts it as an RC-window alias for `2026-07-28` on
 the per-request path only (`Version::DRAFT_MODERN_PROTOCOL_VERSION`,
 canonicalized for all feature gating, advertised in
-`DiscoverResult.supportedVersions` and `-32004 data.supported`, never
+`DiscoverResult.supportedVersions` and `-32022 data.supported`, never
 negotiable via `initialize`; it retires at WS7's tool convergence). The
 TypeScript SDK v2 has types only — no stateless runtime or probe logic —
 so the spec's normative text (the new Modern/Legacy/Dual-era terminology
@@ -298,15 +303,15 @@ Server side: per-request era detection in `ServerSession::handleRequest()`
 the `initialize` method name), per-request adoption of version/clientInfo/
 clientCapabilities (capabilities are provably not inferred from prior
 requests), removed-method and unknown-method `-32601`→404, the
-400-mapping for `-32602`/`-32003`/`-32004` via a structured
+400-mapping for `-32602`/`-32021`/`-32022` via a structured
 `httpStatusHint` on `JsonRpcMessage` (replacing body re-decoding, WS1
 re-review item a), one POST body parse in the HTTP transport (item b),
 every modern request served sessionless on a fresh `HttpServerSession`,
-and `-32003` `MissingRequiredClientCapabilityError` raised from the
+and `-32021` `MissingRequiredClientCapabilityError` raised from the
 sampling/elicitation entry points (everything-server gained the
 `test_missing_capability` tool the draft suite calls). Client side:
 `ClientSession::negotiate()` implements the spec's probe/fallback rules
-(retry-on-`-32004`, never-fallback on recognized modern errors, fallback
+(retry-on-`-32022`, never-fallback on recognized modern errors, fallback
 on any other error/timeout/malformed discover result), a shared
 `clientIdentity()` helper (item c), envelope stamping on every modern
 request with the `MCP-Protocol-Version` header mirrored from `_meta`, and
@@ -326,7 +331,7 @@ fix); draft baseline curation: `sep-2164-resource-not-found` (3/3) and
 `caching` (7/7) pass and left the baseline, `server-stateless` passes
 17/19 after the review round (the two capability checks only began
 executing once `McpServer` propagated `McpError` — see below) with two
-failing checks: SEP-2243's header/`_meta` mismatch `-32001` plus the
+failing checks: SEP-2243's header/`_meta` mismatch `-32020` plus the
 `subscriptions/listen` SHOULD warnings (re-attributed to WS3), and the
 upstream tool's string-array `requiredCapabilities` assertion (a
 documented upstream tool bug, not pursued in the SDK — see the review
@@ -339,7 +344,7 @@ client params) is snapshotted and restored around modern dispatch, so a
 modern stdio request can no longer mark the session initialized for later
 bare requests, and no longer clobbers a legacy-initialized stdio
 session's negotiated state. (2) The SEP-2575 pre-dispatch checks
-(envelope `-32602`, version `-32004`) were extracted into
+(envelope `-32602`, version `-32022`) were extracted into
 `modernEnvelopePreDispatchError()` shared with the malformed-request
 answer path, so unknown/removed methods with a broken envelope are
 rejected 400/`-32602` before any `-32601` routing. (3)
@@ -357,7 +362,7 @@ timeout), and a cURL operation timeout now throws the typed
 `HttpRequestTimeoutException`, which `negotiate()` classifies as a silent
 legacy server (fallback) rather than a transport failure.
 **Review spec question (resolved per "official text wins"):** the review
-flagged that the SDK emitted `-32003`'s `data.requiredCapabilities` as a
+flagged that the SDK emitted `-32021`'s `data.requiredCapabilities` as a
 string array matching the pinned conformance tool, while SEP-2575
 describes it as a ClientCapabilities object. Verified accurate: the SEP
 final text, the draft `schema.ts` (with the canonical example
@@ -372,7 +377,7 @@ the draft baseline as the upstream bug (re-checked at every draft-pin
 bump; candidate for an upstream issue per SEP-2484). Chasing the
 end-to-end repro also uncovered that `McpServer`'s tools/call wrapper had
 been converting SDK-raised `McpError`s into `isError` tool results — the
-`-32003` never actually reached the wire and the tool's capability checks
+`-32021` never actually reached the wire and the tool's capability checks
 were silently skipping. The wrapper now propagates `McpError` as protocol
 errors (consistent with its existing `McpServerException` handling), so
 `sep-2575-missing-capability-http-400` genuinely passes; this is a
@@ -392,7 +397,7 @@ in the same transport/auth layer).
   on all requests and notifications; `Mcp-Name` on the name/uri-bearing
   methods (`tools/call`, `resources/read`, `prompts/get`; reused by Tasks for
   the task id). Mismatch with the body, or a missing required header, is
-  rejected `400` with the `HeaderMismatch` / `-32001` error — which also
+  rejected `400` with the `HeaderMismatch` / `-32020` error — which also
   covers a version-header/`_meta` mismatch. Support the `x-mcp-header` schema
   annotation mirroring designated tool parameters into `Mcp-Param-*` headers.
 - **SEP-2567 (header half):** stop emitting and honouring `Mcp-Session-Id`
@@ -427,9 +432,9 @@ rules; final text of each auth SEP.
 the `subscriptions/listen` correlation id — re-verify the key against the
 final SEP-2260 text before building on it.
 **Added by WS2 (2026-06-12):** (a) the one remaining `server-stateless`
-check is SEP-2243's version-header/`_meta` mismatch — must answer `-32001`
+check is SEP-2243's version-header/`_meta` mismatch — must answer `-32020`
 HeaderMismatch + 400 (WS2's era detection currently answers from the
-envelope, yielding `-32004`); wire it into the same header-validation
+envelope, yielding `-32022`); wire it into the same header-validation
 layer as `Mcp-Method`/`Mcp-Name`. (b)
 `http-custom-header-server-validation` left the draft baseline reporting
 0 checks: its checks only engage once the everything-server exposes a tool
@@ -470,7 +475,7 @@ fix the comment when touching the transport.
 **Completion criteria**
 
 - Header emission/validation covered by unit tests on both runner and client
-  transport, including every `-32001` rejection case.
+  transport, including every `-32020` rejection case.
 - `InputRequiredResult` round-trips for sampling and elicitation work
   end-to-end through `HttpServerRunner` and the stdio runner, with the
   multi-round-trip state machine tested across at least two rounds.
@@ -507,7 +512,7 @@ verify-plus-regression-tests, not new work; (4) the failing checks in the
 SEP-837's cross-cutting `application_type` assertion, not iss/refresh
 logic. Delivered: SEP-2243 server validation (`Mcp-Method`/`Mcp-Name`
 presence+match, OWS trim, case-sensitive values, header-vs-`_meta` version
-mismatch — `-32001` evaluated BEFORE `-32004`, which fires only when
+mismatch — `-32020` evaluated BEFORE `-32022`, which fires only when
 header and `_meta` agree; `Mcp-Param-*` designated parameters validated
 against tool schemas with strict base64-sentinel decoding) and client
 emission (headers derived from each enveloped message; `Mcp-Param-*` from
@@ -541,7 +546,7 @@ absent-`resultType`-means-complete. `Client::connect()` gained
 `protocolMode: 'modern'` (no probe — required by conformance mocks that
 reject `initialize` AND `server/discover`) and a `protocolVersion`
 preference; modern sessions adopt an advertised version and retry once on
-`-32004`. Auth hardening: SEP-837 `application_type` (derived
+`-32022`. Auth hardening: SEP-837 `application_type` (derived
 native/web), SEP-2468 iss validation (non-normalized byte comparison,
 error params suppressed on mismatch, `AuthorizationCallbackResult` with
 BC for string-returning handlers), SEP-2352 PRM re-fetch on 401 +
@@ -579,7 +584,7 @@ matches the final SEP-2243 text: annotations are collected at any
 nesting depth (dot-path keys, case-insensitive uniqueness across the
 whole schema), type `number` is prohibited, and designated integer
 values are enforced within ±(2^53−1) on both sides (the client throws
-before wire traffic; the server rejects -32001). Consequence, per the
+before wire traffic; the server rejects -32020). Consequence, per the
 no-shortcuts rule: the pinned alpha tool's `http-custom-headers`
 scenario still REQUIRES mirroring number-typed parameters, so the SDK's
 spec-faithful rejection re-enters the draft baseline as documented
@@ -622,7 +627,7 @@ now also covers integral floats (how PHP decodes large JSON integers):
 `McpHeaders::isSafeIntegerValue()` requires finite, integral, in-range
 values, enforced on integer-typed designated parameters by both the
 client (throws before wire traffic, non-finite floats rejected
-outright) and the server (-32001).
+outright) and the server (-32020).
 **Post-commit review round (2026-06-12):** four major findings from the
 post-commit review of the WS3 change set, all fixed with regression
 tests. (1) `HttpServerRunner` kept the ephemeral modern session in
@@ -1026,6 +1031,29 @@ issue/PR per SEP-2484. `run-conformance.php` now sets
 `PHP_CLI_SERVER_WORKERS` (POSIX) so the concurrent-stream scenarios
 (`subscriptions/listen`, `server-sse-multiple-streams`) exercise real
 parallelism.
+**Update (2026-06-27, draft pin `0.2.0-alpha.2` → `0.2.0-alpha.7`):** the
+SDK adopted the SEP-2907 draft error-code renumber (HeaderMismatch
+`-32001`→`-32020`, MissingRequiredClientCapability `-32003`→`-32021`,
+UnsupportedProtocolVersion `-32004`→`-32022`; the tool adopted them in
+alpha.5 #353), and the draft pin was bumped to the latest published alpha
+and the baseline re-curated from a real run. Server track: `server-stateless`
+is 26/27 (alpha.4 #343 added HTTP-400-on-invalid-`_meta` and the
+`data.requested` echo, both already satisfied), the single failure still the
+`requiredCapabilities` string-array upstream tool bug — now at `-32021` and
+now contradicting the tool's OWN vendored draft schema and its new SEP-2663
+Tasks scenario (both object-shaped), strengthening the SEP-2484 upstream
+case. Client track gained two NEW upstream-drift entries, both spec-correct
+on the SDK side and unavoidable on any renumber-bearing alpha (the renumber
+#353, the `DRAFT-2026-v1` retirement #331, and the discover-on-mock change
+#347 all landed by alpha.5): `json-schema-ref-no-deref` (mock advertises
+`2026-07-28` in discover but its TS-SDK stateful transport rejects it) and
+`request-metadata` (first-rejection retry test now advertises the same
+version the client just attempted; the SDK's infinite-loop guard declines to
+re-send it). `http-custom-headers` stays an expected failure until alpha.8
+(upstream fix #371 merged after the alpha.7 tag); `auth/pre-registration`
+(issuer binding) unchanged. Whether the SDK should retry an
+already-attempted-but-advertised version once (the `request-metadata`
+question) is flagged for human/upstream review, not changed silently.
 
 **Completion criteria**
 

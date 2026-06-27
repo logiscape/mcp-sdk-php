@@ -313,7 +313,7 @@ final class HttpModernRequestTest extends TestCase
 
     /**
      * An unsupported version on an ordinary modern request answers HTTP 400
-     * + -32004 with data.supported listing the per-request-servable
+     * + -32022 with data.supported listing the per-request-servable
      * identifiers — a subset of the discover advertisement, as the
      * conformance suite cross-checks.
      */
@@ -328,14 +328,14 @@ final class HttpModernRequestTest extends TestCase
 
         $this->assertSame(400, $response->getStatusCode());
         $body = json_decode((string) $response->getBody(), true);
-        $this->assertSame(-32004, $body['error']['code']);
+        $this->assertSame(-32022, $body['error']['code']);
         $this->assertSame(5, $body['id']);
         $this->assertSame(Version::MODERN_PROTOCOL_VERSIONS, $body['error']['data']['supported']);
         $this->assertSame('v999.0.0', $body['error']['data']['requested']);
     }
 
     /**
-     * MissingRequiredClientCapabilityError (-32003) maps to HTTP 400 on the
+     * MissingRequiredClientCapabilityError (-32021) maps to HTTP 400 on the
      * modern path (SEP-2575), with data.requiredCapabilities intact.
      */
     public function testMissingCapabilityAnswers400(): void
@@ -351,9 +351,9 @@ final class HttpModernRequestTest extends TestCase
             headerVersion: '2026-07-28'
         ));
 
-        $this->assertSame(400, $response->getStatusCode(), 'SEP-2575: -32003 MUST be HTTP 400');
+        $this->assertSame(400, $response->getStatusCode(), 'SEP-2575: -32021 MUST be HTTP 400');
         $body = json_decode((string) $response->getBody(), true);
-        $this->assertSame(-32003, $body['error']['code']);
+        $this->assertSame(-32021, $body['error']['code']);
         // ClientCapabilities object shape per the draft schema's canonical
         // example (the pinned conformance tool's string-array expectation
         // is a known upstream tool bug).
@@ -410,7 +410,7 @@ final class HttpModernRequestTest extends TestCase
         $this->assertIsArray($body);
         $this->assertArrayHasKey('error', $body, 'Body must be the single JSON-RPC error object, not an array');
         $this->assertArrayHasKey('jsonrpc', $body);
-        $this->assertSame(-32003, $body['error']['code']);
+        $this->assertSame(-32021, $body['error']['code']);
         $this->assertSame(12, $body['id']);
         $this->assertStringNotContainsString(
             'notifications/message',

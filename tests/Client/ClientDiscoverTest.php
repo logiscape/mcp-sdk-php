@@ -41,7 +41,7 @@ use PHPUnit\Framework\TestCase;
  * Validates that the client sends a self-contained server/discover request
  * carrying the required _meta envelope — WITHOUT any initialize handshake —
  * and correctly parses the DiscoverResult or surfaces the modern error
- * shapes (-32004 with supported/requested, -32601 from a legacy server).
+ * shapes (-32022 with supported/requested, -32601 from a legacy server).
  */
 final class ClientDiscoverTest extends TestCase
 {
@@ -145,7 +145,7 @@ final class ClientDiscoverTest extends TestCase
     }
 
     /**
-     * A -32004 UnsupportedProtocolVersionError surfaces with its
+     * A -32022 UnsupportedProtocolVersionError surfaces with its
      * supported/requested data payload intact (the WS2 retry input).
      */
     public function testDiscoverUnsupportedVersionErrorSurfaces(): void
@@ -168,7 +168,7 @@ final class ClientDiscoverTest extends TestCase
             $session->discover('1900-01-01');
             $this->fail('Expected McpError');
         } catch (McpError $e) {
-            $this->assertSame(-32004, $e->error->code);
+            $this->assertSame(-32022, $e->error->code);
             $data = (array) $e->error->data;
             $this->assertSame(['2026-07-28'], $data['supported']);
             $this->assertSame('1900-01-01', $data['requested']);

@@ -40,9 +40,9 @@ use RuntimeException;
  * detection (WS2).
  *
  * The probe/fallback sequencing follows the spec's normative rules: probe
- * server/discover with the preferred modern version; on -32004 retry with
+ * server/discover with the preferred modern version; on -32022 retry with
  * an advertised version and NEVER fall back; on the other recognized
- * modern errors (-32001/-32003) fail without falling back; on any other
+ * modern errors (-32020/-32021) fail without falling back; on any other
  * error or probe timeout fall back to the legacy initialize handshake.
  * The transports' exception surfaces are simulated through scripted
  * streams, so these cover the stdio shape (JSON-RPC errors) and the HTTP
@@ -190,7 +190,7 @@ final class ClientNegotiationTest extends TestCase
     }
 
     /**
-     * -32004 means the server IS modern: retry with an advertised version
+     * -32022 means the server IS modern: retry with an advertised version
      * (here the RC-window draft identifier), never fall back. The retried
      * session speaks the advertised wire version in every envelope while
      * feature-gating on the canonical 2026-07-28.
@@ -232,7 +232,7 @@ final class ClientNegotiationTest extends TestCase
     }
 
     /**
-     * -32004 with NO mutually supported version: a modern server was
+     * -32022 with NO mutually supported version: a modern server was
      * detected, so falling back to initialize is forbidden — connect fails
      * with a clear error and initialize is never sent.
      */
@@ -255,14 +255,14 @@ final class ClientNegotiationTest extends TestCase
         }
 
         foreach ($this->sentWire($writeStream) as $sent) {
-            $this->assertNotSame('initialize', $sent['method'], 'Spec: never fall back after -32004');
+            $this->assertNotSame('initialize', $sent['method'], 'Spec: never fall back after -32022');
         }
         $this->assertFalse($session->isModernMode());
     }
 
     /**
-     * The other recognized modern errors (-32003 missing capability,
-     * -32001 header mismatch) identify a modern server: they are
+     * The other recognized modern errors (-32021 missing capability,
+     * -32020 header mismatch) identify a modern server: they are
      * re-thrown, and the fallback is provably NOT triggered.
      *
      * @dataProvider recognizedModernErrorProvider
@@ -291,8 +291,8 @@ final class ClientNegotiationTest extends TestCase
     public static function recognizedModernErrorProvider(): array
     {
         return [
-            'missing capability (-32003)' => [McpError::MISSING_REQUIRED_CLIENT_CAPABILITY],
-            'header mismatch (-32001)' => [McpError::HEADER_MISMATCH],
+            'missing capability (-32021)' => [McpError::MISSING_REQUIRED_CLIENT_CAPABILITY],
+            'header mismatch (-32020)' => [McpError::HEADER_MISMATCH],
         ];
     }
 
@@ -475,8 +475,8 @@ final class ClientNegotiationTest extends TestCase
     }
 
     /**
-     * Forced-modern -32004 recovery: when the FIRST real request is
-     * rejected with -32004 carrying a usable data.supported list, the
+     * Forced-modern -32022 recovery: when the FIRST real request is
+     * rejected with -32022 carrying a usable data.supported list, the
      * session adopts an advertised version (envelope and header switch
      * together) and retries that request exactly once under a fresh id.
      */
@@ -516,7 +516,7 @@ final class ClientNegotiationTest extends TestCase
     }
 
     /**
-     * The adopt-and-retry is narrow: a -32004 whose data lacks a usable
+     * The adopt-and-retry is narrow: a -32022 whose data lacks a usable
      * supported list propagates unchanged (no retry, no adoption).
      */
     public function testForcedModern32004WithoutSupportedListPropagates(): void
@@ -575,7 +575,7 @@ final class ClientNegotiationTest extends TestCase
 /**
  * Write stream that records the SERIALIZED form of every message at send
  * time — needed when a later retry mutates an object shared with an
- * already-sent message (e.g. the -32004 version adoption rewriting the
+ * already-sent message (e.g. the -32022 version adoption rewriting the
  * request's _meta).
  */
 final class SnapshotWriteStream extends MemoryStream

@@ -227,7 +227,7 @@ final class HttpDiscoverTest extends TestCase
      * An unsupported protocol version on a discover request (header and
      * _meta agreeing) is answered with the SEP-2575
      * UnsupportedProtocolVersionError: HTTP 400 Bad Request carrying
-     * -32004, the ORIGINAL request id, and data.supported/data.requested —
+     * -32022, the ORIGINAL request id, and data.supported/data.requested —
      * not the transport's generic -32600/id:null rejection.
      */
     public function testDiscoverUnsupportedVersionOverHttp(): void
@@ -244,7 +244,7 @@ final class HttpDiscoverTest extends TestCase
         $this->assertSame(400, $response->getStatusCode(), 'SEP-2575: UnsupportedProtocolVersionError MUST be HTTP 400');
         $body = json_decode((string) $response->getBody(), true);
         $this->assertArrayHasKey('error', $body);
-        $this->assertSame(-32004, $body['error']['code']);
+        $this->assertSame(-32022, $body['error']['code']);
         $this->assertSame(42, $body['id'], 'Error must carry the original request id, not null');
         $this->assertSame('v999.0.0', $body['error']['data']['requested']);
         $this->assertNotEmpty($body['error']['data']['supported']);
@@ -278,7 +278,7 @@ final class HttpDiscoverTest extends TestCase
 
     /**
      * The SEP-2575 HTTP 400 mandate holds on SSE-enabled servers too: an
-     * unsupported-version discover gets 400 + JSON-RPC -32004, not an SSE
+     * unsupported-version discover gets 400 + JSON-RPC -32022, not an SSE
      * stream committed to status 200.
      */
     public function testDiscoverUnsupportedVersionOverSseEnabledServer(): void
@@ -295,7 +295,7 @@ final class HttpDiscoverTest extends TestCase
         $this->assertSame(400, $response->getStatusCode(), 'SEP-2575: 400 must apply on SSE-enabled servers too');
         $body = json_decode((string) $response->getBody(), true);
         $this->assertIsArray($body);
-        $this->assertSame(-32004, $body['error']['code']);
+        $this->assertSame(-32022, $body['error']['code']);
         $this->assertSame(7, $body['id']);
     }
 

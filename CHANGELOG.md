@@ -271,6 +271,35 @@ This file was introduced during the v1.7.x series. Structured entries below cove
   and the SEP-2322 input-required suite) and the everything-client gained
   the matching scenario handlers. `conformance/README.md` and
   `ROADMAP.md` reflect the emptied stable baseline.
+- Draft error codes renumbered to the draft allocation policy in spec PR
+  modelcontextprotocol#2907: `HeaderMismatch` `-32001` → `-32020`,
+  `MissingRequiredClientCapability` `-32003` → `-32021`, and
+  `UnsupportedProtocolVersion` `-32004` → `-32022` (constants in
+  `Mcp\Shared\McpError`; both the server emission and the client
+  negotiation paths route through the constants). These are `2026-07-28`
+  draft-only codes, so legacy (`2025-11-25` and earlier) behavior is
+  unchanged. Verified against the conformance draft track (the server
+  header-mismatch and unsupported-version checks pass against the
+  renumbered codes).
+- Draft conformance pin bumped `0.2.0-alpha.2` → `0.2.0-alpha.7` (latest
+  published alpha; `alpha.5` is the minimum carrying the #2907 renumber),
+  re-curating `conformance/conformance-draft-baseline.yml` from a real run.
+  Server track: `server-stateless` now 26/27 (up from 22/23 — alpha.4's
+  #343 added the HTTP-400-on-invalid-`_meta` and `data.requested`-echo
+  checks, both already satisfied), its single remaining failure the
+  documented upstream string-array-`requiredCapabilities` tool bug (now at
+  the renumbered `-32021`, and now contradicting the tool's own draft
+  schema and Tasks scenario). Client track gains two NEW upstream-drift
+  expected failures, both spec-correct on the SDK side and unavoidable on
+  any renumber-bearing alpha: `json-schema-ref-no-deref` (alpha.5 #347 made
+  the mock answer `server/discover` advertising `2026-07-28` while its
+  TS-SDK stateful transport rejects that version) and `request-metadata`
+  (alpha.3 #331 retired the `DRAFT-2026-v1` retry identifier, so the
+  first-rejection retry test now advertises the same version the client
+  just tried, which the SDK's infinite-loop guard declines to re-attempt).
+  `http-custom-headers` and `auth/pre-registration` remain documented
+  upstream entries; the former clears once the pin reaches `0.2.0-alpha.8`
+  (upstream PR #371, merged after the alpha.7 tag).
 
 ### Fixed
 

@@ -276,7 +276,7 @@ class McpServer
             // SEP-2243: on the modern HTTP path, arguments designated by an
             // x-mcp-header annotation must arrive mirrored in Mcp-Param-*
             // headers that match the body; a missing, undecodable, or
-            // mismatched header is rejected 400/-32001.
+            // mismatched header is rejected 400/-32020.
             $this->validateMcpParamHeaders($tool, $arguments);
 
             // Check for preloaded elicitation/sampling results (HTTP resume path)
@@ -387,7 +387,7 @@ class McpServer
      * x-mcp-header annotation whose argument is present (non-null) in the
      * body, the request must carry a matching Mcp-Param-{name} header:
      * missing, undecodable (broken base64 sentinel), or value-mismatched
-     * headers raise HeaderMismatch (-32001), which the session maps to
+     * headers raise HeaderMismatch (-32020), which the session maps to
      * HTTP 400. Null/absent arguments require the header to be omitted —
      * the server never expects one for them.
      *
@@ -466,7 +466,7 @@ class McpServer
     }
 
     /**
-     * @throws McpError Always — the -32001 HeaderMismatch protocol error.
+     * @throws McpError Always — the -32020 HeaderMismatch protocol error.
      */
     private function raiseHeaderMismatch(string $message): never
     {
@@ -1341,7 +1341,7 @@ class McpServer
                 // Protocol-level errors must surface as JSON-RPC errors,
                 // never as isError tool results: McpServerException
                 // (programming errors, -32042 URL elicitation) and the
-                // SDK-raised SEP-2575 errors alike — e.g. the -32003
+                // SDK-raised SEP-2575 errors alike — e.g. the -32021
                 // MissingRequiredClientCapabilityError thrown by the
                 // sampling/elicitation capability guards on the modern
                 // path, which the spec requires on the wire with HTTP 400.

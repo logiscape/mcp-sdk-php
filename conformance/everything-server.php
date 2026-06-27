@@ -236,7 +236,7 @@ $server->tool('test_sampling', 'Requests LLM sampling via sampling/createMessage
 // Capability-requirement tool — exercised by the draft suite's SEP-2575
 // missing-capability checks: the stateless connector calls this tool with a
 // request envelope that deliberately omits the sampling capability and
-// expects MissingRequiredClientCapabilityError (-32003 with
+// expects MissingRequiredClientCapabilityError (-32021 with
 // data.requiredCapabilities, HTTP 400). The handler goes through the
 // ordinary SamplingContext SDK path — the error is raised inside the SDK
 // when the modern request's envelope lacks the capability, not fabricated
@@ -362,7 +362,7 @@ $server->tool('test_elicitation_sep1330_enums', 'Requests elicitation with enum 
 // listed tool whose inputSchema carries an x-mcp-header annotation on a
 // string property; it then calls the tool with matching / mismatched /
 // base64-mangled Mcp-Param-Region headers and expects the SDK to accept or
-// reject (400/-32001) accordingly. The handler itself only ever sees valid
+// reject (400/-32020) accordingly. The handler itself only ever sees valid
 // invocations.
 $server->tool(
     name: 'test_header_params',

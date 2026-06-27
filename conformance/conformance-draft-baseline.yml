@@ -7,80 +7,86 @@
 # the two files are tied to different installed tool versions and are
 # curated independently (see docs/v2-development-plan.md, WS7).
 #
-# Until the v2 stateless core lands (WS1-WS3 in the development plan),
-# draft-only scenarios are expected to fail: the SDK on `main` still
-# implements the 2025-11-25 lifecycle. Each entry below names the
-# workstream that will make it pass; entries only shrink as workstreams
-# complete. The no-shortcut rule in conformance/README.md applies to this
-# file exactly as it does to the stable baseline.
+# The no-shortcut rule in conformance/README.md applies to this file
+# exactly as it does to the stable baseline: every entry has a documented
+# root cause and either a plan or an explicit not-pursuing rationale;
+# entries only shrink within a pinned tool version. A deliberate pin bump
+# may legitimately add entries for genuinely-new upstream behavior, each
+# with its own root cause (recorded below).
 #
-# Last updated: 2026-06-12 (WS3 milestone)
-# Conformance tool version: 0.2.0-alpha.2 (draft pin)
+# Last updated: 2026-06-27 (draft pin bumped 0.2.0-alpha.2 -> 0.2.0-alpha.7)
+# Conformance tool version: 0.2.0-alpha.7 (draft pin)
+#
+# Pin-bump note (0.2.0-alpha.2 -> 0.2.0-alpha.7):
+#  * alpha.5 (#353) adopted the SEP-2907 draft error-code renumber —
+#    HeaderMismatch -32001->-32020, MissingRequiredClientCapability
+#    -32003->-32021, UnsupportedProtocolVersion -32004->-32022 — which the
+#    SDK now emits; the server header-mismatch and unsupported-version
+#    checks pass against the renumbered codes.
+#  * alpha.4 (#343/#341) tightened the stateless server checks (HTTP 400 on
+#    invalid per-request _meta, error.data.requested echo on
+#    unsupported-version, required result members on mock responses); the
+#    SDK already satisfies these.
+#  * alpha.3 (#331) retired the RC-window DRAFT-2026-v1 wire identifier (the
+#    tool now speaks 2026-07-28 only) and alpha.5 (#347) made the
+#    hand-rolled client-direction mocks answer server/discover. Those two
+#    changes surface the two NEW client-track entries below. They are
+#    upstream drift, not SDK regressions, and no renumber-bearing alpha
+#    avoids them: the renumber (#353), the DRAFT-2026-v1 retirement (#331),
+#    and the discover-on-mock change (#347) had all landed by alpha.5.
 
 server:
-  # (WS3's transport changes landed 2026-06-12: SEP-2243 request-metadata
-  # header validation — Mcp-Method/Mcp-Name presence+match, OWS trimming,
-  # case-sensitive values, version-header/_meta mismatch, and Mcp-Param-*
-  # designated-parameter validation with strict base64-sentinel decoding —
-  # all rejected 400/-32001; the SEP-2322 multi-round-trip mechanism
-  # (InputRequiredResult with HMAC-signed requestState, ephemeral
-  # re-execution, capability-gated input requests, prompts/get support);
-  # and the SEP-2575 streaming surface (request-scoped SSE for
-  # handler-emitted notifications, subscriptions/listen with the
-  # acknowledgement-first stream, subscriptionId tagging, and strict
-  # filter containment). WS3 entries removed as now passing:
-  # `http-header-validation` (13/13), `http-custom-header-server-
-  # validation` (9/9, activated by the new test_header_params fixture
-  # tool), and all twelve `input-required-result-*` scenarios.)
-
-  # --- One upstream tool bug ---
+  # --- One upstream tool bug (unchanged in nature; error code renumbered) ---
   - server-stateless
-    # 22/23 checks pass after WS3, including
-    # sep-2575-http-server-header-mismatch-400 (-32001 before -32004),
-    # the subscriptions/listen acknowledgement-first and subscriptionId
-    # checks, and the notification-filter containment check.
+    # 26/27 checks pass after the alpha.7 bump (up from 22/23 at alpha.2:
+    # alpha.4's #343 added the HTTP-400-on-invalid-_meta check and the
+    # data.requested echo on unsupported-version, both already satisfied).
+    # The renumbered header-mismatch check
+    # (sep-2575-http-server-header-mismatch-400, now -32020 before -32022)
+    # and the subscriptions/listen acknowledgement-first / subscriptionId /
+    # notification-filter-containment checks all pass.
     #
     # The one failing check, sep-2575-server-rejects-undeclared-capability
     # (UPSTREAM TOOL BUG, not pursued in the SDK): the SDK emits
     # data.requiredCapabilities as a ClientCapabilities OBJECT
-    # ({"sampling": {}}), which is what the SEP-2575 final text, the
-    # draft schema.ts, its canonical example
+    # ({"sampling": {}}) with the renumbered code -32021, which is what the
+    # SEP-2575 final text, the draft schema.ts (requiredCapabilities:
+    # ClientCapabilities), its canonical example
     # (MissingRequiredClientCapabilityError/missing-elicitation-capability.json),
-    # and the TypeScript SDK v2 types all specify. The conformance
-    # tool asserts a string array (["sampling"]) — on the pinned
-    # 0.2.0-alpha.2 AND on conformance main as of 2026-06-12, where
-    # the check contradicts the repo's own vendored draft types.
-    # Official text wins (guiding principle; see conformance/README.md
-    # no-shortcuts rule): the SDK keeps the schema shape and this
-    # check stays an expected failure until the tool is fixed
-    # upstream. Re-check at every draft-pin bump; candidate for an
-    # upstream issue/PR per SEP-2484. The companion check
+    # the TypeScript SDK v2 types, AND the tool's own new SEP-2663 Tasks
+    # scenario (which asserts a data.requiredCapabilities.extensions[...]
+    # OBJECT) all specify. The conformance tool's stateless.ts check still
+    # asserts a string array (["sampling"]) — now contradicting the tool's
+    # OWN vendored draft schema and its OWN Tasks scenario, so the tool is
+    # internally self-contradictory on the pinned 0.2.0-alpha.7. Official
+    # text wins (guiding principle; conformance/README.md no-shortcuts
+    # rule): the SDK keeps the schema's object shape and this check stays an
+    # expected failure until the tool is fixed upstream. Re-checked at the
+    # alpha.7 bump (still failing); strong candidate for an upstream
+    # issue/PR per SEP-2484. The companion check
     # sep-2575-missing-capability-http-400 (status only) passes.
     #
     # The two SHOULD-level warnings (prompts/tools list_changed delivered
     # to an open subscriptions/listen stream) pass only where PHP's CLI
-    # server can run multiple workers (PHP_CLI_SERVER_WORKERS, POSIX
-    # only — run-conformance.php sets it automatically): the trigger
-    # tools/call must be served concurrently with the open stream. On
-    # Windows dev machines the events cannot be exercised locally;
-    # warnings do not fail the scenario either way.
+    # server can run multiple workers (PHP_CLI_SERVER_WORKERS, POSIX only —
+    # run-conformance.php sets it automatically). On Windows dev machines
+    # the concurrent events cannot be exercised locally; warnings do not
+    # fail the scenario either way.
 
 client:
-  # --- Two stale-tool entries (WS3 review rounds) ---
+  # --- Issuer-binding drift (re-checked at alpha.7: unchanged) ---
   - auth/pre-registration
     # UPSTREAM SPEC/TOOL DRIFT, not pursued in the SDK: the 2026-07-28
-    # draft's Authorization Server Binding rule (client-registration
-    # page) requires pre-registered credentials to be keyed by the
-    # issuer that registered them ("MUST associate those credentials
-    # with the specific authorization server that issued them, keyed by
-    # the authorization server's `issuer` identifier"), but the pinned
-    # 0.2.0-alpha.2 tool (upstream commit 25fd4432) supplies only
+    # draft's Authorization Server Binding rule requires pre-registered
+    # credentials to be keyed by the issuer that registered them ("MUST
+    # associate those credentials with the specific authorization server
+    # that issued them, keyed by the authorization server's `issuer`
+    # identifier"), but the pinned 0.2.0-alpha.7 tool still supplies only
     # {client_id, client_secret} as scenario context — no issuer — even
-    # though the scenario is tagged DRAFT-2026-v1 and the AS URL is
-    # known when the context is built. The SDK's draft-default is
-    # mandatory issuer binding, so the draft-track everything-client
-    # (spawned with --track=draft) correctly refuses to send a token
-    # request with unbound credentials and the scenario's
+    # though the AS URL is known when the context is built. The SDK's
+    # draft-default is mandatory issuer binding, so the draft-track
+    # everything-client (spawned with --track=draft) correctly refuses to
+    # send a token request with unbound credentials and the scenario's
     # pre-registration-auth check fails ("Client did not make a token
     # request"; 2/3 checks pass). The stable track still passes 14/14 —
     # there the published 2025-11-25 spec has no binding rule and the
@@ -92,14 +98,16 @@ client:
     # it is NOT in the draft suite. run-conformance.php therefore runs it
     # explicitly after the suite on the aggregate `draft`/`client-draft`
     # gate (see DRAFT_CLIENT_EXTRA_SCENARIOS) so this entry is actually
-    # evaluated — otherwise a stale entry (upstream adds issuer context,
-    # or asserts the strict refusal) would never be checked and would pass
-    # CI silently. Keep DRAFT_CLIENT_EXTRA_SCENARIOS in sync with any
-    # client entry here that falls outside the draft suite.
-    # Re-check at every draft-pin bump: expect upstream to either add
-    # issuer context to the scenario or assert the strict refusal.
-    # Candidate for an upstream issue per SEP-2484. See the upstream
-    # drift record in docs/v2-development-plan.md (WS3).
+    # evaluated — otherwise a stale entry would pass CI silently. Keep
+    # DRAFT_CLIENT_EXTRA_SCENARIOS in sync with any client entry here that
+    # falls outside the draft suite. Re-check at every draft-pin bump:
+    # expect upstream to either add issuer context to the scenario or
+    # assert the strict refusal. Candidate for an upstream issue per
+    # SEP-2484. See the upstream drift record in
+    # docs/v2-development-plan.md (WS3).
+
+  # --- number-typed x-mcp-header staleness (upstream fix merged, lands at
+  #     alpha.8 — still failing at alpha.7) ---
   - http-custom-headers
     # UPSTREAM TOOL STALENESS, not pursued in the SDK: the scenario's
     # advertised tools annotate `number`-typed parameters
@@ -107,34 +115,65 @@ client:
     # mirror them — but the final SEP-2243 text explicitly prohibits
     # x-mcp-header on type `number` (string/integer/boolean only) and
     # mandates that HTTP clients REJECT tool definitions violating the
-    # constraints. The SDK follows the final text (the WS3 review
-    # confirmed the prohibition), so it excludes the scenario's tools as
-    # invalid and never mirrors them; the scenario's five checks then
-    # fail unexercised. The companion http-invalid-tool-headers scenario
-    # (which has no number case) passes 11/11, as does
-    # http-custom-header-server-validation on the server track (its
-    # fixture uses a string parameter). Re-check at every draft-pin
-    # bump; candidate for an upstream scenario fix per SEP-2484.
+    # constraints. The SDK follows the final text, so it excludes the
+    # scenario's tools as invalid and never mirrors them; the scenario's
+    # five checks then fail unexercised. The companion
+    # http-invalid-tool-headers scenario (no number case) passes 11/11, as
+    # does http-custom-header-server-validation on the server track.
+    # Upstream PR #371 ("fix(http-custom-headers): use spec-permitted
+    # x-mcp-header types") fixes the fixture, but it merged AFTER the
+    # 0.2.0-alpha.7 tag, so it is NOT in the pinned tool. Expected to clear
+    # when the pin reaches 0.2.0-alpha.8+; re-check at the next pin bump.
 
-  # (Otherwise empty as of the WS3 milestone, 2026-06-12. Removed as now
-  # passing:
-  # - request-metadata: closed by an everything-client handler exercising
-  #   the SEP-2575 envelope/version-header obligations the checks actually
-  #   assert — the earlier baseline comment mis-attributed this scenario
-  #   to Mcp-Method/Mcp-Name emission, which it never checked.
-  # - http-custom-headers / http-invalid-tool-headers: SEP-2243
-  #   Mcp-Param-* mirroring with the base64 sentinel encoding, plus
-  #   client-side rejection (exclusion) of tools with invalid
-  #   x-mcp-header annotations.
-  # - sep-2322-client-request-state: the client MRTR loop — verbatim
-  #   requestState echo, fresh JSON-RPC ids, key-matched inputResponses,
-  #   per-call isolation, absent resultType treated as complete.
-  # - auth/iss-*: SEP-2468 RFC 9207 iss validation (non-normalized
-  #   comparison; reject scenarios exit before any token exchange).
-  # - auth/authorization-server-migration: SEP-2352 PRM re-fetch on 401 +
-  #   re-registration at the new AS without credential reuse.
-  # - auth/offline-access-not-supported: its one failing check was
-  #   SEP-837's cross-cutting application_type assertion in the mock
-  #   AS's registration handler (now sent on every DCR), not refresh
-  #   behavior — the earlier comment mis-attributed it.
-  # - json-schema-ref-no-deref had already left with WS1.)
+  # --- Two NEW upstream-drift entries surfaced by the alpha.7 bump ---
+  - json-schema-ref-no-deref
+    # UPSTREAM TOOL INCONSISTENCY, not pursued in the SDK: alpha.5 (#347)
+    # made this scenario's hand-rolled mock answer server/discover, but the
+    # mock routes actual method calls through the TypeScript SDK's STATEFUL
+    # StreamableHTTPServerTransport, which only supports <=2025-11-25. Its
+    # discover therefore advertises supportedVersions:["2026-07-28"] while
+    # its transport rejects a 2026-07-28 request with
+    #   -32000 "Bad Request: Unsupported protocol version: 2026-07-28
+    #   (supported versions: 2025-11-25, 2025-06-18, ...)"
+    # The PHP client is spec-correct: in protocolMode 'auto' it probes
+    # server/discover, the probe SUCCEEDS, so it adopts the advertised
+    # 2026-07-28 and sends an enveloped tools/list — which the mock's own
+    # transport then 400s (verified: client log shows discover ->
+    # supportedVersions:["2026-07-28"] -> tools/list -> HTTP 400 -32000).
+    # At alpha.2 the same mock did NOT answer discover, so the auto client
+    # fell back to the legacy handshake and the scenario passed (it had
+    # left the WS1 baseline). The SEP-2106 behavior the scenario actually
+    # tests (no network $ref dereference, 2020-12 schema pass-through) is
+    # version-independent and unchanged in the SDK. Re-check at the next
+    # pin bump; candidate for an upstream scenario fix per SEP-2484 (a
+    # draft mock should serve a 2026-07-28-capable transport, or not
+    # advertise a version its transport rejects).
+
+  - request-metadata
+    # UPSTREAM SCENARIO DEGENERACY from the DRAFT-2026-v1 retirement, not
+    # pursued in the SDK: the mock simulates a one-time first-request
+    # rejection to exercise the SHOULD-level retry check
+    # (sep-2575-client-retry-supported-version) — it rejects the client's
+    # first probe with -32022 UnsupportedProtocolVersion and expects a
+    # retry using a version from data.supported. At alpha.2 the mock
+    # advertised supported:["DRAFT-2026-v1"], a DISTINCT identifier from
+    # the client's first attempt (2026-07-28), so the SDK adopted it and
+    # retried and the scenario passed (it had left the WS3 baseline).
+    # alpha.3 (#331) retired DRAFT-2026-v1; the alpha.7 mock now rejects
+    # the 2026-07-28 probe while advertising supported:["2026-07-28"] — the
+    # SAME version just attempted (verified: client log shows discover ->
+    # -32022 data.supported:["2026-07-28"] requested:"2026-07-28"). The
+    # SDK's negotiate() excludes already-attempted versions from the retry
+    # (an infinite-loop guard: a server that rejects version X cannot
+    # honestly advertise ONLY X), so pickAdvertisedModernVersion() returns
+    # null and negotiate() throws rather than re-sending the identical
+    # rejected version. The retry check stays WARNING (it never fails), but
+    # the thrown connection crashes the everything-client, so the tool
+    # flags the scenario. The SDK behavior is spec-defensible (do not loop
+    # on an identical rejected version; SEP-2575 forbids falling back to
+    # initialize from a modern server). Re-check at the next pin bump and at
+    # WS7 convergence: expect upstream to restore a distinct retry version
+    # or settle DRAFT-2026-v1's replacement. Whether the SDK should retry an
+    # already-attempted-but-advertised version exactly once is a
+    # spec-clarification question flagged for human/upstream review
+    # (SEP-2484), deliberately NOT changed silently here.

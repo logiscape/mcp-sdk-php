@@ -168,10 +168,12 @@ the Medium-term section carries; several of these SEPs are still settling):
     notifications, and `Mcp-Name` only on the name/uri-bearing methods
     (`tools/call`, `resources/read`, `prompts/get`; the Tasks extension reuses it
     for the task id). A header whose value disagrees with the body, or a missing
-    required header, is rejected `400` with a `HeaderMismatch` / `-32001` error.
+    required header, is rejected `400` with a `HeaderMismatch` / `-32020` error
+    (renumbered from `-32001` per spec PR modelcontextprotocol#2907; see the v2
+    plan's WS7 update).
     (The mandatory per-request `MCP-Protocol-Version` header and its
     must-match-`_meta` rule are defined by SEP-2575 above; SEP-2243 supplies the
-    `-32001` enforcement, which also covers a version-header/`_meta` mismatch.)
+    `-32020` enforcement, which also covers a version-header/`_meta` mismatch.)
     Also support the `x-mcp-header` schema annotation that mirrors designated tool
     parameters into `Mcp-Param-*` headers (clients MUST emit them; whether those
     headers survive network intermediaries and shared-hosting `.htaccess` is a

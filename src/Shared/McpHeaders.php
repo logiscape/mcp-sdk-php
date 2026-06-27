@@ -267,10 +267,11 @@ final class McpHeaders
      * boolean (`number` is explicitly NOT permitted by SEP-2243; object,
      * array, and null are rejected too); annotations are unique
      * case-insensitively across the whole schema. Note: the pinned
-     * 0.2.0-alpha.2 conformance tool's http-custom-headers scenario still
+     * 0.2.0-alpha.7 conformance tool's http-custom-headers scenario still
      * mirrors number-typed parameters — that scenario predates the final
-     * type restriction and its failure is documented in the draft
-     * baseline rather than worked around here (official text wins).
+     * type restriction (upstream fix #371 lands at alpha.8) and its failure
+     * is documented in the draft baseline rather than worked around here
+     * (official text wins).
      *
      * @param array<string, mixed>|null $inputSchema Decoded tool inputSchema
      * @return array{map: array<string, array{annotation: string, type: string, segments: list<string>}>, errors: list<string>}

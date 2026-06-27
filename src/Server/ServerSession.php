@@ -327,7 +327,7 @@ class ServerSession extends BaseSession {
      * params they carried), -32602 for known methods with invalid params.
      * On the modern path the SEP-2575 pre-dispatch checks run FIRST, so a
      * broken envelope or unsupported version is rejected as malformed
-     * (-32602/-32004, HTTP 400) before any method routing — the same
+     * (-32602/-32022, HTTP 400) before any method routing — the same
      * ordering handleModernRequest applies to well-formed requests. The
      * modern-era flag is set from the raw wire metadata so the HTTP
      * status hints (404/400) ride along on the stateless path.
@@ -633,7 +633,7 @@ class ServerSession extends BaseSession {
      *
      * Order of checks follows the spec: the `_meta` envelope must be
      * complete and well-formed (-32602), its protocol version must be one
-     * the server can serve on this path (-32004 with data.supported/
+     * the server can serve on this path (-32022 with data.supported/
      * requested), and only then is the method routed — removed-method and
      * unknown-method requests get -32601. The era, client info, and
      * client capabilities adopted from the envelope hold for exactly this
@@ -921,7 +921,7 @@ class ServerSession extends BaseSession {
      * The SEP-2575 checks that precede method routing on the modern path:
      * the `_meta` envelope must be complete and well-formed (-32602), and
      * its protocol version must be one the server can serve on this path
-     * (-32004 with data.supported/requested). Shared by the typed dispatch
+     * (-32022 with data.supported/requested). Shared by the typed dispatch
      * (handleModernRequest) and the malformed-request answer path
      * (answerMalformedRequest), so an unknown or removed method with a
      * broken envelope is still rejected as malformed (400) rather than
@@ -1422,7 +1422,7 @@ class ServerSession extends BaseSession {
      * Enforce SEP-2575's missing-capability rule for the modern path: a
      * server MUST NOT rely on capabilities the request's `_meta` envelope
      * did not declare — when processing requires one, the request fails
-     * with MissingRequiredClientCapabilityError (-32003, listing the
+     * with MissingRequiredClientCapabilityError (-32021, listing the
      * capabilities in data.requiredCapabilities; HTTP 400) rather than
      * degrading silently. On legacy revisions this is a no-op: the
      * pre-2026 contract is "MUST NOT send without capability", which the
@@ -1433,8 +1433,9 @@ class ServerSession extends BaseSession {
      * draft schema's canonical example
      * (`MissingRequiredClientCapabilityError/missing-elicitation-capability.json`),
      * and the TypeScript SDK v2 types. Note: the pinned draft conformance
-     * tool (0.2.0-alpha.2, and its `main` as of 2026-06-12) asserts a
-     * string array instead — a known upstream tool bug, documented in
+     * tool (0.2.0-alpha.7) asserts a string array instead — a known
+     * upstream tool bug (now contradicting the tool's own vendored draft
+     * schema and its SEP-2663 Tasks scenario), documented in
      * conformance/conformance-draft-baseline.yml; the official text wins.
      *
      * @param string[] $requiredCapabilities Capability names (e.g. ['sampling'])
@@ -1832,8 +1833,8 @@ class ServerSession extends BaseSession {
     /**
      * The HTTP status SEP-2575 mandates for a JSON-RPC error code on the
      * modern stateless path: malformed envelope (-32602), header mismatch
-     * (-32001), missing required client capability (-32003), and
-     * unsupported protocol version (-32004) are 400 Bad Request; an
+     * (-32020), missing required client capability (-32021), and
+     * unsupported protocol version (-32022) are 400 Bad Request; an
      * unknown or removed method (-32601) is 404 Not Found. Every other
      * error rides the default 200.
      */

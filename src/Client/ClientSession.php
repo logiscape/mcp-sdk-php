@@ -373,7 +373,7 @@ class ClientSession extends BaseSession {
      * @param string|null $protocolVersion Protocol revision to advertise in
      *        the envelope (defaults to the latest supported revision)
      * @throws \Mcp\Shared\McpError If the server rejects the request (e.g.
-     *         -32601 from a legacy server, -32004 for an unsupported version)
+     *         -32601 from a legacy server, -32022 for an unsupported version)
      */
     public function discover(?string $protocolVersion = null): DiscoverResult {
         $meta = new Meta();
@@ -397,12 +397,12 @@ class ClientSession extends BaseSession {
      * 1. Probe with `server/discover`, preferring the latest modern
      *    revision. Success → modern; the session is immediately ready and
      *    every subsequent request carries the per-request `_meta` envelope.
-     * 2. On UnsupportedProtocolVersionError (-32004), the server is
+     * 2. On UnsupportedProtocolVersionError (-32022), the server is
      *    modern: retry with a version from its advertised
      *    `data.supported` list. Never fall back to `initialize` — when no
      *    advertised version is mutually supported, fail.
-     * 3. On the other recognized modern errors (-32001 HeaderMismatch,
-     *    -32003 MissingRequiredClientCapability), the server is modern;
+     * 3. On the other recognized modern errors (-32020 HeaderMismatch,
+     *    -32021 MissingRequiredClientCapability), the server is modern;
      *    the error is re-thrown rather than treated as an era signal.
      * 4. On any *other* error — a legacy server's implementation-defined
      *    rejection (commonly -32601 or -32602, or an HTTP 400 whose body
@@ -450,7 +450,7 @@ class ClientSession extends BaseSession {
             // servers (notably conformance mocks) answer -32601 to both
             // server/discover and initialize; the spec's stateless model
             // does not require any pre-flight, so the session simply
-            // starts sending enveloped requests. A later -32004 carrying
+            // starts sending enveloped requests. A later -32022 carrying
             // an advertised supported list is handled per-request by
             // sendRequest()'s adopt-and-retry.
             $version = $preferredVersion ?? Version::LATEST_PROTOCOL_VERSION;
@@ -478,7 +478,7 @@ class ClientSession extends BaseSession {
                 if ($code === \Mcp\Shared\McpError::UNSUPPORTED_PROTOCOL_VERSION) {
                     $retry = $this->pickAdvertisedModernVersion($e->error->data, $attempted);
                     if ($retry !== null) {
-                        $this->logger->info("Server rejected version {$version} (-32004); retrying with advertised version {$retry}");
+                        $this->logger->info("Server rejected version {$version} (-32022); retrying with advertised version {$retry}");
                         $version = $retry;
                         continue;
                     }
@@ -546,7 +546,7 @@ class ClientSession extends BaseSession {
     }
 
     /**
-     * Pick the retry version after a -32004: the first identifier from
+     * Pick the retry version after a -32022: the first identifier from
      * this client's modern list (in preference order) that the server
      * advertised in data.supported and that has not been attempted yet.
      *
@@ -619,15 +619,15 @@ class ClientSession extends BaseSession {
 
     /**
      * Send a typed request, transparently adopting an advertised modern
-     * wire version on -32004.
+     * wire version on -32022.
      *
      * In modern mode (auto-negotiated or forced) a server may reject any
-     * request with UnsupportedProtocolVersionError (-32004) carrying a
+     * request with UnsupportedProtocolVersionError (-32022) carrying a
      * `data.supported` list — most notably the FIRST real request of a
      * forced-modern session, which never probed. When the list contains a
      * mutually supported version, the session adopts it (every subsequent
      * envelope and mirrored MCP-Protocol-Version header switches) and the
-     * request is retried exactly once; a second -32004 propagates. Errors
+     * request is retried exactly once; a second -32022 propagates. Errors
      * without a usable advertised list propagate unchanged, as does
      * everything on the legacy path.
      *
@@ -649,7 +649,7 @@ class ClientSession extends BaseSession {
                 throw $e;
             }
             $this->logger->info(
-                "Server rejected wire version {$this->modernWireVersion} (-32004) on {$request->method}; "
+                "Server rejected wire version {$this->modernWireVersion} (-32022) on {$request->method}; "
                 . "adopting advertised version {$retry} and retrying once"
             );
             $this->adoptModernWireVersion($retry, $request);

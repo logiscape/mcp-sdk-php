@@ -3,6 +3,6 @@
     "description": "Dev tooling for MCP SDK PHP conformance testing",
     "devDependencies": {
         "@modelcontextprotocol/conformance": "0.1.16",
-        "conformance-draft": "npm:@modelcontextprotocol/conformance@0.2.0-alpha.2"
+        "conformance-draft": "npm:@modelcontextprotocol/conformance@0.2.0-alpha.7"
     }
 }

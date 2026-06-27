@@ -136,7 +136,7 @@ class ElicitationContext
     {
         if (!$this->supportsForm()) {
             // Modern path (SEP-2575): a request whose envelope did not
-            // declare the elicitation capability fails with -32003 instead
+            // declare the elicitation capability fails with -32021 instead
             // of degrading silently. No-op on legacy revisions.
             $this->session->raiseMissingClientCapabilityIfModern(['elicitation']);
             return null;

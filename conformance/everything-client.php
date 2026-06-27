@@ -373,6 +373,14 @@ function scenarioElicitationClientDefaults(string $serverUrl): void
 // SEP-2106 forbids automatic dereferencing of network URIs. The PHP SDK
 // passes schemas through verbatim and never dereferences, so this scenario
 // only needs the connect + tools/list flow.
+//
+// As of draft pin 0.2.0-alpha.7 this scenario is an EXPECTED FAILURE
+// (see conformance-draft-baseline.yml): upstream #347 made the mock answer
+// server/discover advertising 2026-07-28, but its TS-SDK stateful transport
+// rejects that version, so the spec-correct auto-mode client (which adopts
+// the advertised version) is 400'd on tools/list. Left exercising the real
+// 'auto' connect path on purpose — the failure is the documented upstream
+// inconsistency, not an SDK shortcut.
 // ---------------------------------------------------------------------------
 
 function scenarioJsonSchemaRefNoDeref(string $serverUrl): void
@@ -402,11 +410,18 @@ function scenarioJsonSchemaRefNoDeref(string $serverUrl): void
 // ---------------------------------------------------------------------------
 // Scenario: request-metadata (SEP-2575)
 //
-// The mock rejects the FIRST request with -32004 UnsupportedProtocolVersion
-// carrying supported:["DRAFT-2026-v1"]. Connect with protocolMode 'auto':
-// negotiate() retries the probe with the advertised version and enters
-// modern mode speaking it; every subsequent request carries the matching
-// envelope and MCP-Protocol-Version header.
+// The mock rejects the FIRST request with -32022 UnsupportedProtocolVersion
+// to exercise the SHOULD-level retry check, then expects the client to retry
+// with a version from data.supported. Connect with protocolMode 'auto':
+// negotiate() adopts the advertised version and retries the probe.
+//
+// As of draft pin 0.2.0-alpha.7 this scenario is an EXPECTED FAILURE
+// (see conformance-draft-baseline.yml): upstream #331 retired the
+// DRAFT-2026-v1 retry identifier, so the mock now advertises
+// supported:["2026-07-28"] — the SAME version the client just attempted —
+// and the SDK's infinite-loop guard declines to re-send an identical
+// rejected version, so negotiate() throws. Left exercising the real 'auto'
+// path on purpose; the failure is the documented upstream degeneracy.
 // ---------------------------------------------------------------------------
 
 function scenarioRequestMetadata(string $serverUrl): void

@@ -138,10 +138,10 @@ class Version {
 
     /**
      * The full version list a server advertises on its discovery surfaces
-     * (DiscoverResult.supportedVersions and -32004 data.supported): every
+     * (DiscoverResult.supportedVersions and -32022 data.supported): every
      * revision negotiable via the legacy handshake, the stateless
      * revision, plus the RC-window draft alias. The conformance suite
-     * cross-checks that every -32004 `supported` entry also appears in
+     * cross-checks that every -32022 `supported` entry also appears in
      * DiscoverResult.supportedVersions, so all advertisement sites must
      * draw from this one list (or a subset of it).
      *

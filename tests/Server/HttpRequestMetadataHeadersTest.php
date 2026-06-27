@@ -41,12 +41,12 @@ use PHPUnit\Framework\TestCase;
  *   case-insensitive).
  * - Mcp-Name is required on the name/uri-bearing methods and must match.
  * - MCP-Protocol-Version must be present and equal the _meta envelope's
- *   protocolVersion; a disagreement is -32001 HeaderMismatch (checked
- *   BEFORE the -32004 unsupported-version error, which only fires when
+ *   protocolVersion; a disagreement is -32020 HeaderMismatch (checked
+ *   BEFORE the -32022 unsupported-version error, which only fires when
  *   header and _meta agree).
  * - Designated tool parameters (x-mcp-header) must arrive mirrored in
  *   matching Mcp-Param-* headers, with strict base64-sentinel decoding.
- * All rejections are HTTP 400 + JSON-RPC -32001 echoing the request id.
+ * All rejections are HTTP 400 + JSON-RPC -32020 echoing the request id.
  * Legacy requests carry none of these headers and are untouched.
  */
 final class HttpRequestMetadataHeadersTest extends TestCase
@@ -156,7 +156,7 @@ final class HttpRequestMetadataHeadersTest extends TestCase
     {
         $this->assertSame(400, $response->getStatusCode(), 'HeaderMismatch MUST be HTTP 400');
         $body = json_decode((string) $response->getBody(), true);
-        $this->assertSame(-32001, $body['error']['code'] ?? null, 'HeaderMismatch MUST be -32001');
+        $this->assertSame(-32020, $body['error']['code'] ?? null, 'HeaderMismatch MUST be -32020');
         $this->assertSame($expectedId, $body['id'], 'Error must echo the request id');
         return $body;
     }
@@ -245,13 +245,13 @@ final class HttpRequestMetadataHeadersTest extends TestCase
     }
 
     // -------------------------------------------------------------------
-    // MCP-Protocol-Version header vs _meta (-32001 before -32004)
+    // MCP-Protocol-Version header vs _meta (-32020 before -32022)
     // -------------------------------------------------------------------
 
     public function testVersionHeaderMetaMismatchIsHeaderMismatch(): void
     {
         // The conformance probe: header carries the run's version while
-        // _meta says v999.0.0 — that disagreement is -32001, NOT -32004.
+        // _meta says v999.0.0 — that disagreement is -32020, NOT -32022.
         $envelope = $this->envelope();
         $envelope[MetaKeys::PROTOCOL_VERSION] = 'v999.0.0';
         $response = $this->makeRunner()->handleRequest($this->post(
@@ -263,7 +263,7 @@ final class HttpRequestMetadataHeadersTest extends TestCase
 
     public function testAgreedUnsupportedVersionIsStill32004(): void
     {
-        // -32004 only fires when header and _meta AGREE on an unsupported
+        // -32022 only fires when header and _meta AGREE on an unsupported
         // version — the validation order the spec's reference fixes.
         $envelope = $this->envelope('v999.0.0');
         $response = $this->makeRunner()->handleRequest($this->post(
@@ -271,7 +271,7 @@ final class HttpRequestMetadataHeadersTest extends TestCase
         ));
         $this->assertSame(400, $response->getStatusCode());
         $body = json_decode((string) $response->getBody(), true);
-        $this->assertSame(-32004, $body['error']['code']);
+        $this->assertSame(-32022, $body['error']['code']);
         $this->assertSame('v999.0.0', $body['error']['data']['requested']);
     }
 
@@ -303,7 +303,7 @@ final class HttpRequestMetadataHeadersTest extends TestCase
         $response = $this->makeRunner()->handleRequest($this->post($body, ['Mcp-Method' => null]));
         $this->assertSame(400, $response->getStatusCode());
         $decoded = json_decode((string) $response->getBody(), true);
-        $this->assertSame(-32001, $decoded['error']['code']);
+        $this->assertSame(-32020, $decoded['error']['code']);
         $this->assertNull($decoded['id']);
     }
 

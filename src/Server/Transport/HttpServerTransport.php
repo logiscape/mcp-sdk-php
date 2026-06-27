@@ -436,12 +436,12 @@ class HttpServerTransport implements Transport
         // modern _meta envelope key, or when it is a server/discover
         // request (a modern-only construct). Modern requests bypass the
         // legacy version-header gate — the session answers an unsupported
-        // version with the spec's UnsupportedProtocolVersionError (-32004,
+        // version with the spec's UnsupportedProtocolVersionError (-32022,
         // original request id, data.supported/requested) instead of the
         // transport's generic -32600/id:null. The SEP-2243 header checks
         // (validateModernRequestHeaders) run first: a missing or
-        // body-mismatched standard header is rejected 400/-32001 before
-        // the envelope or version is considered, so -32004 only ever
+        // body-mismatched standard header is rejected 400/-32020 before
+        // the envelope or version is considered, so -32022 only ever
         // fires when header and _meta agree.
         $headerVersion = $request->getHeader('MCP-Protocol-Version');
         $headerDeclaresModern = $headerVersion !== null && Version::isModernVersion($headerVersion);
@@ -478,9 +478,9 @@ class HttpServerTransport implements Transport
         // persisting it.
         if ($isModernPost) {
             // SEP-2243: validate the request-metadata headers before any
-            // body-level processing. HeaderMismatch (-32001, HTTP 400)
+            // body-level processing. HeaderMismatch (-32020, HTTP 400)
             // takes precedence over the envelope's -32602 and the
-            // version's -32004 whenever a header is missing or disagrees
+            // version's -32022 whenever a header is missing or disagrees
             // with the body.
             if ($rejection = $this->validateModernRequestHeaders($request, $decodedPostBody)) {
                 return $rejection;
@@ -2285,9 +2285,9 @@ class HttpServerTransport implements Transport
      * SEP-2243 server validation for a modern (2026-07-28) POST: the
      * standard request-metadata headers must be present and must match the
      * body. Any violation is rejected with HTTP 400 and the HeaderMismatch
-     * JSON-RPC error (-32001) carrying the request's id.
+     * JSON-RPC error (-32020) carrying the request's id.
      *
-     * Checks, in order (mirroring the spec's canonical sequence so -32004
+     * Checks, in order (mirroring the spec's canonical sequence so -32022
      * only ever fires when header and _meta agree):
      * 1. MCP-Protocol-Version header present — a request that signals the
      *    modern era through its body cannot be served as a legacy

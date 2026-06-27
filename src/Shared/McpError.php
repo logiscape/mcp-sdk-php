@@ -42,21 +42,28 @@ class McpError extends Exception {
     /**
      * 2026-07-28 (SEP-2243): a request-metadata header does not match the
      * request body (also covers MCP-Protocol-Version vs _meta mismatches).
+     *
+     * Renumbered from -32001 to -32020 by the draft error-code allocation
+     * policy (spec PR modelcontextprotocol#2907).
      */
-    public const HEADER_MISMATCH = -32001;
+    public const HEADER_MISMATCH = -32020;
 
     /**
      * 2026-07-28 (SEP-2575): the client lacks a capability the request
      * requires. error.data carries `requiredCapabilities`. HTTP 400.
+     *
+     * Renumbered from -32003 to -32021 by spec PR modelcontextprotocol#2907.
      */
-    public const MISSING_REQUIRED_CLIENT_CAPABILITY = -32003;
+    public const MISSING_REQUIRED_CLIENT_CAPABILITY = -32021;
 
     /**
      * 2026-07-28 (SEP-2575): the protocol version requested in _meta is not
      * supported. error.data carries `supported` (string[]) and `requested`
      * (string). HTTP 400.
+     *
+     * Renumbered from -32004 to -32022 by spec PR modelcontextprotocol#2907.
      */
-    public const UNSUPPORTED_PROTOCOL_VERSION = -32004;
+    public const UNSUPPORTED_PROTOCOL_VERSION = -32022;
 
     public function __construct(
         public readonly ErrorData $error,

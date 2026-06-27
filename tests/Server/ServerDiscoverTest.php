@@ -47,7 +47,7 @@ use PHPUnit\Framework\TestCase;
  * handshake: it must be answerable WITHOUT any prior handshake, must
  * advertise the same capabilities the legacy initialize result advertises,
  * must reject a malformed _meta envelope with -32602 naming the missing
- * field, and must answer an unsupported protocol version with -32004
+ * field, and must answer an unsupported protocol version with -32022
  * carrying the supported/requested data payload.
  *
  * Messages are fed through BaseSession::handleIncomingMessage() (the real
@@ -270,7 +270,7 @@ final class ServerDiscoverTest extends TestCase
 
     /**
      * An unsupported protocol version in the envelope is answered with
-     * -32004 (UnsupportedProtocolVersionError) whose data carries
+     * -32022 (UnsupportedProtocolVersionError) whose data carries
      * `supported` (every advertised version, matching the discover result)
      * and `requested` (echoed back) — the exact wire shape from the draft
      * schema's example.
@@ -284,7 +284,7 @@ final class ServerDiscoverTest extends TestCase
         $inner = $transport->writtenMessages[0]->message;
         $this->assertInstanceOf(JSONRPCError::class, $inner);
         $this->assertSame(McpError::UNSUPPORTED_PROTOCOL_VERSION, $inner->error->code);
-        $this->assertSame(-32004, $inner->error->code);
+        $this->assertSame(-32022, $inner->error->code);
 
         $data = (array) $inner->error->data;
         $this->assertSame('v999.0.0', $data['requested']);

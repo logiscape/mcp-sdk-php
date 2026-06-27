@@ -139,7 +139,7 @@ class SamplingContext
     ): ?CreateMessageResult {
         if (!$this->supportsSampling()) {
             // Modern path (SEP-2575): a request whose envelope did not
-            // declare the sampling capability fails with -32003 instead of
+            // declare the sampling capability fails with -32021 instead of
             // degrading silently. No-op on legacy revisions.
             $this->session->raiseMissingClientCapabilityIfModern(['sampling']);
             return null;

@@ -314,7 +314,7 @@ final class ServerEraDetectionTest extends TestCase
 
     /**
      * Likewise the version check precedes -32601 for unknown methods: an
-     * unsupported version is -32004 whatever the method is.
+     * unsupported version is -32022 whatever the method is.
      */
     public function testUnknownMethodWithUnsupportedVersionAnswers32004(): void
     {
@@ -350,7 +350,7 @@ final class ServerEraDetectionTest extends TestCase
 
     /**
      * A non-discover modern request with an unsupported version answers
-     * -32004 whose data.supported lists exactly the identifiers servable
+     * -32022 whose data.supported lists exactly the identifiers servable
      * on the per-request path (a subset of the discover advertisement, as
      * the conformance suite cross-checks).
      */
@@ -372,7 +372,7 @@ final class ServerEraDetectionTest extends TestCase
 
     /**
      * A LEGACY revision in the envelope of a non-discover request is also
-     * -32004: per-request service exists only under modern identifiers;
+     * -32022: per-request service exists only under modern identifiers;
      * legacy revisions are served through the initialize handshake.
      */
     public function testLegacyVersionInEnvelopeRejectedOnModernPath(): void
@@ -471,7 +471,7 @@ final class ServerEraDetectionTest extends TestCase
     /**
      * SEP-2575 missing-capability enforcement: a modern tools/call whose
      * envelope did NOT declare sampling, hitting a tool that requires it,
-     * fails with -32003 — instead of the legacy silent-fallback behavior.
+     * fails with -32021 — instead of the legacy silent-fallback behavior.
      * data.requiredCapabilities is a ClientCapabilities OBJECT
      * (`{"sampling": {}}`) per the SEP-2575 final text and the draft
      * schema's canonical example — not the string array the pinned
@@ -526,7 +526,7 @@ final class ServerEraDetectionTest extends TestCase
 
     /**
      * ...and the spec's "MUST NOT infer capabilities from prior requests":
-     * a later request WITHOUT the declaration fails -32003 even though the
+     * a later request WITHOUT the declaration fails -32021 even though the
      * previous request on the same connection declared it.
      */
     public function testCapabilitiesNotInferredFromPriorRequests(): void
@@ -593,7 +593,7 @@ final class ServerEraDetectionTest extends TestCase
         ], id: 1));
         // -32601 (removed method) → 404
         $session->processIncoming($this->makeRequest('ping', ['_meta' => $this->envelope()], id: 2));
-        // -32004 → 400
+        // -32022 → 400
         $session->processIncoming($this->makeRequest('tools/list', [
             '_meta' => $this->envelope('v999'),
         ], id: 3));
