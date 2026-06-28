@@ -219,7 +219,10 @@ function startServer(int $port, string $serverScript, string $phpBinary, &$serve
 
     echo "Starting conformance test server on port $port...\n";
 
-    $cmd = sprintf('%s -S localhost:%d %s', escapeshellarg($phpBinary), $port, escapeshellarg($serverScript));
+    // Pass argv as an array so proc_open launches PHP directly instead of
+    // wrapping it in /bin/sh. On Linux CI the shell indirection can otherwise
+    // hide the built-in server's worker grandchildren from cleanup.
+    $cmd = [$phpBinary, '-S', "localhost:$port", $serverScript];
     $descriptors = [
         0 => ['file', PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null', 'r'],
         1 => ['file', PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null', 'w'],
@@ -297,21 +300,18 @@ function stopServer(&$serverProcess): void
             exec("taskkill /F /T /PID $pid 2>NUL", $output, $exitCode);
         } else {
             // PHP's built-in server in PHP_CLI_SERVER_WORKERS mode (set on
-            // POSIX in startServer) forks worker children that inherit and
-            // keep the listening socket bound. proc_terminate signals ONLY the
-            // master, so the workers survive and hold the port — and the next
-            // startServer aborts with "Port already in use". This is why the
-            // draft aggregate, which starts/stops a server per scenario,
-            // fails on Linux CI but not on Windows, where taskkill /F /T
-            // already tears down the whole tree. Mirror that here: collect the
-            // workers BEFORE terminating the master (afterwards they reparent
-            // to init and pgrep -P can no longer find them), then signal the
-            // master and every worker.
-            $workers = posixChildPids($pid);
+            // POSIX in startServer) forks workers that inherit and keep the
+            // listening socket bound. proc_terminate signals ONLY the process
+            // proc_open is tracking, so descendants can survive and hold the
+            // port, causing the next startServer call to fail with "Port
+            // already in use". Collect the full tree BEFORE terminating the
+            // parent (afterwards children may reparent to init), then signal
+            // every descendant as well as the tracked process.
+            $descendants = posixDescendantPids($pid);
 
             proc_terminate($serverProcess, 15); // SIGTERM master
-            foreach ($workers as $worker) {
-                posixKill($worker, 15);
+            foreach ($descendants as $descendant) {
+                posixKill($descendant, 15);
             }
 
             // Give the tree a moment to exit gracefully, then SIGKILL any
@@ -320,9 +320,9 @@ function stopServer(&$serverProcess): void
             if (proc_get_status($serverProcess)['running']) {
                 proc_terminate($serverProcess, 9); // SIGKILL master
             }
-            foreach ($workers as $worker) {
-                if (posixAlive($worker)) {
-                    posixKill($worker, 9);
+            foreach ($descendants as $descendant) {
+                if (posixAlive($descendant)) {
+                    posixKill($descendant, 9);
                 }
             }
         }
@@ -333,21 +333,44 @@ function stopServer(&$serverProcess): void
 }
 
 /**
- * Best-effort list of the direct child PIDs of $pid on POSIX — the PHP
- * built-in server's forked workers. Returns an empty list on Windows, when
- * pgrep is unavailable, or when the process has no children.
+ * Best-effort list of every descendant PID of $pid on POSIX. This covers both
+ * the PHP built-in server's worker children and any shell/process wrapper that
+ * may exist on a particular PHP/OS combination.
  *
  * @return list<int>
  */
-function posixChildPids(int $pid): array
+function posixDescendantPids(int $pid): array
 {
     if (PHP_OS_FAMILY === 'Windows' || $pid <= 1) {
         return [];
     }
 
-    // Prefer the kernel's children list (no external tool needed; present on
-    // the GitHub Actions Linux runners), falling back to pgrep where the proc
-    // children file is unavailable.
+    $descendants = [];
+    $queue = [$pid];
+
+    while ($queue !== []) {
+        $current = array_shift($queue);
+        foreach (posixChildPids($current) as $child) {
+            if (isset($descendants[$child])) {
+                continue;
+            }
+            $descendants[$child] = $child;
+            $queue[] = $child;
+        }
+    }
+
+    // Kill deepest descendants first so workers are signalled before parents
+    // reparent them during shutdown.
+    return array_reverse(array_values($descendants));
+}
+
+/**
+ * Best-effort list of direct child PIDs for a POSIX process.
+ *
+ * @return list<int>
+ */
+function posixChildPids(int $pid): array
+{
     $raw = @file_get_contents("/proc/$pid/task/$pid/children");
     if (!is_string($raw) || trim($raw) === '') {
         $raw = @shell_exec('pgrep -P ' . $pid . ' 2>/dev/null');
@@ -362,6 +385,7 @@ function posixChildPids(int $pid): array
             $pids[] = (int) $token;
         }
     }
+
     return $pids;
 }
 
