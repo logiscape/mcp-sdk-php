@@ -70,6 +70,32 @@ $clientSuite = $_SERVER['CONFORMANCE_CLIENT_SUITE'] ?? getenv('CONFORMANCE_CLIEN
 // draft suite; re-check at every draft-pin bump.
 const DRAFT_CLIENT_EXTRA_SCENARIOS = ['auth/pre-registration'];
 
+// Draft SERVER scenarios that the tool registers in its `pending` suite (not
+// `draft`), so `--suite draft` never runs them: the SEP-2663 Tasks extension
+// scenarios. everything-server.php exposes the fixtures they need (greet,
+// slow_compute, failing_job, protocol_error_job, confirm_delete, multi_input,
+// test_tool_with_task) via enableTasks(); the aggregate `server-draft`/`draft`
+// gates run each explicitly so they are actually evaluated against the draft
+// baseline. Of the ten: EIGHT pass, tasks-status-notifications is SKIPPED by
+// the tool itself (0 checks — it is pending the tool's subscriptions/listen
+// rewrite), and tasks-mrtr-composition is the one baselined expected failure
+// (the synchronous shared-hosting execution model surfaces task input via the
+// in-task tasks/get/tasks/update mechanism rather than the pre-creation-MRTR
+// sequence that scenario mandates — see conformance-draft-baseline.yml). Keep
+// this list in sync with the tool's `pending` Tasks scenarios at each pin bump.
+const DRAFT_SERVER_EXTRA_SCENARIOS = [
+    'tasks-lifecycle',
+    'tasks-capability-negotiation',
+    'tasks-wire-fields',
+    'tasks-request-state-removal',
+    'tasks-mrtr-input',
+    'tasks-request-headers',
+    'tasks-dispatch-and-envelope',
+    'tasks-status-notifications',
+    'tasks-required-task-error',
+    'tasks-mrtr-composition',
+];
+
 $conformanceDir = __DIR__;
 $projectDir = dirname($conformanceDir);
 $baseline = $conformanceDir . DIRECTORY_SEPARATOR . 'conformance-baseline.yml';
@@ -121,7 +147,7 @@ switch ($mode) {
 
     case 'server-draft':
         $conformanceCmd = resolveConformanceTool($projectDir, 'conformance-draft');
-        exit(runServerTests($port, 'draft', $scenario, $verbose, $draftBaseline, $serverScript, $phpBinary, $conformanceCmd, $serverProcess));
+        exit(runServerDraftTests($port, $scenario, $verbose, $draftBaseline, $serverScript, $phpBinary, $conformanceCmd, $serverProcess));
 
     case 'client-draft':
         $conformanceCmd = resolveConformanceTool($projectDir, 'conformance-draft');
@@ -129,7 +155,7 @@ switch ($mode) {
 
     case 'draft':
         $conformanceCmd = resolveConformanceTool($projectDir, 'conformance-draft');
-        $serverExit = runServerTests($port, 'draft', $scenario, $verbose, $draftBaseline, $serverScript, $phpBinary, $conformanceCmd, $serverProcess);
+        $serverExit = runServerDraftTests($port, $scenario, $verbose, $draftBaseline, $serverScript, $phpBinary, $conformanceCmd, $serverProcess);
         $clientExit = runClientDraftTests($scenario, $verbose, $draftBaseline, $clientScript, $phpBinary, $conformanceCmd);
         exit($serverExit !== 0 ? $serverExit : $clientExit);
 
@@ -370,6 +396,44 @@ function runClientTests(
  * The aggregate run (no scenario) returns the first non-zero exit code across
  * the suite and the extras, so any regression or stale entry propagates.
  */
+/**
+ * Run the draft server gate: the draft suite, plus every Tasks scenario the
+ * suite omits (DRAFT_SERVER_EXTRA_SCENARIOS, registered in the tool's
+ * `pending` suite), so those scenarios — and any baseline entry among them —
+ * are actually evaluated. Without this the SEP-2663 Tasks scenarios would
+ * never run under `composer conformance-draft`.
+ *
+ * A single explicit scenario request runs only that scenario and skips the
+ * extras. The aggregate run returns the first non-zero exit code across the
+ * suite and the extras, so any regression or stale baseline entry propagates.
+ */
+function runServerDraftTests(
+    int $port,
+    ?string $scenario,
+    bool $verbose,
+    string $baseline,
+    string $serverScript,
+    string $phpBinary,
+    string $conformanceCmd,
+    &$serverProcess
+): int {
+    if ($scenario !== null) {
+        return runServerTests($port, 'draft', $scenario, $verbose, $baseline, $serverScript, $phpBinary, $conformanceCmd, $serverProcess);
+    }
+
+    $exitCode = runServerTests($port, 'draft', null, $verbose, $baseline, $serverScript, $phpBinary, $conformanceCmd, $serverProcess);
+
+    foreach (DRAFT_SERVER_EXTRA_SCENARIOS as $extraScenario) {
+        echo "\n=== Running draft Tasks scenario omitted by the draft suite: $extraScenario ===\n";
+        $extraExit = runServerTests($port, 'draft', $extraScenario, $verbose, $baseline, $serverScript, $phpBinary, $conformanceCmd, $serverProcess);
+        if ($extraExit !== 0 && $exitCode === 0) {
+            $exitCode = $extraExit;
+        }
+    }
+
+    return $exitCode;
+}
+
 function runClientDraftTests(
     ?string $scenario,
     bool $verbose,

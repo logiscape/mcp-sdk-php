@@ -27,6 +27,7 @@ declare(strict_types=1);
 require __DIR__ . '/../vendor/autoload.php';
 
 use Mcp\Server\McpServer;
+use Mcp\Server\TaskSupport;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\TextContent;
 use Mcp\Types\ImageContent;
@@ -517,6 +518,96 @@ $server->tool('test_input_required_result_capabilities', 'Requests only input ty
     $input->collect();
     return 'Capability-aware gathering complete';
 });
+
+// ---------------------------------------------------------------------------
+// SEP-2663 Tasks extension fixtures (WS4). enableTasks() declares
+// capabilities.extensions["io.modelcontextprotocol/tasks"] and registers
+// tasks/get | tasks/update | tasks/cancel (tasks/list and tasks/result are
+// intentionally absent -> -32601). A tool opts into task augmentation via
+// taskSupport; the SDK runs the body synchronously (the shared-hosting model)
+// and records the outcome for tasks/get to surface. These fixtures back the
+// tool's `pending`-suite SEP-2663 scenarios (see conformance-draft-baseline.yml
+// for the scenarios whose expectations the synchronous model cannot meet).
+// ---------------------------------------------------------------------------
+$server->enableTasks(null, 60000, 250);
+
+// Sync-only tool — never augmented as a task.
+$server->tool('greet', 'Greets by name', fn (string $name = 'world'): string => "Hello, {$name}!");
+
+// Optional task: completes synchronously with a computed value.
+$server->tool(
+    'slow_compute',
+    'Computes a value, optionally as a task',
+    fn (int $seconds = 0, string $label = 'result'): string => "computed:{$label}",
+    taskSupport: TaskSupport::OPTIONAL
+);
+
+// Required task whose body raises a tool EXECUTION error -> completed + isError.
+$server->tool(
+    'failing_job',
+    'A job that fails during execution',
+    function (): string {
+        throw new \RuntimeException('job failed');
+    },
+    taskSupport: TaskSupport::REQUIRED
+);
+
+// Optional task whose body raises a PROTOCOL error -> failed + error.
+$server->tool(
+    'protocol_error_job',
+    'A job that raises a protocol error',
+    function (): string {
+        throw new \Mcp\Shared\McpError(new \Mcp\Shared\ErrorData(code: -32011, message: 'protocol failure'));
+    },
+    taskSupport: TaskSupport::OPTIONAL
+);
+
+// Optional task that gathers input mid-flight (in-task input via tasks/update).
+$server->tool(
+    'confirm_delete',
+    'Deletes a file after confirming its name',
+    function (ElicitationContext $elicit, string $filename = 'file'): string {
+        $result = $elicit->form(
+            'Confirm the file to delete',
+            ['type' => 'object', 'properties' => ['name' => ['type' => 'string']], 'required' => ['name']],
+            inputKey: 'name'
+        );
+        $content = $result?->content;
+        $name = is_array($content) ? ($content['name'] ?? null) : (is_object($content) ? ($content->name ?? null) : null);
+        return 'deleted:' . (is_string($name) ? $name : $filename);
+    },
+    taskSupport: TaskSupport::OPTIONAL
+);
+
+// Optional task with multiple parallel input requests in one round.
+$server->tool(
+    'multi_input',
+    'Gathers two inputs as a task',
+    function (InputContext $input): string {
+        $input->wantForm('first', 'First value?', ['type' => 'object', 'properties' => ['v' => ['type' => 'string']]]);
+        $input->wantForm('second', 'Second value?', ['type' => 'object', 'properties' => ['v' => ['type' => 'string']]]);
+        $input->collect();
+        return 'both gathered';
+    },
+    taskSupport: TaskSupport::OPTIONAL
+);
+
+// Required task that gathers a name then completes.
+$server->tool(
+    'test_tool_with_task',
+    'Asks a name then completes as a task',
+    function (ElicitationContext $elicit): string {
+        $result = $elicit->form(
+            'What is your name?',
+            ['type' => 'object', 'properties' => ['name' => ['type' => 'string']], 'required' => ['name']],
+            inputKey: 'user_name'
+        );
+        $content = $result?->content;
+        $name = is_array($content) ? ($content['name'] ?? null) : (is_object($content) ? ($content->name ?? null) : null);
+        return 'Hello, ' . (is_string($name) ? $name : 'unknown');
+    },
+    taskSupport: TaskSupport::REQUIRED
+);
 
 // ---------------------------------------------------------------------------
 // Prompts — all registered through McpServer's public API

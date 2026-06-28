@@ -56,8 +56,12 @@ use Mcp\Types\ResourceReference;
 use Mcp\Types\ResourceTemplate;
 use Mcp\Types\Role;
 use Mcp\Types\Task;
+use Mcp\Types\TaskStatus;
 use Mcp\Types\TaskGetResult;
-use Mcp\Types\TaskListResult;
+use Mcp\Types\CreateTaskResult;
+use Mcp\Types\TaskUpdateResult;
+use Mcp\Types\TaskCancelResult;
+use Mcp\Types\ExtensionIds;
 use Mcp\Types\InputRequiredResult;
 use Mcp\Types\TextContent;
 use Mcp\Types\TextResourceContents;
@@ -189,6 +193,15 @@ class McpServer
     /** @var TaskManager|null Task manager for long-running operations. */
     protected ?TaskManager $taskManager = null;
 
+    /** @var int|null Default ttlMs applied to tasks created from tools/call. */
+    protected ?int $taskDefaultTtlMs = null;
+
+    /** @var int|null Default pollIntervalMs advertised on created tasks. */
+    protected ?int $taskDefaultPollIntervalMs = null;
+
+    /** @var array<string, string> Per-tool SEP-2663 task-augmentation policy (see TaskSupport). */
+    protected array $toolTaskSupport = [];
+
     /** @var array<string, bool> Tool names that require ElicitationContext injection. */
     protected array $toolsNeedElicitation = [];
 
@@ -242,7 +255,16 @@ class McpServer
         ?array $icons = null,
         ?array $outputSchema = null,
         ?array $inputSchema = null,
+        string $taskSupport = TaskSupport::FORBIDDEN,
     ): self {
+        if (!TaskSupport::isValid($taskSupport)) {
+            throw new \InvalidArgumentException(
+                "Invalid taskSupport '{$taskSupport}' for tool '{$name}' (expected one of: "
+                . implode(', ', TaskSupport::ALL) . ')'
+            );
+        }
+        $this->toolTaskSupport[$name] = $taskSupport;
+
         $schema = $inputSchema !== null
             ? ToolInputSchema::fromArray(array_merge(['type' => 'object'], $inputSchema))
             : $this->buildSchemaFromCallback($callback);
@@ -1068,73 +1090,320 @@ class McpServer
     }
 
     /**
-     * Enable task support for long-running operations.
+     * Enable the SEP-2663 Tasks extension (revision 2026-07-28).
      *
-     * Registers tasks/get, tasks/list, tasks/cancel, and tasks/result handlers.
+     * Declares `capabilities.extensions["io.modelcontextprotocol/tasks"]` and
+     * registers the three task methods: `tasks/get`, `tasks/update`,
+     * `tasks/cancel`. The removed `tasks/list` and `tasks/result` methods are
+     * intentionally NOT registered, so calling either answers -32601
+     * (Method Not Found). A tool opts into task augmentation via the
+     * `taskSupport` argument of {@see tool()}.
+     *
+     * Every task method requires the client to have declared the Tasks
+     * extension in its per-request `_meta` clientCapabilities; an undeclared
+     * client is rejected with -32021 (MissingRequiredClientCapability).
      *
      * @param string|null $storagePath Directory for task file storage (null = system temp)
+     * @param int|null $defaultTtlMs Default task ttlMs (null = unlimited)
+     * @param int|null $defaultPollIntervalMs Default suggested client poll interval (ms)
      * @return self For method chaining
      */
-    public function enableTasks(?string $storagePath = null): self
-    {
+    public function enableTasks(
+        ?string $storagePath = null,
+        ?int $defaultTtlMs = null,
+        ?int $defaultPollIntervalMs = null,
+    ): self {
         $this->taskManager = new TaskManager($storagePath ?? '');
+        $this->taskDefaultTtlMs = $defaultTtlMs;
+        $this->taskDefaultPollIntervalMs = $defaultPollIntervalMs;
 
         $this->server->registerHandler('tasks/get', function ($params) {
-            $taskId = $params->taskId ?? '';
-            $task = $this->taskManager->getTask($taskId);
-            if ($task === null) {
-                throw McpServerException::taskNotFound($taskId);
+            $this->requireTasksExtension();
+            $taskId = is_object($params) ? ($params->taskId ?? '') : '';
+            $record = $this->taskManager->getRecord((string) $taskId);
+            if ($record === null) {
+                throw McpServerException::taskNotFound((string) $taskId);
             }
-            return TaskGetResult::fromTask($task);
+            return $this->buildTaskGetResult($record);
         });
 
-        $this->server->registerHandler('tasks/list', function ($params) {
-            $tasks = $this->taskManager->listTasks();
-            return new TaskListResult(tasks: $tasks);
+        $this->server->registerHandler('tasks/update', function ($params) {
+            $this->requireTasksExtension();
+            $taskId = is_object($params) ? ($params->taskId ?? '') : '';
+            $record = $this->taskManager->getRecord((string) $taskId);
+            if ($record === null) {
+                throw McpServerException::taskNotFound((string) $taskId);
+            }
+            $this->applyTaskInputResponses($record, $params);
+            return new TaskUpdateResult();
         });
 
         $this->server->registerHandler('tasks/cancel', function ($params) {
-            $taskId = $params->taskId ?? '';
-            $task = $this->taskManager->getTask($taskId);
-            if ($task === null) {
-                throw McpServerException::taskNotFound($taskId);
+            $this->requireTasksExtension();
+            $taskId = is_object($params) ? ($params->taskId ?? '') : '';
+            $record = $this->taskManager->getRecord((string) $taskId);
+            if ($record === null) {
+                throw McpServerException::taskNotFound((string) $taskId);
             }
-            try {
-                $cancelled = $this->taskManager->cancelTask($taskId);
-            } catch (\InvalidArgumentException $e) {
-                throw McpServerException::taskNotCancellable($taskId, $task->status);
-            }
-            return TaskGetResult::fromTask($cancelled);
-        });
-
-        $this->server->registerHandler('tasks/result', function ($params) {
-            $taskId = $params->taskId ?? '';
-            $task = $this->taskManager->getTask($taskId);
-            if ($task === null) {
-                throw McpServerException::taskNotFound($taskId);
-            }
-            $taskResult = $this->taskManager->getResult($taskId);
-            if ($taskResult === null) {
-                throw McpServerException::taskResultNotAvailable($taskId);
-            }
-            // Return the underlying result directly with related-task metadata.
-            // Inject _meta with io.modelcontextprotocol/related-task per spec.
-            $taskResult['_meta'] = array_merge(
-                $taskResult['_meta'] ?? [],
-                ['io.modelcontextprotocol/related-task' => ['taskId' => $taskId]]
-            );
-            return CallToolResult::fromResponseData($taskResult);
+            // Cooperative + eventually-consistent: idempotent ack on a
+            // terminal task, transition to cancelled otherwise.
+            $this->taskManager->cancelTask((string) $taskId);
+            return new TaskCancelResult();
         });
 
         return $this;
     }
 
     /**
-     * Get the TaskManager instance (if tasks are enabled).
+     * Get the TaskManager instance (if tasks are enabled). Applications that
+     * advance tasks out-of-band (a worker, cron, or a later request
+     * completing/failing a deferred task) use this handle.
      */
     public function getTaskManager(): ?TaskManager
     {
         return $this->taskManager;
+    }
+
+    /**
+     * Reject the current task method unless the client declared the Tasks
+     * extension. The `tasks/*` methods exist ONLY as part of the extension,
+     * so a caller that did not opt in is rejected -32021 regardless of era —
+     * a legacy caller can never have declared the extension and must not be
+     * served tasks. No-op only when there is no ServerSession (non-dispatch
+     * contexts).
+     */
+    private function requireTasksExtension(): void
+    {
+        $session = $this->server->getSession();
+        if ($session instanceof ServerSession
+            && !$session->clientDeclaresExtension(ExtensionIds::TASKS)
+        ) {
+            $session->raiseMissingExtension(ExtensionIds::TASKS);
+        }
+    }
+
+    /**
+     * Decide whether the current `tools/call` should be served as a task.
+     * Task creation is modern-only and requires the client to have declared
+     * the Tasks extension. A REQUIRED tool called by an undeclared modern
+     * client is rejected (-32021); an OPTIONAL tool falls back to a
+     * synchronous result. Legacy clients always get a synchronous result
+     * (graceful degradation).
+     */
+    private function shouldRunToolAsTask(string $name): bool
+    {
+        $support = $this->toolTaskSupport[$name] ?? TaskSupport::FORBIDDEN;
+        if ($support === TaskSupport::FORBIDDEN) {
+            return false;
+        }
+        $session = $this->server->getSession();
+        if (!$session instanceof ServerSession
+            || !$session->clientSupportsFeature('stateless_lifecycle')
+        ) {
+            return false;
+        }
+        if ($session->clientDeclaresExtension(ExtensionIds::TASKS)) {
+            return true;
+        }
+        if ($support === TaskSupport::REQUIRED) {
+            $session->raiseMissingExtensionIfModern(ExtensionIds::TASKS);
+        }
+        return false;
+    }
+
+    /**
+     * Augment a `tools/call` as a task: create the handle, run the first
+     * round synchronously (capturing completion, failure, or a park for
+     * in-task input), and return the flat CreateTaskResult.
+     *
+     * @param mixed $arguments Decoded tool arguments
+     * @param mixed $params The original CallToolRequestParams
+     */
+    private function runToolAsTask(string $name, mixed $arguments, ?Meta $meta, mixed $params): CreateTaskResult
+    {
+        $toolArgs = json_decode(json_encode($arguments), true);
+        if (!is_array($toolArgs)) {
+            $toolArgs = [];
+        }
+        $task = $this->taskManager->createTask(
+            ttlMs: $this->taskDefaultTtlMs,
+            pollIntervalMs: $this->taskDefaultPollIntervalMs,
+            toolName: $name,
+            toolArguments: $toolArgs,
+        );
+
+        // First round: the exchange comes from the original tools/call params
+        // (any inputResponses/requestState the client already supplied).
+        $this->currentExchange = $this->buildInputExchange($params, 'tools/call', $name);
+        try {
+            $updated = $this->runTaskRound($task->taskId, $meta);
+        } finally {
+            $this->currentExchange = null;
+        }
+
+        return new CreateTaskResult($updated ?? $task);
+    }
+
+    /**
+     * Run one execution round of a task's originating tool against the
+     * currently-installed input exchange, updating the stored record to the
+     * resulting state (completed / failed / input_required) and returning the
+     * new task handle.
+     *
+     * - The tool returns a result → completed (a tool EXECUTION error rides
+     *   as an isError CallToolResult, still `completed` per SEP-2663).
+     * - The tool throws a protocol McpError → failed (inlined error).
+     * - The tool suspends for client input → input_required, recording the
+     *   pending inputRequests and a signed requestState that `tasks/update`
+     *   echoes to resume.
+     */
+    private function runTaskRound(string $taskId, ?Meta $meta): ?Task
+    {
+        $record = $this->taskManager->getRecord($taskId);
+        if ($record === null) {
+            return null;
+        }
+        $name = (string) ($record['toolName'] ?? '');
+        $handler = $this->toolHandlers[$name] ?? null;
+        if ($handler === null) {
+            return $this->taskManager->fail($taskId, [
+                'code' => -32603,
+                'message' => "Tool no longer available: {$name}",
+            ]);
+        }
+        $args = (object) ($record['toolArguments'] ?? []);
+
+        try {
+            $result = $handler($args, $meta);
+        } catch (InputRequiredSuspendException $e) {
+            $state = $this->getStateCodec()->encode([
+                'm' => 'tools/call',
+                'n' => $name,
+                'p' => $this->currentPrincipal(),
+                'res' => $e->carryResults,
+            ]);
+            return $this->taskManager->setInputRequired(
+                $taskId,
+                $this->serializeInputRequests($e->inputRequests),
+                $state
+            );
+        } catch (McpError $e) {
+            return $this->taskManager->fail($taskId, $this->errorDataToArray($e), $e->getMessage());
+        } catch (ClientRequestSuspendException $e) {
+            // The legacy HTTP suspend/resume machinery cannot drive a task;
+            // fail loudly rather than leak a half-suspended record.
+            return $this->taskManager->fail($taskId, [
+                'code' => -32603,
+                'message' => 'Task tools require the modern input mechanism',
+            ]);
+        } catch (\Throwable $e) {
+            $result = new CallToolResult(
+                content: [new TextContent(text: 'Error: ' . $e->getMessage())],
+                isError: true
+            );
+        }
+
+        $resultArray = json_decode(json_encode($result), true);
+        if (!is_array($resultArray)) {
+            $resultArray = [];
+        }
+        return $this->taskManager->complete($taskId, $resultArray);
+    }
+
+    /**
+     * Apply a `tasks/update`'s inputResponses to an input_required task by
+     * resuming its tool: rebuild the verified exchange from the stored
+     * requestState plus this round's responses and re-run the tool, which
+     * either completes the task or re-parks it awaiting the remaining input
+     * (partial fulfillment). A no-op for tasks that are not awaiting input or
+     * were not created from a resumable tool.
+     *
+     * @param array<string, mixed> $record
+     * @param mixed $params The TaskUpdateParams
+     */
+    private function applyTaskInputResponses(array $record, mixed $params): void
+    {
+        if (($record['status'] ?? null) !== TaskStatus::INPUT_REQUIRED
+            || !isset($record['toolName'], $record['requestState'])
+        ) {
+            return;
+        }
+
+        $fresh = [];
+        if (is_object($params) && isset($params->inputResponses)) {
+            $responses = $params->inputResponses;
+            if (is_object($responses)) {
+                $responses = json_decode((string) json_encode($responses), true);
+            }
+            if (is_array($responses)) {
+                $fresh = $responses;
+            }
+        }
+
+        $synthetic = new \stdClass();
+        $synthetic->requestState = $record['requestState'];
+        $synthetic->inputResponses = $fresh;
+
+        $this->currentExchange = $this->buildInputExchange($synthetic, 'tools/call', (string) $record['toolName']);
+        try {
+            $this->runTaskRound((string) $record['taskId'], null);
+        } finally {
+            $this->currentExchange = null;
+        }
+    }
+
+    /**
+     * Build the `tasks/get` DetailedTask result from a stored record,
+     * inlining the result / error / inputRequests appropriate to its status.
+     *
+     * @param array<string, mixed> $record
+     */
+    private function buildTaskGetResult(array $record): TaskGetResult
+    {
+        $task = Task::fromArray($record);
+        $result = isset($record['result']) && is_array($record['result']) ? $record['result'] : null;
+        $error = isset($record['error']) && is_array($record['error']) ? $record['error'] : null;
+        $inputRequests = isset($record['inputRequests']) && is_array($record['inputRequests'])
+            ? $record['inputRequests']
+            : null;
+        return TaskGetResult::fromTask($task, $result, $error, $inputRequests);
+    }
+
+    /**
+     * Serialize an InputRequiredSuspendException's pending requests into the
+     * wire `inputRequests` map ({key: {method, params}}).
+     *
+     * @param array<string, \Mcp\Types\Request> $inputRequests
+     * @return array<string, array{method: string, params: mixed}>
+     */
+    private function serializeInputRequests(array $inputRequests): array
+    {
+        $out = [];
+        foreach ($inputRequests as $key => $request) {
+            $out[(string) $key] = [
+                'method' => $request->method,
+                'params' => $request->params !== null
+                    ? $request->params->jsonSerialize()
+                    : new \stdClass(),
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Flatten an McpError's ErrorData into the inlined `error` object the
+     * failed `tasks/get` response carries.
+     *
+     * @return array{code: int, message: string, data?: mixed}
+     */
+    private function errorDataToArray(McpError $error): array
+    {
+        $data = $error->error;
+        $out = ['code' => $data->code, 'message' => $data->message];
+        if ($data->data !== null) {
+            $out['data'] = $data->data;
+        }
+        return $out;
     }
 
     /**
@@ -1323,6 +1592,16 @@ class McpServer
             }
 
             $handler = $this->toolHandlers[$name];
+
+            // SEP-2663: when this tool is task-augmented and the calling
+            // (modern) client declared the Tasks extension, serve the call as
+            // a task — create the handle, run the first round, and return a
+            // CreateTaskResult instead of a CallToolResult. A REQUIRED tool
+            // called by an undeclared client is rejected -32021 inside the
+            // check below.
+            if ($this->taskManager !== null && $this->shouldRunToolAsTask((string) $name)) {
+                return $this->runToolAsTask((string) $name, $arguments, $meta, $params);
+            }
 
             // SEP-2322 (2026-07-28): build the multi-round-trip exchange
             // from the verified requestState plus this round's

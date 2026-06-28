@@ -27,8 +27,7 @@ use Mcp\Types\ElicitationCapability;
 use Mcp\Types\Task;
 use Mcp\Types\TaskStatus;
 use Mcp\Types\CreateTaskResult;
-use Mcp\Types\TaskListResult;
-use Mcp\Types\TaskCapability;
+use Mcp\Types\ExtensionIds;
 use Mcp\Types\CallToolRequest;
 use Mcp\Types\CallToolRequestParams;
 use Mcp\Types\ClientCapabilities;
@@ -426,16 +425,29 @@ final class NewTypesTest extends TestCase
             status: TaskStatus::WORKING,
             statusMessage: 'Processing...',
             createdAt: '2025-01-01T00:00:00Z',
-            ttl: 3600000,
-            pollInterval: 5000,
+            ttlMs: 3600000,
+            pollIntervalMs: 5000,
         );
 
         $json = $task->jsonSerialize();
         $this->assertEquals('task_abc', $json['taskId']);
         $this->assertEquals('working', $json['status']);
         $this->assertEquals('Processing...', $json['statusMessage']);
-        $this->assertEquals(3600000, $json['ttl']);
-        $this->assertEquals(5000, $json['pollInterval']);
+        $this->assertEquals(3600000, $json['ttlMs']);
+        $this->assertEquals(5000, $json['pollIntervalMs']);
+        // SEP-2663 field renames: the legacy keys must not appear.
+        $this->assertArrayNotHasKey('ttl', $json);
+        $this->assertArrayNotHasKey('pollInterval', $json);
+    }
+
+    public function testTaskTtlMsAlwaysEmittedEvenWhenNull(): void {
+        // ttlMs is required on the wire (null = unlimited), so it is emitted
+        // unconditionally; pollIntervalMs is optional and omitted when null.
+        $task = new Task(taskId: 'task_ttl', status: TaskStatus::WORKING);
+        $json = $task->jsonSerialize();
+        $this->assertArrayHasKey('ttlMs', $json);
+        $this->assertNull($json['ttlMs']);
+        $this->assertArrayNotHasKey('pollIntervalMs', $json);
     }
 
     public function testTaskFromArray(): void {
@@ -455,70 +467,64 @@ final class NewTypesTest extends TestCase
     }
 
     public function testCreateTaskResult(): void {
+        // SEP-2663: CreateTaskResult is a FLAT intersection (Result & Task)
+        // discriminated by resultType "task" — task fields are at the top
+        // level, NOT under a nested "task" key.
         $task = new Task(taskId: 't1', status: TaskStatus::WORKING);
         $result = new CreateTaskResult(task: $task);
         $json = $result->jsonSerialize();
-        $this->assertEquals('t1', $json['task']->taskId);
+        $this->assertEquals(CreateTaskResult::RESULT_TYPE_TASK, $json['resultType']);
+        $this->assertEquals('task', $json['resultType']);
+        $this->assertEquals('t1', $json['taskId']);
+        $this->assertEquals('working', $json['status']);
+        $this->assertArrayNotHasKey('task', $json);
     }
 
-    public function testTaskListResult(): void {
-        $tasks = [
-            new Task(taskId: 't1', status: TaskStatus::WORKING),
-            new Task(taskId: 't2', status: TaskStatus::COMPLETED),
-        ];
-        $result = new TaskListResult(tasks: $tasks);
-        $json = $result->jsonSerialize();
-        $this->assertCount(2, $json['tasks']);
-    }
-
-    public function testTaskListResultFromArray(): void {
-        $result = TaskListResult::fromResponseData([
-            'tasks' => [
-                ['taskId' => 't1', 'status' => 'working'],
-                ['taskId' => 't2', 'status' => 'completed'],
-            ],
+    public function testCreateTaskResultFromResponseDataParsesFlatFields(): void {
+        $result = CreateTaskResult::fromResponseData([
+            'resultType' => 'task',
+            'taskId' => 't9',
+            'status' => 'working',
+            'ttlMs' => 1000,
         ]);
-        $this->assertCount(2, $result->tasks);
-        $this->assertEquals('t1', $result->tasks[0]->taskId);
+        $this->assertEquals('t9', $result->task->taskId);
+        $this->assertEquals('working', $result->task->status);
+        $this->assertEquals(1000, $result->task->ttlMs);
     }
 
     // -----------------------------------------------------------------------
-    // TaskCapability
-    // -----------------------------------------------------------------------
-
-    public function testTaskCapability(): void {
-        $cap = new TaskCapability(list: true, cancel: true);
-        $json = $cap->jsonSerialize();
-        $this->assertArrayHasKey('list', $json);
-        $this->assertArrayHasKey('cancel', $json);
-    }
-
-    // -----------------------------------------------------------------------
-    // ClientCapabilities with Elicitation & Tasks
+    // ClientCapabilities with Elicitation & the Tasks extension
     // -----------------------------------------------------------------------
 
     public function testClientCapabilitiesWithElicitationAndTasks(): void {
+        // SEP-2663/SEP-2133: the Tasks extension is declared via the
+        // `extensions` map (id => settings), not a dedicated `tasks` slot.
         $caps = new ClientCapabilities(
             elicitation: new ElicitationCapability(form: true),
-            tasks: new TaskCapability(list: true),
+            extensions: [ExtensionIds::TASKS => []],
         );
 
         $json = $caps->jsonSerialize();
         $this->assertArrayHasKey('elicitation', $json);
-        $this->assertArrayHasKey('tasks', $json);
+        $this->assertArrayHasKey('extensions', $json);
+        $this->assertArrayNotHasKey('tasks', $json);
+        // Empty settings serialize as {} (stdClass), never [].
+        $this->assertInstanceOf(\stdClass::class, $json['extensions'][ExtensionIds::TASKS]);
     }
 
     // -----------------------------------------------------------------------
-    // ServerCapabilities with Tasks
+    // ServerCapabilities with the Tasks extension
     // -----------------------------------------------------------------------
 
     public function testServerCapabilitiesWithTasks(): void {
         $caps = new ServerCapabilities(
-            tasks: new TaskCapability(list: true, cancel: true),
+            extensions: [ExtensionIds::TASKS => []],
         );
 
         $json = $caps->jsonSerialize();
-        $this->assertArrayHasKey('tasks', $json);
+        $this->assertArrayHasKey('extensions', $json);
+        $this->assertArrayNotHasKey('tasks', $json);
+        $this->assertInstanceOf(\stdClass::class, $json['extensions'][ExtensionIds::TASKS]);
     }
 
     // -----------------------------------------------------------------------
@@ -664,21 +670,10 @@ final class NewTypesTest extends TestCase
         $this->assertIsArray($decoded);
     }
 
-    public function testTaskCapabilitySerializesNestedRequestsCorrectly(): void {
-        $cap = new TaskCapability(
-            list: true,
-            cancel: true,
-            requests: ['tools' => ['call' => []]],
-        );
-        $json = $cap->jsonSerialize();
-        $this->assertArrayHasKey('list', $json);
-        $this->assertArrayHasKey('cancel', $json);
-        $this->assertArrayHasKey('requests', $json);
-
-        // Verify empty arrays become stdClass objects in serialized output
-        $encoded = json_encode($json);
-        $this->assertStringContainsString('"call":{}', $encoded);
-    }
+    // The pre-release TaskCapability (with list/cancel/requests sub-fields)
+    // was removed in SEP-2663; the Tasks extension now serializes through the
+    // `extensions` map (covered by testClientCapabilitiesWithElicitationAndTasks
+    // and testServerCapabilitiesWithTasks above).
 
     public function testElicitationCapabilitySerializesFormUrlAsObjects(): void {
         $cap = new ElicitationCapability(form: true, url: true);

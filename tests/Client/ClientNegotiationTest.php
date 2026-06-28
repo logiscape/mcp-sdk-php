@@ -30,6 +30,9 @@ use Mcp\Types\JsonRpcErrorObject;
 use Mcp\Types\JSONRPCError;
 use Mcp\Types\JSONRPCRequest;
 use Mcp\Types\JSONRPCResponse;
+use Mcp\Types\CallToolResult;
+use Mcp\Types\CreateTaskResult;
+use Mcp\Types\ExtensionIds;
 use Mcp\Types\MetaKeys;
 use Mcp\Types\RequestId;
 use PHPUnit\Framework\TestCase;
@@ -569,6 +572,66 @@ final class ClientNegotiationTest extends TestCase
         $this->assertSame('initialize', $wire[0]['method']);
         $this->assertArrayNotHasKey('_meta', $wire[0]['params']);
         $this->assertSame('notifications/initialized', $wire[1]['method']);
+    }
+
+    /**
+     * SEP-2663: when the server augments a tools/call as a task (the result
+     * carries resultType "task"), callTool() must surface the flat
+     * CreateTaskResult handle — not silently mis-parse it as a CallToolResult
+     * with the task fields demoted to extras. The declared Tasks extension
+     * also rides in the modern _meta clientCapabilities envelope.
+     */
+    public function testCallToolSurfacesTaskHandle(): void
+    {
+        $readStream = new MemoryStream();
+        $writeStream = new MemoryStream();
+        $readStream->send($this->response(0, $this->discoverResultData()));
+        $readStream->send($this->response(1, [
+            'resultType' => 'task',
+            'taskId' => 'task-abc',
+            'status' => 'working',
+            'createdAt' => '2026-06-28T00:00:00Z',
+            'lastUpdatedAt' => '2026-06-28T00:00:00Z',
+            'ttlMs' => 60000,
+        ]));
+
+        $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
+        $session->declareExtension(ExtensionIds::TASKS);
+        $session->negotiate();
+
+        $result = $session->callTool('slow_compute');
+        $this->assertInstanceOf(CreateTaskResult::class, $result);
+        $this->assertSame('task-abc', $result->task->taskId);
+        $this->assertSame('working', $result->task->status);
+
+        $wire = $this->sentWire($writeStream);
+        $call = $wire[1];
+        $this->assertSame('tools/call', $call['method']);
+        $extensions = $call['params']['_meta'][MetaKeys::CLIENT_CAPABILITIES]['extensions'];
+        $this->assertArrayHasKey(ExtensionIds::TASKS, $extensions);
+    }
+
+    /**
+     * Regression: an ordinary tools/call result (no resultType "task") still
+     * deserializes to a CallToolResult — the task branch must not capture
+     * normal completions.
+     */
+    public function testCallToolStillReturnsCallToolResultForNormalResult(): void
+    {
+        $readStream = new MemoryStream();
+        $writeStream = new MemoryStream();
+        $readStream->send($this->response(0, $this->discoverResultData()));
+        $readStream->send($this->response(1, [
+            'resultType' => 'complete',
+            'content' => [['type' => 'text', 'text' => 'hi']],
+        ]));
+
+        $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
+        $session->negotiate();
+
+        $result = $session->callTool('greet');
+        $this->assertInstanceOf(CallToolResult::class, $result);
+        $this->assertNotInstanceOf(CreateTaskResult::class, $result);
     }
 }
 

@@ -36,7 +36,7 @@ use Mcp\Types\ServerResourcesCapability;
 use Mcp\Types\ServerToolsCapability;
 use Mcp\Types\ServerLoggingCapability;
 use Mcp\Types\ServerCompletionsCapability;
-use Mcp\Types\TaskCapability;
+use Mcp\Types\ExtensionIds;
 use Mcp\Types\ExperimentalCapabilities;
 use Mcp\Types\LoggingLevel;
 use Mcp\Types\RequestId;
@@ -152,19 +152,13 @@ class Server {
             $completionsCapability = new ServerCompletionsCapability();
         }
 
-        // Build tasks capability if task handlers are registered
-        $tasksCapability = null;
-        $hasTaskGet = isset($this->requestHandlers['tasks/get']);
-        $hasTaskList = isset($this->requestHandlers['tasks/list']);
-        $hasTaskCancel = isset($this->requestHandlers['tasks/cancel']);
-        if ($hasTaskGet || $hasTaskList || $hasTaskCancel) {
-            $tasksCapability = new TaskCapability(
-                list: $hasTaskList ? true : null,
-                cancel: $hasTaskCancel ? true : null,
-                requests: isset($this->requestHandlers['tools/call'])
-                    ? ['tools' => ['call' => []]]
-                    : null,
-            );
+        // Declare the SEP-2663 Tasks extension through the SEP-2133
+        // extensions map when task handlers are registered. The extension's
+        // capability value is the empty object `{}` (no settings). Tasks no
+        // longer uses a dedicated `tasks` capability slot.
+        $extensions = null;
+        if (isset($this->requestHandlers['tasks/get'])) {
+            $extensions = [ExtensionIds::TASKS => []];
         }
 
         return new ServerCapabilities(
@@ -174,7 +168,7 @@ class Server {
             logging: $loggingCapability,
             completions: $completionsCapability,
             experimental: ExperimentalCapabilities::fromArray($experimentalCapabilities),
-            tasks: $tasksCapability,
+            extensions: $extensions,
         );
     }
 

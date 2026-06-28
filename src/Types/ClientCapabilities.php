@@ -41,12 +41,16 @@ namespace Mcp\Types;
  * We have a SamplingCapability class for sampling.
  */
 class ClientCapabilities extends Capabilities {
+    /**
+     * @param array<string, mixed>|null $extensions SEP-2133 extension map
+     *        (see {@see ExtensionIds}); the Tasks extension is declared here.
+     */
     public function __construct(
         public ?ClientRootsCapability $roots = null,
         public ?SamplingCapability $sampling = null,
         ?ExperimentalCapabilities $experimental = null,
         public ?ElicitationCapability $elicitation = null,
-        public ?TaskCapability $tasks = null,
+        public ?array $extensions = null,
     ) {
         parent::__construct($experimental);
     }
@@ -90,19 +94,15 @@ class ClientCapabilities extends Capabilities {
             $elicitation = ElicitationCapability::fromArray($elicitationData);
         }
 
-        $tasksData = $data['tasks'] ?? null;
-        unset($data['tasks']);
-        $tasks = null;
-        if ($tasksData !== null && is_array($tasksData)) {
-            $tasks = TaskCapability::fromArray($tasksData);
-        }
+        $extensions = ServerCapabilities::parseExtensions($data);
+        unset($data['extensions']);
 
         $obj = new self(
             roots: $roots,
             sampling: $sampling,
             experimental: $experimental,
             elicitation: $elicitation,
-            tasks: $tasks,
+            extensions: $extensions,
         );
 
         // Extra fields
@@ -125,9 +125,6 @@ class ClientCapabilities extends Capabilities {
         if ($this->elicitation !== null) {
             $this->elicitation->validate();
         }
-        if ($this->tasks !== null) {
-            $this->tasks->validate();
-        }
     }
 
     public function jsonSerialize(): mixed {
@@ -141,8 +138,8 @@ class ClientCapabilities extends Capabilities {
         if ($this->elicitation !== null) {
             $data['elicitation'] = $this->elicitation;
         }
-        if ($this->tasks !== null) {
-            $data['tasks'] = $this->tasks;
+        if ($this->extensions !== null) {
+            $data['extensions'] = ServerCapabilities::serializeExtensions($this->extensions);
         }
         return empty($data) ? new \stdClass() : $data;
     }

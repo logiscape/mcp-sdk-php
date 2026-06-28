@@ -27,7 +27,7 @@ use Mcp\Types\ServerPromptsCapability;
 use Mcp\Types\ServerResourcesCapability;
 use Mcp\Types\ServerToolsCapability;
 use Mcp\Types\ServerLoggingCapability;
-use Mcp\Types\TaskCapability;
+use Mcp\Types\ExtensionIds;
 use Mcp\Types\Result;
 use Mcp\Types\RequestParams;
 use PHPUnit\Framework\TestCase;
@@ -39,7 +39,8 @@ use PHPUnit\Framework\TestCase;
  * - Detects capabilities based on registered handlers
  * - Returns null capabilities when no handlers are registered
  * - Propagates notification options to capability objects
- * - Builds TaskCapability from task-related handler combinations
+ * - Declares the SEP-2663 Tasks extension via the SEP-2133 extensions map
+ *   when a tasks/get handler is registered
  * - Creates proper InitializationOptions with server metadata
  * - Registers a built-in ping handler in the constructor
  *
@@ -55,8 +56,9 @@ final class ServerCapabilitiesTest extends TestCase
      *
      * A newly constructed Server only has the built-in 'ping' handler.
      * Since ping is not tied to any capability category (prompts, resources,
-     * tools, logging, or tasks), all capability fields should be null.
-     * This ensures the server does not falsely advertise features it cannot provide.
+     * tools, logging, or the tasks extension), all capability fields should be
+     * null. This ensures the server does not falsely advertise features it
+     * cannot provide.
      */
     public function testNoHandlersNullCapabilities(): void
     {
@@ -68,7 +70,7 @@ final class ServerCapabilitiesTest extends TestCase
         $this->assertNull($capabilities->resources, 'Resources capability should be null without resources/list handler');
         $this->assertNull($capabilities->tools, 'Tools capability should be null without tools/list handler');
         $this->assertNull($capabilities->logging, 'Logging capability should be null without logging/setLevel handler');
-        $this->assertNull($capabilities->tasks, 'Tasks capability should be null without task handlers');
+        $this->assertNull($capabilities->extensions, 'Extensions map should be null without the tasks/get handler');
     }
 
     /**
@@ -153,12 +155,14 @@ final class ServerCapabilitiesTest extends TestCase
     }
 
     /**
-     * Test that registering a tasks/get handler enables the tasks capability.
+     * Test that registering a tasks/get handler declares the SEP-2663 Tasks
+     * extension through the SEP-2133 extensions map.
      *
-     * A single tasks/get handler is sufficient to create a TaskCapability object.
-     * Without tasks/list or tasks/cancel handlers, those fields should be null.
+     * Under revision 2026-07-28 there is no dedicated `tasks` capability slot:
+     * the extension is advertised as a key under `capabilities.extensions`
+     * whose value is the empty object `{}` (no extension-specific settings).
      */
-    public function testTaskGetHandlerEnablesTasksCapability(): void
+    public function testTaskGetHandlerDeclaresTasksExtension(): void
     {
         $server = new Server('test-server');
         $server->registerHandler('tasks/get', function (?RequestParams $params): Result {
@@ -167,26 +171,24 @@ final class ServerCapabilitiesTest extends TestCase
 
         $capabilities = $server->getCapabilities(new NotificationOptions(), []);
 
-        $this->assertInstanceOf(TaskCapability::class, $capabilities->tasks);
-        $this->assertNull($capabilities->tasks->list, 'List should be null without tasks/list handler');
-        $this->assertNull($capabilities->tasks->cancel, 'Cancel should be null without tasks/cancel handler');
-        $this->assertNull($capabilities->tasks->requests, 'Requests should be null without tools/call handler');
+        $this->assertIsArray($capabilities->extensions);
+        $this->assertArrayHasKey(ExtensionIds::TASKS, $capabilities->extensions);
+        $this->assertSame([], $capabilities->extensions[ExtensionIds::TASKS], 'Tasks extension carries no settings');
     }
 
     /**
-     * Test that registering all task handlers populates list and cancel in TaskCapability.
+     * Test that the declared Tasks extension serializes as an object-of-objects
+     * on the wire, with the empty settings becoming `{}` (not `[]`).
      *
-     * When tasks/get, tasks/list, and tasks/cancel handlers are all registered,
-     * the TaskCapability should have list=true and cancel=true. This tells
-     * clients the full range of task management operations is available.
+     * The list/cancel/requests sub-capabilities of the old pre-release
+     * TaskCapability no longer exist; the registration of tasks/get alone
+     * declares the extension, and additional task handlers do not change its
+     * (empty) settings value.
      */
-    public function testTasksCapabilityIncludesListAndCancel(): void
+    public function testTasksExtensionSerializesAsEmptyObject(): void
     {
         $server = new Server('test-server');
         $server->registerHandler('tasks/get', function (?RequestParams $params): Result {
-            return new Result();
-        });
-        $server->registerHandler('tasks/list', function (?RequestParams $params): Result {
             return new Result();
         });
         $server->registerHandler('tasks/cancel', function (?RequestParams $params): Result {
@@ -195,20 +197,23 @@ final class ServerCapabilitiesTest extends TestCase
 
         $capabilities = $server->getCapabilities(new NotificationOptions(), []);
 
-        $this->assertInstanceOf(TaskCapability::class, $capabilities->tasks);
-        $this->assertTrue($capabilities->tasks->list, 'List should be true when tasks/list is registered');
-        $this->assertTrue($capabilities->tasks->cancel, 'Cancel should be true when tasks/cancel is registered');
+        // Round-trip through json to assert the wire shape: the extension value
+        // must be an empty object {} (not an empty array []).
+        $decoded = json_decode(json_encode($capabilities));
+        $this->assertObjectHasProperty('extensions', $decoded);
+        $this->assertObjectHasProperty(ExtensionIds::TASKS, $decoded->extensions);
+        $this->assertEquals(new \stdClass(), $decoded->extensions->{ExtensionIds::TASKS});
     }
 
     /**
-     * Test that TaskCapability includes tools/call in requests when tools/call is registered.
+     * Test that registering tools/call alongside tasks/get does not change the
+     * Tasks extension's (empty) settings value.
      *
-     * When both a task handler (tasks/get) and tools/call are registered, the
-     * TaskCapability.requests field should include a 'tools' key with a 'call'
-     * sub-key. This signals that the server supports tool invocation within
-     * task workflows.
+     * The old TaskCapability.requests slot (which advertised tools/call task
+     * augmentation) was removed in SEP-2663; per-tool task support is now a
+     * server-side McpServer::tool($taskSupport) knob, not a wire capability.
      */
-    public function testTasksRequestsIncludesToolsCallWhenRegistered(): void
+    public function testToolsCallDoesNotAffectTasksExtension(): void
     {
         $server = new Server('test-server');
         $server->registerHandler('tasks/get', function (?RequestParams $params): Result {
@@ -220,10 +225,8 @@ final class ServerCapabilitiesTest extends TestCase
 
         $capabilities = $server->getCapabilities(new NotificationOptions(), []);
 
-        $this->assertInstanceOf(TaskCapability::class, $capabilities->tasks);
-        $this->assertIsArray($capabilities->tasks->requests);
-        $this->assertArrayHasKey('tools', $capabilities->tasks->requests);
-        $this->assertArrayHasKey('call', $capabilities->tasks->requests['tools']);
+        $this->assertIsArray($capabilities->extensions);
+        $this->assertSame([], $capabilities->extensions[ExtensionIds::TASKS]);
     }
 
     /**

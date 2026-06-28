@@ -166,35 +166,14 @@ class McpServerException extends McpError
     }
 
     /**
-     * Create a new exception for a task that was not found.
+     * Create a new exception for a task that was not found (SEP-2663: an
+     * unknown taskId on tasks/get, tasks/update, or tasks/cancel is -32602).
      */
     public static function taskNotFound(string $taskId): self
     {
         return new self(new ErrorData(
             code: -32602,
             message: "Task not found: {$taskId}"
-        ));
-    }
-
-    /**
-     * Create a new exception for a task that cannot be cancelled.
-     */
-    public static function taskNotCancellable(string $taskId, string $status): self
-    {
-        return new self(new ErrorData(
-            code: -32602,
-            message: "Task '{$taskId}' cannot be cancelled in state '{$status}'"
-        ));
-    }
-
-    /**
-     * Create a new exception for a task result that is not yet available.
-     */
-    public static function taskResultNotAvailable(string $taskId): self
-    {
-        return new self(new ErrorData(
-            code: -32602,
-            message: "Result not available for task: {$taskId}"
         ));
     }
 

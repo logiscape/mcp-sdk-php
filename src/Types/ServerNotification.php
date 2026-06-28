@@ -39,7 +39,6 @@ namespace Mcp\Types;
  *   | PromptListChangedNotification
  *   | ToolListChangedNotification
  *   | LoggingMessageNotification
- *   | TaskStatusNotification
  *   | ElicitationCompleteNotification
  *
  * This acts as a root model holding one valid Notification variant and provides
@@ -59,7 +58,6 @@ class ServerNotification implements McpModel {
             $notification instanceof PromptListChangedNotification ||
             $notification instanceof ToolListChangedNotification ||
             $notification instanceof LoggingMessageNotification ||
-            $notification instanceof TaskStatusNotification ||
             $notification instanceof ElicitationCompleteNotification
         )) {
             throw new \InvalidArgumentException('Invalid server notification type');
@@ -84,7 +82,6 @@ class ServerNotification implements McpModel {
             'notifications/prompts/list_changed' => self::createPromptListChangedNotification($params),
             'notifications/tools/list_changed' => self::createToolListChangedNotification($params),
             'notifications/message' => self::createLoggingMessageNotification($params),
-            'notifications/tasks/status' => self::createTaskStatusNotification($params),
             'notifications/elicitation/complete' => self::createElicitationCompleteNotification($params),
             default => throw new \InvalidArgumentException("Unknown server notification method: $method")
         };
@@ -218,16 +215,6 @@ class ServerNotification implements McpModel {
         $loggingParams->applyWireFields($params, ['level', 'data', 'logger']);
 
         return new self(new LoggingMessageNotification($loggingParams));
-    }
-
-    /**
-     * @param array<string, mixed> $params
-     */
-    private static function createTaskStatusNotification(array $params): self {
-        $notifParams = new NotificationParams();
-        // _meta is normalized into a Meta object; all other keys are forwarded.
-        $notifParams->applyWireFields($params);
-        return new self(new TaskStatusNotification($notifParams));
     }
 
     /**

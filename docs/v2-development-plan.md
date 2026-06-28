@@ -802,16 +802,20 @@ redesign, no deprecation shims — the existing surface is pre-release
 
 - Redesign to `tasks/get` / `tasks/update` / `tasks/cancel` with the task
   handle returned from `tools/call`; **remove `tasks/list`** (unscopeable
-  without sessions) from the `2026-07-28` path and the client convenience API.
+  without sessions) **and `tasks/result`** (result is now inlined in the
+  `tasks/get` completed response — calling either MUST return `-32601`) from
+  the `2026-07-28` path and the client convenience API.
 - Keep the file-based `TaskManager` store (shared-hosting compatibility);
   rework state transitions and TTL/expiry to the SEP-2663 model.
 - `Mcp-Name` carries the task id on task methods (from WS3).
-- Close the task-augmented gaps: carry the `task` parameter through
-  `ElicitationContext::form()` / `::url()` (currently nulled with an in-code
-  comment) and expose `task` on `SamplingContext::createMessage()` — if and
-  only if the final extension text settles the wire format.
-- Declare Tasks per the SEP-2133 extensions framework (reverse-DNS id,
-  independent versioning).
+- Close the task-augmented gaps via the mechanism the final extension text
+  actually settled on — **`inputRequests` / `inputResponses`** on
+  `tasks/get` / `tasks/update`, NOT a `task` parameter on
+  elicitation/sampling (see the drift note below). The stubbed `task`
+  parameter on `ElicitationContext::form()` / `::url()` is removed.
+- Declare Tasks per the SEP-2133 extensions framework (reverse-DNS id
+  `io.modelcontextprotocol/tasks`, capability value the empty object `{}`,
+  declared per-request in `_meta` and in `server/discover`).
 
 **Research focus:** the final SEP-2663 method set and task-handle schema
 (the RC moved this surface substantially and it may move again); the
@@ -822,6 +826,66 @@ routing rule is already wired: `Mcp\Shared\McpHeaders` maps
 `tasks/get|update|cancel` → `params.taskId` for both client emission and
 server validation — re-verify the method list against the final extension
 text rather than re-implementing.
+
+**Research findings (2026-06-27, step 1).** Tasks has been externalized from
+core per SEP-2133 into its own independently-versioned repository
+(`modelcontextprotocol/ext-tasks`, schema under `schema/draft/`); the core
+`2026-07-28` schema carries zero task references. Three sources were
+cross-checked: the ext-tasks `schema/draft` + `specification/draft` prose,
+the pinned `0.2.0-alpha.7` draft conformance tool, and the existing SDK
+surface. Significant drift from this plan, applied per "official text wins":
+- **Method set:** `tasks/get` / `tasks/update` / `tasks/cancel` plus the
+  optional `notifications/tasks` push. `tasks/list` AND `tasks/result` are
+  both removed — both MUST answer `-32601`. The completed result is inlined
+  in the `tasks/get` response (`DetailedTask`), so there is no separate
+  result retrieval.
+- **Field renames:** `ttl` → `ttlMs` (`int|null`, null = unlimited),
+  `pollInterval` → `pollIntervalMs` (`int`). Legacy `ttl`/`pollInterval`
+  keys MUST be absent on the wire.
+- **Task handle:** `tools/call` returns a flat `CreateTaskResult`
+  (`Result & Task`) discriminated by `resultType: "task"` — NOT a nested
+  `task` object and NOT an `_meta` key. `resultType: "task"` MUST appear on
+  no other result type.
+- **`tasks/get` result:** `Result & DetailedTask` with `resultType:
+  "complete"`, status-discriminated: `working`/`cancelled` carry only task
+  fields; `input_required` adds `inputRequests` (a keyed map of full
+  `ElicitRequest`/`CreateMessageRequest`/`ListRootsRequest` objects);
+  `completed` adds the inlined `result` (original tool result, e.g.
+  `CallToolResult` with non-empty `content[]`, `isError:true` for tool
+  errors); `failed` adds `error` (`{code,message,data?}`), no `result`.
+- **`tasks/update`:** `params {taskId, inputResponses}` where
+  `inputResponses` is a keyed map of `ElicitResult`/`CreateMessageResult`/
+  `ListRootsResult`; result is an empty `{resultType:"complete"}` ack.
+  Partial fulfillment keeps the task `input_required` until all keys arrive.
+  This — not a `task` parameter on elicitation/sampling — is the settled
+  task-augmented input mechanism. (MRTR handles input *before* task
+  creation on the original request; `inputRequests`/`inputResponses` handle
+  input *during* a task.)
+- **`tasks/cancel`:** `params {taskId}`, empty `{resultType:"complete"}` ack;
+  cooperative and eventually-consistent (may settle to a terminal status
+  other than `cancelled`); unknown `taskId` → `-32602`;
+  `notifications/cancelled` MUST NOT be used for tasks.
+- **`io.modelcontextprotocol/related-task` _meta key is DROPPED** — it must
+  not appear on the inlined `tasks/get` result.
+- **Server-directed creation:** there is no per-tool wire flag and no `task`
+  request parameter — the server alone decides per-request whether to return
+  a `CreateTaskResult`. A legacy `task` param on `tools/call` is tolerated
+  and ignored (must not promote a sync tool to a task). A tool the server
+  can only serve as a task ("task-required"), called by a client that did
+  not declare the extension, → `-32021` with
+  `data.requiredCapabilities.extensions["io.modelcontextprotocol/tasks"]`
+  (an object). Calling `tasks/*` without declaring the extension → `-32021`.
+- **Error codes:** the conformance tool at alpha.7 uses the post-#2907
+  numbers (`-32020` HeaderMismatch, `-32021` MissingRequiredClientCapability)
+  the SDK already adopted; the ext-tasks prose still shows the pre-renumber
+  `-32003` and lags — the SDK uses the renumbered codes.
+- **Conformance gating note:** the 10 SEP-2663 scenarios in the alpha.7 tool
+  are registered in the tool's `pending` suite, NOT `draft`, so
+  `--suite draft` alone does not exercise them. The runner's
+  `server-draft`/`draft` gate therefore runs each of them explicitly after
+  the suite (`DRAFT_SERVER_EXTRA_SCENARIOS`, mirroring the existing
+  `DRAFT_CLIENT_EXTRA_SCENARIOS`), so they are gated against the draft
+  baseline rather than skipped.
 
 **Completion criteria**
 
@@ -834,6 +898,45 @@ text rather than re-implementing.
 - Conformance scenarios for the Tasks extension (when published) pass or are
   honestly baselined.
 - `composer check` green; `composer conformance` regression-free.
+
+**Status (2026-06-27):** implemented, verified, and code-reviewed (two review
+rounds, all findings fixed); ready for human approval/commit. The pre-release
+Tasks surface was replaced cleanly (no shims) with the SEP-2663 model:
+- Types: flat `CreateTaskResult` (`Result & Task`, `resultType: "task"`) from
+  `tools/call`, flat `TaskGetResult` (`DetailedTask`, `resultType: "complete"`,
+  inlined `result`/`error`/`inputRequests` by status), empty `TaskUpdateResult`
+  / `TaskCancelResult` acks, `Task` with `ttlMs`/`pollIntervalMs`; the
+  `tasks/list`, `tasks/result`, `TaskCapability`, and `TaskStatusNotification`
+  surfaces were removed (`tasks/list` and `tasks/result` now answer `-32601`).
+- Tasks declared through the SEP-2133 `extensions` capability map (new
+  `extensions` field on `Server`/`ClientCapabilities`, `ExtensionIds::TASKS`),
+  advertised in `server/discover` and declared per-request in the `_meta`
+  clientCapabilities envelope (`ClientSession::declareExtension()`); the v1
+  `tasks` capability slot is gone. Malformed (non-object) extension values are
+  ignored so they cannot unlock a feature.
+- `McpServer::enableTasks()` registers `tasks/get`/`tasks/update`/`tasks/cancel`
+  and a tool opts in via `tool(..., taskSupport:)` (`TaskSupport`
+  FORBIDDEN/OPTIONAL/REQUIRED). The file-based `TaskManager` was reworked to the
+  SEP-2663 state model (ttlMs expiry, idempotent cancel, in-task input via a
+  stored signed `requestState`). Every `tasks/*` method requires the extension
+  to be declared (era-independent `-32021`); a REQUIRED tool called by an
+  undeclared modern client is rejected `-32021`, an OPTIONAL tool degrades to a
+  synchronous result. Execution is synchronous-capture (shared-hosting model):
+  the tool body runs in the creating request and the outcome is stored;
+  genuine async/working tasks are application-driven via `getTaskManager()`.
+- Client: `getTask()`/`updateTask()`/`cancelTask()`; `callTool()` returns
+  `CallToolResult|CreateTaskResult` so a task handle is surfaced rather than
+  mis-typed. The stubbed `task` parameter on `ElicitationContext` was removed;
+  a legacy `task` param on `tools/call` is tolerated and ignored.
+- Verification: `composer check` green (1174 tests; PHPStan clean); both stable
+  conformance baselines stay empty. The 10 SEP-2663 tool scenarios are wired
+  into the gated draft run (`DRAFT_SERVER_EXTRA_SCENARIOS`) backed by fixtures
+  in `everything-server.php`: **8 pass**, `tasks-status-notifications` is
+  skipped by the tool (0 checks, pending its subscriptions/listen rewrite), and
+  `tasks-mrtr-composition` is the one baselined expected failure — its
+  pre-creation-MRTR sequence is mutually exclusive with the SDK's spec-permitted
+  in-task-input model (`tasks-mrtr-input` passes 3/3). End-to-end coverage in
+  `tests/Server/TasksExtensionTest.php` (HTTP and stdio).
 
 ## WS5 — MCP Apps extension
 

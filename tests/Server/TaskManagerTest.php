@@ -35,13 +35,13 @@ final class TaskManagerTest extends TestCase
     }
 
     public function testCreateTask(): void {
-        $task = $this->manager->createTask(ttl: 3600000, pollInterval: 5000);
+        $task = $this->manager->createTask(ttlMs: 3600000, pollIntervalMs: 5000);
 
         $this->assertNotEmpty($task->taskId);
         $this->assertEquals(TaskStatus::WORKING, $task->status);
         $this->assertNotNull($task->createdAt);
-        $this->assertEquals(3600000, $task->ttl);
-        $this->assertEquals(5000, $task->pollInterval);
+        $this->assertEquals(3600000, $task->ttlMs);
+        $this->assertEquals(5000, $task->pollIntervalMs);
     }
 
     public function testGetTask(): void {
@@ -67,21 +67,21 @@ final class TaskManagerTest extends TestCase
         $this->assertEquals('Done!', $updated->statusMessage);
     }
 
-    public function testSetAndGetResult(): void {
+    /**
+     * complete() moves a task to terminal `completed` and inlines the tool
+     * result into the stored record (the inlined `result` the tasks/get
+     * response carries). Replaces the removed setResult()/getResult() pair.
+     */
+    public function testCompleteInlinesResult(): void {
         $task = $this->manager->createTask();
-        $this->manager->setResult($task->taskId, ['answer' => 42]);
+        $completed = $this->manager->complete($task->taskId, ['answer' => 42]);
 
-        $result = $this->manager->getResult($task->taskId);
-        $this->assertEquals(['answer' => 42], $result);
-    }
+        $this->assertNotNull($completed);
+        $this->assertEquals(TaskStatus::COMPLETED, $completed->status);
 
-    public function testListTasks(): void {
-        $this->manager->createTask();
-        $this->manager->createTask();
-        $this->manager->createTask();
-
-        $tasks = $this->manager->listTasks();
-        $this->assertCount(3, $tasks);
+        $record = $this->manager->getRecord($task->taskId);
+        $this->assertNotNull($record);
+        $this->assertEquals(['answer' => 42], $record['result']);
     }
 
     public function testCancelTask(): void {
@@ -94,16 +94,16 @@ final class TaskManagerTest extends TestCase
 
     public function testDeleteTask(): void {
         $task = $this->manager->createTask();
-        $this->manager->setResult($task->taskId, 'data');
+        $this->manager->complete($task->taskId, ['data' => true]);
         $this->manager->deleteTask($task->taskId);
 
         $this->assertNull($this->manager->getTask($task->taskId));
-        $this->assertNull($this->manager->getResult($task->taskId));
+        $this->assertNull($this->manager->getRecord($task->taskId));
     }
 
     public function testTtlExpiry(): void {
-        $task = $this->manager->createTask(ttl: 0);
-        // TTL of 0 means it expires immediately
+        $task = $this->manager->createTask(ttlMs: 0);
+        // ttlMs of 0 means it expires immediately (null would be unlimited)
         sleep(1);
         $this->assertNull($this->manager->getTask($task->taskId));
     }
@@ -117,29 +117,40 @@ final class TaskManagerTest extends TestCase
         $this->manager->updateStatus($task->taskId, TaskStatus::WORKING);
     }
 
-    public function testCannotCancelTerminalTask(): void {
+    /**
+     * SEP-2663: cancellation is cooperative and idempotent. Cancelling a task
+     * already in a terminal state is a no-throw ack that leaves the task
+     * unchanged (it keeps its terminal status), rather than the old behavior
+     * of throwing "Cannot cancel task".
+     */
+    public function testCancelCompletedTaskIsIdempotent(): void {
         $task = $this->manager->createTask();
         $this->manager->updateStatus($task->taskId, TaskStatus::COMPLETED, 'Done');
 
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Cannot cancel task');
-        $this->manager->cancelTask($task->taskId);
+        $result = $this->manager->cancelTask($task->taskId);
+
+        $this->assertNotNull($result);
+        $this->assertEquals(TaskStatus::COMPLETED, $result->status, 'Terminal task must keep its status');
     }
 
-    public function testCannotCancelAlreadyCancelledTask(): void {
+    public function testCancelAlreadyCancelledTaskIsIdempotent(): void {
         $task = $this->manager->createTask();
         $this->manager->cancelTask($task->taskId);
 
-        $this->expectException(\InvalidArgumentException::class);
-        $this->manager->cancelTask($task->taskId);
+        $result = $this->manager->cancelTask($task->taskId);
+
+        $this->assertNotNull($result);
+        $this->assertEquals(TaskStatus::CANCELLED, $result->status);
     }
 
-    public function testCannotCancelFailedTask(): void {
+    public function testCancelFailedTaskIsIdempotent(): void {
         $task = $this->manager->createTask();
         $this->manager->updateStatus($task->taskId, TaskStatus::FAILED, 'Error');
 
-        $this->expectException(\InvalidArgumentException::class);
-        $this->manager->cancelTask($task->taskId);
+        $result = $this->manager->cancelTask($task->taskId);
+
+        $this->assertNotNull($result);
+        $this->assertEquals(TaskStatus::FAILED, $result->status, 'Terminal task must keep its status');
     }
 
     public function testValidTransitions(): void {
@@ -161,7 +172,7 @@ final class TaskManagerTest extends TestCase
 
     public function testTaskLifecycle(): void {
         // Create
-        $task = $this->manager->createTask(ttl: 300000);
+        $task = $this->manager->createTask(ttlMs: 300000);
         $this->assertEquals(TaskStatus::WORKING, $task->status);
 
         // Update to input_required
@@ -174,13 +185,12 @@ final class TaskManagerTest extends TestCase
         $task = $this->manager->getTask($task->taskId);
         $this->assertEquals(TaskStatus::WORKING, $task->status);
 
-        // Complete
-        $this->manager->updateStatus($task->taskId, TaskStatus::COMPLETED, 'All done');
-        $this->manager->setResult($task->taskId, ['output' => 'success']);
+        // Complete, inlining the tool result
+        $this->manager->complete($task->taskId, ['output' => 'success']);
         $task = $this->manager->getTask($task->taskId);
         $this->assertEquals(TaskStatus::COMPLETED, $task->status);
 
-        $result = $this->manager->getResult($task->taskId);
-        $this->assertEquals(['output' => 'success'], $result);
+        $record = $this->manager->getRecord($task->taskId);
+        $this->assertEquals(['output' => 'success'], $record['result']);
     }
 }

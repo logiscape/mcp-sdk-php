@@ -5,39 +5,57 @@ declare(strict_types=1);
 namespace Mcp\Types;
 
 /**
- * Result of tasks/get (experimental).
+ * Result of `tasks/get` (SEP-2663, revision 2026-07-28).
  *
- * Per spec, tasks/get returns the Task fields directly at the top level
- * (taskId, status, statusMessage, createdAt, lastUpdatedAt, ttl, pollInterval).
+ * A FLAT intersection `Result & DetailedTask` with `resultType: "complete"`.
+ * The task handle fields sit at the top level; the status discriminates which
+ * extra field is present:
+ *
+ *   - working / cancelled → task fields only
+ *   - input_required      → `inputRequests` (keyed map of full
+ *                           ElicitRequest / CreateMessageRequest /
+ *                           ListRootsRequest objects {method, params})
+ *   - completed           → `result` (the inlined original tool result, e.g.
+ *                           a CallToolResult with non-empty content[])
+ *   - failed              → `error` ({code, message, data?}), no `result`
+ *
+ * MUST NOT carry `requestState`; the inlined `result._meta` MUST NOT carry the
+ * removed `io.modelcontextprotocol/related-task` key.
  */
 class TaskGetResult extends Result {
+    /**
+     * @param array<string, mixed>|null $result Inlined result when completed
+     * @param array<string, mixed>|null $error Inlined error when failed
+     * @param array<string, array{method: string, params: mixed}>|null $inputRequests
+     *        Pending input requests when input_required
+     */
     public function __construct(
-        public readonly string $taskId,
-        public string $status,
-        public ?string $statusMessage = null,
-        public ?string $createdAt = null,
-        public ?string $lastUpdatedAt = null,
-        public ?int $ttl = null,
-        public ?int $pollInterval = null,
+        public readonly Task $task,
+        public ?array $result = null,
+        public ?array $error = null,
+        public ?array $inputRequests = null,
         ?Meta $_meta = null,
     ) {
         parent::__construct($_meta);
+        $this->resultType = Result::RESULT_TYPE_COMPLETE;
     }
 
     /**
-     * Create from a Task object.
+     * Build from a Task handle plus the inlined detail appropriate to its
+     * status.
+     *
+     * @param array<string, mixed>|null $result
+     * @param array<string, mixed>|null $error
+     * @param array<string, array{method: string, params: mixed}>|null $inputRequests
      */
-    public static function fromTask(Task $task, ?Meta $meta = null): self {
-        return new self(
-            taskId: $task->taskId,
-            status: $task->status,
-            statusMessage: $task->statusMessage,
-            createdAt: $task->createdAt,
-            lastUpdatedAt: $task->lastUpdatedAt,
-            ttl: $task->ttl,
-            pollInterval: $task->pollInterval,
-            _meta: $meta,
-        );
+    public static function fromTask(
+        Task $task,
+        ?array $result = null,
+        ?array $error = null,
+        ?array $inputRequests = null,
+        ?Meta $meta = null,
+    ): self {
+        return new self($task, $result, $error, $inputRequests, $meta);
     }
 
     /**
@@ -54,59 +72,39 @@ class TaskGetResult extends Result {
             }
         }
 
-        $obj = new self(
-            taskId: $data['taskId'] ?? '',
-            status: $data['status'] ?? '',
-            statusMessage: $data['statusMessage'] ?? null,
-            createdAt: $data['createdAt'] ?? null,
-            lastUpdatedAt: $data['lastUpdatedAt'] ?? null,
-            ttl: isset($data['ttl']) ? (int) $data['ttl'] : null,
-            pollInterval: isset($data['pollInterval']) ? (int) $data['pollInterval'] : null,
-            _meta: $meta,
-        );
+        unset($data['resultType']);
 
-        unset($data['taskId'], $data['status'], $data['statusMessage'],
-              $data['createdAt'], $data['lastUpdatedAt'], $data['ttl'], $data['pollInterval']);
+        $result = isset($data['result']) && is_array($data['result']) ? $data['result'] : null;
+        $error = isset($data['error']) && is_array($data['error']) ? $data['error'] : null;
+        $inputRequests = isset($data['inputRequests']) && is_array($data['inputRequests']) ? $data['inputRequests'] : null;
+        unset($data['result'], $data['error'], $data['inputRequests']);
 
-        foreach ($data as $k => $v) {
-            $obj->$k = $v;
-        }
-
+        $task = Task::fromArray($data);
+        $obj = new self($task, $result, $error, $inputRequests, $meta);
         $obj->validate();
         return $obj;
     }
 
     public function validate(): void {
         parent::validate();
-        if (empty($this->taskId)) {
-            throw new \InvalidArgumentException('Task taskId cannot be empty');
-        }
-        if (!TaskStatus::isValid($this->status)) {
-            throw new \InvalidArgumentException("Invalid task status: {$this->status}");
-        }
+        $this->task->validate();
     }
 
     public function jsonSerialize(): mixed {
-        $data = parent::jsonSerialize();
-        if ($data instanceof \stdClass) {
-            $data = (array) $data;
+        $data = ['resultType' => Result::RESULT_TYPE_COMPLETE];
+        if ($this->_meta !== null) {
+            $data['_meta'] = $this->_meta;
         }
-        $data['taskId'] = $this->taskId;
-        $data['status'] = $this->status;
-        if ($this->statusMessage !== null) {
-            $data['statusMessage'] = $this->statusMessage;
+        $data = array_merge($data, $this->task->toWireFields());
+
+        if ($this->inputRequests !== null) {
+            $data['inputRequests'] = empty($this->inputRequests) ? new \stdClass() : $this->inputRequests;
         }
-        if ($this->createdAt !== null) {
-            $data['createdAt'] = $this->createdAt;
+        if ($this->result !== null) {
+            $data['result'] = $this->result;
         }
-        if ($this->lastUpdatedAt !== null) {
-            $data['lastUpdatedAt'] = $this->lastUpdatedAt;
-        }
-        if ($this->ttl !== null) {
-            $data['ttl'] = $this->ttl;
-        }
-        if ($this->pollInterval !== null) {
-            $data['pollInterval'] = $this->pollInterval;
+        if ($this->error !== null) {
+            $data['error'] = $this->error;
         }
         return $data;
     }

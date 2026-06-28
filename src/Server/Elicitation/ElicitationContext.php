@@ -28,7 +28,6 @@ use Mcp\Types\ElicitationCapability;
 use Mcp\Types\ElicitationCreateRequest;
 use Mcp\Types\ElicitationCreateResult;
 use Mcp\Types\Meta;
-use Mcp\Types\TaskRequestParams;
 
 /**
  * Transport-agnostic elicitation interface injected into tool handler callbacks.
@@ -132,7 +131,7 @@ class ElicitationContext
      * @param array<string, mixed> $requestedSchema JSON Schema defining expected response structure
      * @return ElicitationCreateResult|null The client's response, or null if not supported
      */
-    public function form(string $message, array $requestedSchema, ?Meta $_meta = null, ?TaskRequestParams $task = null, ?string $inputKey = null): ?ElicitationCreateResult
+    public function form(string $message, array $requestedSchema, ?Meta $_meta = null, ?string $inputKey = null): ?ElicitationCreateResult
     {
         if (!$this->supportsForm()) {
             // Modern path (SEP-2575): a request whose envelope did not
@@ -141,10 +140,6 @@ class ElicitationContext
             $this->session->raiseMissingClientCapabilityIfModern(['elicitation']);
             return null;
         }
-
-        // Task-augmented elicitation is not yet implemented; strip to
-        // prevent sending a request the SDK cannot correctly complete.
-        $task = null;
 
         $seq = $this->sequenceCounter++;
 
@@ -179,7 +174,6 @@ class ElicitationContext
                 mode: 'form',
                 requestedSchema: $requestedSchema,
                 _meta: $_meta,
-                task: $task,
             );
             throw new ElicitationSuspendException(
                 request: $request,
@@ -196,7 +190,6 @@ class ElicitationContext
             message: $message,
             requestedSchema: $requestedSchema,
             _meta: $_meta,
-            task: $task,
         );
     }
 
@@ -217,17 +210,13 @@ class ElicitationContext
      * @param string|null $elicitationId Unique identifier for this elicitation (auto-generated if null)
      * @return ElicitationCreateResult|null The client's consent response, or null if not supported
      */
-    public function url(string $message, string $url, ?string $elicitationId = null, ?Meta $_meta = null, ?TaskRequestParams $task = null, ?string $inputKey = null): ?ElicitationCreateResult
+    public function url(string $message, string $url, ?string $elicitationId = null, ?Meta $_meta = null, ?string $inputKey = null): ?ElicitationCreateResult
     {
         if (!$this->supportsUrl()) {
             // Modern path (SEP-2575): see form().
             $this->session->raiseMissingClientCapabilityIfModern(['elicitation']);
             return null;
         }
-
-        // Task-augmented elicitation is not yet implemented; strip to
-        // prevent sending a request the SDK cannot correctly complete.
-        $task = null;
 
         $elicitationId = $elicitationId ?? bin2hex(random_bytes(16));
         $seq = $this->sequenceCounter++;
@@ -263,7 +252,6 @@ class ElicitationContext
                 url: $url,
                 elicitationId: $elicitationId,
                 _meta: $_meta,
-                task: $task,
             );
             throw new ElicitationSuspendException(
                 request: $request,
@@ -281,7 +269,6 @@ class ElicitationContext
             url: $url,
             elicitationId: $elicitationId,
             _meta: $_meta,
-            task: $task,
         );
     }
 
@@ -293,9 +280,9 @@ class ElicitationContext
      * @return ElicitationCreateResult The accepted result (with content)
      * @throws ElicitationDeclinedException If the client declines, cancels, or doesn't support form elicitation
      */
-    public function requiresForm(string $message, array $requestedSchema, ?Meta $_meta = null, ?TaskRequestParams $task = null): ElicitationCreateResult
+    public function requiresForm(string $message, array $requestedSchema, ?Meta $_meta = null): ElicitationCreateResult
     {
-        $result = $this->form($message, $requestedSchema, $_meta, $task);
+        $result = $this->form($message, $requestedSchema, $_meta);
         if ($result === null) {
             throw new ElicitationDeclinedException('unsupported', 'Client does not support form elicitation');
         }

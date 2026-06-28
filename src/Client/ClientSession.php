@@ -69,6 +69,7 @@ use Mcp\Types\ProgressToken;
 use Mcp\Types\ListResourcesResult;
 use Mcp\Types\ReadResourceResult;
 use Mcp\Types\CallToolResult;
+use Mcp\Types\CreateTaskResult;
 use Mcp\Types\ListPromptsResult;
 use Mcp\Types\GetPromptResult;
 use Mcp\Types\ListToolsResult;
@@ -158,6 +159,15 @@ class ClientSession extends BaseSession {
 
     /** @var callable|null User-registered sampling/createMessage handler (one per session). */
     private $samplingHandler = null;
+
+    /**
+     * @var array<string, mixed> SEP-2133 extensions this client declares in
+     * the per-request `_meta` clientCapabilities envelope (keyed by extension
+     * id, value = the extension's settings object). Declaring the Tasks
+     * extension is the prerequisite for using `tasks/*` and for a server to
+     * augment a `tools/call` as a task.
+     */
+    private array $declaredExtensions = [];
 
     /**
      * Whether this session rides the Streamable HTTP transport. Gates the
@@ -943,7 +953,30 @@ class ClientSession extends BaseSession {
         if ($this->samplingHandler !== null) {
             $sampling = new SamplingCapability();
         }
-        return new ClientCapabilities(roots: $roots, sampling: $sampling, elicitation: $elicitation);
+        $extensions = $this->declaredExtensions === [] ? null : $this->declaredExtensions;
+        return new ClientCapabilities(
+            roots: $roots,
+            sampling: $sampling,
+            elicitation: $elicitation,
+            extensions: $extensions,
+        );
+    }
+
+    /**
+     * Declare support for a SEP-2133 extension (by reverse-DNS id) so it is
+     * advertised in every modern request's `_meta` clientCapabilities
+     * envelope. The settings object defaults to the empty object `{}`.
+     *
+     * Declaring {@see \Mcp\Types\ExtensionIds::TASKS} is required before
+     * calling `tasks/*` and before a server may augment a `tools/call` as a
+     * task.
+     *
+     * @param array<string, mixed> $settings Extension-specific settings
+     * @return self For method chaining
+     */
+    public function declareExtension(string $extensionId, array $settings = []): self {
+        $this->declaredExtensions[$extensionId] = $settings;
+        return $this;
     }
 
     /**
@@ -1144,9 +1177,12 @@ class ClientSession extends BaseSession {
      *         tools/list for invalid x-mcp-header annotations (SEP-2243):
      *         rejected tools are never called on the wire.
      *
-     * @return CallToolResult The result of the tool call.
+     * @return CallToolResult|CreateTaskResult The tool result, or — when the
+     *         server augments the call as a task under the SEP-2663 Tasks
+     *         extension (resultType "task") — the task handle to poll via
+     *         {@see getTask()}.
      */
-    public function callTool(string $name, ?array $arguments = null): CallToolResult {
+    public function callTool(string $name, ?array $arguments = null): CallToolResult|CreateTaskResult {
         $this->ensureInitialized();
         if (isset($this->rejectedToolErrors[$name])) {
             throw new InvalidArgumentException(
@@ -1157,7 +1193,7 @@ class ClientSession extends BaseSession {
         }
         $callToolRequest = new \Mcp\Types\CallToolRequest($name, $arguments);
         $this->logger->info("Calling tool: $name with arguments: " . json_encode($arguments));
-        /** @var CallToolResult */
+        /** @var CallToolResult|CreateTaskResult */
         return $this->executeModernCall(
             $callToolRequest,
             CallToolResult::class,
@@ -1431,7 +1467,17 @@ class ClientSession extends BaseSession {
             }
 
             $data = $raw->data;
-            if (($data['resultType'] ?? null) !== InputRequiredResult::RESULT_TYPE_INPUT_REQUIRED) {
+            $rawResultType = $data['resultType'] ?? null;
+            if ($rawResultType !== InputRequiredResult::RESULT_TYPE_INPUT_REQUIRED) {
+                // SEP-2663: a tools/call the server augmented as a task comes
+                // back as a flat CreateTaskResult (resultType "task"), not a
+                // CallToolResult — surface the task handle so the caller can
+                // poll tasks/get. Only tools/call can return it.
+                if ($rawResultType === CreateTaskResult::RESULT_TYPE_TASK
+                    && $resultType === CallToolResult::class
+                ) {
+                    return CreateTaskResult::fromResponseData($data);
+                }
                 // Anything else — including an absent resultType — is a
                 // complete result; hand the raw data to the typed parser.
                 /** @var T */
@@ -1594,10 +1640,14 @@ class ClientSession extends BaseSession {
     }
 
     /**
-     * Get a task's current status (experimental).
+     * Get a task's current status and inlined detail (SEP-2663 `tasks/get`).
+     *
+     * The result carries the task handle plus, by status, the completed
+     * `result`, the failed `error`, or the pending `inputRequests`. Requires
+     * the Tasks extension to be declared (see Client connect options).
      *
      * @param string $taskId The task ID to query
-     * @return \Mcp\Types\TaskGetResult The task status
+     * @return \Mcp\Types\TaskGetResult The task status and detail
      */
     public function getTask(string $taskId): \Mcp\Types\TaskGetResult {
         $this->ensureInitialized();
@@ -1607,41 +1657,37 @@ class ClientSession extends BaseSession {
     }
 
     /**
-     * Get a completed task's result (experimental).
+     * Fulfill outstanding input requests for an `input_required` task
+     * (SEP-2663 `tasks/update`).
      *
-     * @param string $taskId The task ID to query
-     * @return CallToolResult The task result
+     * @param string $taskId The task ID to update
+     * @param array<string, mixed> $inputResponses Keyed map of
+     *        ElicitResult / CreateMessageResult / ListRootsResult, keyed to
+     *        match the task's inputRequests. Partial maps are allowed.
+     * @return \Mcp\Types\TaskUpdateResult The empty acknowledgement
      */
-    public function getTaskResult(string $taskId): CallToolResult {
+    public function updateTask(string $taskId, array $inputResponses = []): \Mcp\Types\TaskUpdateResult {
         $this->ensureInitialized();
-        $request = new \Mcp\Types\TaskResultRequest($taskId);
-        $this->logger->info("Getting task result: $taskId");
-        return $this->sendRequest($request, CallToolResult::class);
+        $request = new \Mcp\Types\TaskUpdateRequest($taskId, $inputResponses);
+        $this->logger->info("Updating task: $taskId");
+        return $this->sendRequest($request, \Mcp\Types\TaskUpdateResult::class);
     }
 
     /**
-     * List all tasks (experimental).
+     * Request cancellation of a task (SEP-2663 `tasks/cancel`).
      *
-     * @return \Mcp\Types\TaskListResult The list of tasks
-     */
-    public function listTasks(): \Mcp\Types\TaskListResult {
-        $this->ensureInitialized();
-        $request = new \Mcp\Types\TaskListRequest();
-        $this->logger->info('Listing tasks');
-        return $this->sendRequest($request, \Mcp\Types\TaskListResult::class);
-    }
-
-    /**
-     * Cancel a task (experimental).
+     * Cooperative and eventually-consistent: the server only acknowledges
+     * (an empty result); the task may settle to a terminal status other than
+     * `cancelled`. Poll `tasks/get` for the outcome.
      *
      * @param string $taskId The task ID to cancel
-     * @return \Mcp\Types\TaskGetResult The updated task
+     * @return \Mcp\Types\TaskCancelResult The empty acknowledgement
      */
-    public function cancelTask(string $taskId): \Mcp\Types\TaskGetResult {
+    public function cancelTask(string $taskId): \Mcp\Types\TaskCancelResult {
         $this->ensureInitialized();
         $request = new \Mcp\Types\TaskCancelRequest($taskId);
         $this->logger->info("Cancelling task: $taskId");
-        return $this->sendRequest($request, \Mcp\Types\TaskGetResult::class);
+        return $this->sendRequest($request, \Mcp\Types\TaskCancelResult::class);
     }
 
     /**

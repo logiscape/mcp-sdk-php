@@ -769,10 +769,14 @@ final class ElicitationContextTest extends TestCase
     }
 
     /**
-     * ElicitationContext::form() HTTP suspend path carries _meta but strips task
-     * (task-augmented elicitation is not yet implemented).
+     * ElicitationContext::form() HTTP suspend path carries _meta on the
+     * suspended request.
+     *
+     * SEP-2663: ElicitationContext::form() no longer accepts a $task argument
+     * (task-augmented elicitation is server-directed, not carried from the
+     * elicitation context), so the suspended request carries _meta only.
      */
-    public function testFormHttpSuspendCarriesMetaAndStripsTask(): void
+    public function testFormHttpSuspendCarriesMeta(): void
     {
         $session = $this->createSessionWithCapabilities(
             new ElicitationCapability(form: true)
@@ -780,7 +784,6 @@ final class ElicitationContextTest extends TestCase
 
         $meta = new Meta();
         $meta->progressToken = 'progress-1';
-        $task = new TaskRequestParams(ttl: 120);
 
         $context = new ElicitationContext(
             session: $session,
@@ -796,22 +799,22 @@ final class ElicitationContextTest extends TestCase
                 'Fill this',
                 ['type' => 'object', 'properties' => ['a' => ['type' => 'string']]],
                 _meta: $meta,
-                task: $task,
             );
             $this->fail('Expected ElicitationSuspendException');
         } catch (ElicitationSuspendException $e) {
             $this->assertNotNull($e->request->_meta);
             $this->assertSame('progress-1', $e->request->_meta->progressToken);
-            // Task-augmented elicitation is not yet supported; task must be stripped
-            $this->assertNull($e->request->task);
         }
     }
 
     /**
-     * ElicitationContext::url() HTTP suspend path carries _meta but strips task
-     * (task-augmented elicitation is not yet implemented).
+     * ElicitationContext::url() HTTP suspend path carries _meta on the
+     * suspended request.
+     *
+     * SEP-2663: ElicitationContext::url() no longer accepts a $task argument,
+     * so the suspended request carries _meta only.
      */
-    public function testUrlHttpSuspendCarriesMetaAndStripsTask(): void
+    public function testUrlHttpSuspendCarriesMeta(): void
     {
         $session = $this->createSessionWithCapabilities(
             new ElicitationCapability(form: true, url: true),
@@ -820,7 +823,6 @@ final class ElicitationContextTest extends TestCase
 
         $meta = new Meta();
         $meta->progressToken = 'progress-url';
-        $task = new TaskRequestParams(ttl: 60);
 
         $context = new ElicitationContext(
             session: $session,
@@ -837,14 +839,11 @@ final class ElicitationContextTest extends TestCase
                 'https://example.com/auth',
                 'elicit-id',
                 _meta: $meta,
-                task: $task,
             );
             $this->fail('Expected ElicitationSuspendException');
         } catch (ElicitationSuspendException $e) {
             $this->assertNotNull($e->request->_meta);
             $this->assertSame('progress-url', $e->request->_meta->progressToken);
-            // Task-augmented elicitation is not yet supported; task must be stripped
-            $this->assertNull($e->request->task);
         }
     }
 }

@@ -611,16 +611,16 @@ final class ClientSessionRpcMethodsTest extends TestCase
 
     /**
      * Verify that cancelTask() emits a "tasks/cancel" request with the
-     * correct taskId in the params.
+     * correct taskId and returns a TaskCancelResult (the SEP-2663 empty ack).
      */
     public function testCancelTaskWritesCorrectRequest(): void
     {
         $readStream  = new MemoryStream();
         $writeStream = new MemoryStream();
 
+        // tasks/cancel returns the empty acknowledgement {"resultType":"complete"}.
         $this->preloadResponse($readStream, 0, [
-            'taskId' => 'task-1',
-            'status' => 'cancelled',
+            'resultType' => 'complete',
         ]);
 
         $session = $this->createRestoredSession($readStream, $writeStream, nextRequestId: 0);
@@ -629,11 +629,44 @@ final class ClientSessionRpcMethodsTest extends TestCase
         $sent = $this->decodeSentMessage($writeStream);
         $this->assertSame('tasks/cancel', $sent['method']);
         $this->assertSame('task-1', $sent['params']['taskId']);
-        $this->assertInstanceOf(\Mcp\Types\TaskGetResult::class, $result);
+        $this->assertInstanceOf(\Mcp\Types\TaskCancelResult::class, $result);
     }
 
     // -----------------------------------------------------------------------
-    // 23. Incoming ping — built-in auto-responder
+    // 23. updateTask – request shape
+    // -----------------------------------------------------------------------
+
+    /**
+     * Verify that updateTask() emits a "tasks/update" request carrying the
+     * taskId and the inputResponses map, and returns a TaskUpdateResult (the
+     * SEP-2663 empty ack).
+     */
+    public function testUpdateTaskWritesCorrectRequest(): void
+    {
+        $readStream  = new MemoryStream();
+        $writeStream = new MemoryStream();
+
+        $this->preloadResponse($readStream, 0, [
+            'resultType' => 'complete',
+        ]);
+
+        $session = $this->createRestoredSession($readStream, $writeStream, nextRequestId: 0);
+        $result  = $session->updateTask('task-1', [
+            'q0' => ['action' => 'accept', 'content' => ['name' => 'Ada']],
+        ]);
+
+        $sent = $this->decodeSentMessage($writeStream);
+        $this->assertSame('tasks/update', $sent['method']);
+        $this->assertSame('task-1', $sent['params']['taskId']);
+        $this->assertSame(
+            ['action' => 'accept', 'content' => ['name' => 'Ada']],
+            $sent['params']['inputResponses']['q0']
+        );
+        $this->assertInstanceOf(\Mcp\Types\TaskUpdateResult::class, $result);
+    }
+
+    // -----------------------------------------------------------------------
+    // 24. Incoming ping — built-in auto-responder
     // -----------------------------------------------------------------------
 
     /**

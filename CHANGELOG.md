@@ -210,6 +210,61 @@ This file was introduced during the v1.7.x series. Structured entries below cove
     `Mcp\Client\Transport\ReadTimeoutException` replace exception-message
     string matching in unknown-method handling and client read-timeout
     classification (messages unchanged for backward compatibility).
+- **v2 WS4 — Tasks extension (SEP-2663).** A clean, breaking redesign of the
+  pre-release experimental Tasks surface (no deprecation shims) to the
+  `2026-07-28` stateless model, declared through the SEP-2133 extensions
+  framework.
+  - Methods reduced to `tasks/get` / `tasks/update` / `tasks/cancel`;
+    `tasks/list` and `tasks/result` are removed and now answer `-32601`
+    (the completed result is inlined in the `tasks/get` response). A
+    `tools/call` the server augments as a task returns a flat
+    `CreateTaskResult` (`Result & Task`, discriminated by
+    `resultType: "task"` — not a nested object or `_meta` key); `tasks/get`
+    returns a flat `DetailedTask` (`resultType: "complete"`) that inlines
+    `result` (completed), `error` (failed), or `inputRequests`
+    (input_required) by status; `tasks/update` and `tasks/cancel` return
+    empty `{ "resultType": "complete" }` acks. Task fields are renamed
+    `ttl` → `ttlMs` (always emitted, `null` = unlimited) and
+    `pollInterval` → `pollIntervalMs`; the `io.modelcontextprotocol/
+    related-task` `_meta` key is dropped.
+  - Declared via the new SEP-2133 `extensions` capability map (new
+    `extensions` field on `ServerCapabilities`/`ClientCapabilities`,
+    `Mcp\Types\ExtensionIds::TASKS`): advertised in `server/discover` and
+    declared per-request in the `_meta` clientCapabilities envelope
+    (`ClientSession::declareExtension()`). The v1 `tasks` capability slot
+    and `TaskCapability` type are removed. A malformed (non-object)
+    extension value — a scalar or a JSON array — is ignored, so it can
+    never unlock a feature.
+  - Server: `McpServer::enableTasks()` registers the three task methods and
+    declares the extension; a tool opts into task augmentation via
+    `tool(..., taskSupport: …)` with the new `Mcp\Server\TaskSupport`
+    (`FORBIDDEN` default / `OPTIONAL` / `REQUIRED`). The file-based
+    `TaskManager` is reworked to the SEP-2663 state machine (working ⇄
+    input_required → terminal, `ttlMs` expiry, idempotent cancel, in-task
+    input persisted with a signed `requestState`). Every `tasks/*` method
+    requires the client to have declared the extension (rejected `-32021`
+    regardless of era); a `REQUIRED` tool called by an undeclared modern
+    client is rejected `-32021` with
+    `data.requiredCapabilities.extensions["io.modelcontextprotocol/tasks"]`,
+    while an `OPTIONAL` tool degrades to a synchronous result. Execution is
+    synchronous-capture for shared-hosting compatibility (the tool body runs
+    within the creating request and the outcome is stored); genuine
+    async/working tasks are driven by the application via
+    `McpServer::getTaskManager()`. In-task input reuses the SEP-2322
+    machinery: a task tool that elicits parks as `input_required`, surfaces
+    its `inputRequests` via `tasks/get`, and resumes on `tasks/update`.
+  - Client: `ClientSession::getTask()` / `updateTask()` / `cancelTask()`
+    (and `Client` wrappers); `listTasks()` and `getTaskResult()` are removed.
+  - Conformance: `everything-server.php` gained the Tasks fixtures
+    (`enableTasks()` plus `greet`, `slow_compute`, `failing_job`,
+    `protocol_error_job`, `confirm_delete`, `multi_input`,
+    `test_tool_with_task`), and the draft `server-draft`/`draft` gate runs
+    the tool's ten `pending`-suite SEP-2663 scenarios explicitly
+    (`DRAFT_SERVER_EXTRA_SCENARIOS`): eight pass,
+    `tasks-status-notifications` is skipped by the tool (pending its own
+    `subscriptions/listen` rewrite), and `tasks-mrtr-composition` is an
+    expected baseline failure (its pre-creation-MRTR sequence is mutually
+    exclusive with the SDK's in-task-input model — both spec-permitted).
 
 ### Changed
 
@@ -300,6 +355,16 @@ This file was introduced during the v1.7.x series. Structured entries below cove
   `http-custom-headers` and `auth/pre-registration` remain documented
   upstream entries; the former clears once the pin reaches `0.2.0-alpha.8`
   (upstream PR #371, merged after the alpha.7 tag).
+- WS4 v1→v2 API-surface changes (for the migration guide): the pre-release
+  Tasks API is replaced, not deprecated. `ClientSession::callTool()` now
+  returns `CallToolResult|CreateTaskResult` (it surfaces a task handle when
+  the server augments the call); `ClientSession::listTasks()` and
+  `getTaskResult()` are removed; the `Task` fields `ttl`/`pollInterval` are
+  renamed `ttlMs`/`pollIntervalMs`; the `tasks` capability slot and the
+  `TaskCapability`, `TaskListRequest`/`TaskListResult`,
+  `TaskResultRequest`, and `TaskStatusNotification` types are removed; and
+  `ElicitationContext::form()`/`url()`/`requiresForm()` no longer take the
+  (previously stubbed) `$task` parameter.
 
 ### Fixed
 

@@ -72,8 +72,7 @@ final class ClientRequest implements RequestWrapperInterface {
             $request instanceof CompleteRequest ||
             $request instanceof ListTemplatesRequest ||
             $request instanceof TaskGetRequest ||
-            $request instanceof TaskResultRequest ||
-            $request instanceof TaskListRequest ||
+            $request instanceof TaskUpdateRequest ||
             $request instanceof TaskCancelRequest ||
             $request instanceof DiscoverRequest ||
             $request instanceof SubscriptionsListenRequest
@@ -109,8 +108,7 @@ final class ClientRequest implements RequestWrapperInterface {
             'tools/call' => self::createCallToolRequest($params),
             'tools/list' => self::createListToolsRequest($params),
             'tasks/get' => self::createTaskGetRequest($params),
-            'tasks/result' => self::createTaskResultRequest($params),
-            'tasks/list' => self::createTaskListRequest($params),
+            'tasks/update' => self::createTaskUpdateRequest($params),
             'tasks/cancel' => self::createTaskCancelRequest($params),
             default => throw new \Mcp\Shared\UnknownMethodException("Unknown client request method: $method")
         };
@@ -162,18 +160,16 @@ final class ClientRequest implements RequestWrapperInterface {
             );
         }
 
-        // TaskCapability
-        $tasks = null;
-        if (isset($capParams['tasks'])) {
-            $tasks = TaskCapability::fromArray($capParams['tasks']);
-        }
+        // SEP-2133 extensions map (carried on modern requests; legacy
+        // initialize rarely includes it but it round-trips if present).
+        $extensions = ServerCapabilities::parseExtensions($capParams);
 
         $capabilities = new ClientCapabilities(
             roots: $roots,
             sampling: $sampling,
             experimental: $experimental,
             elicitation: $elicitation,
-            tasks: $tasks,
+            extensions: $extensions,
         );
 
         // Implementation
@@ -412,17 +408,15 @@ final class ClientRequest implements RequestWrapperInterface {
     }
 
     /** @param array<string, mixed> $params */
-    private static function createTaskResultRequest(array $params): self {
+    private static function createTaskUpdateRequest(array $params): self {
         if (empty($params['taskId'])) {
-            throw new \InvalidArgumentException('TaskResultRequest requires "taskId"');
+            throw new \InvalidArgumentException('TaskUpdateRequest requires "taskId"');
         }
-        return new self(new TaskResultRequest($params['taskId']));
-    }
-
-    /** @param array<string, mixed> $params */
-    private static function createTaskListRequest(array $params): self {
-        $cursor = $params['cursor'] ?? null;
-        return new self(new TaskListRequest($cursor));
+        $inputResponses = [];
+        if (isset($params['inputResponses']) && is_array($params['inputResponses'])) {
+            $inputResponses = $params['inputResponses'];
+        }
+        return new self(new TaskUpdateRequest($params['taskId'], $inputResponses));
     }
 
     /** @param array<string, mixed> $params */

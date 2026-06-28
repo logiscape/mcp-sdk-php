@@ -34,6 +34,24 @@
 #    upstream drift, not SDK regressions, and no renumber-bearing alpha
 #    avoids them: the renumber (#353), the DRAFT-2026-v1 retirement (#331),
 #    and the discover-on-mock change (#347) had all landed by alpha.5.
+#
+# WS4 Tasks extension (SEP-2663) scenario gating note (2026-06-27):
+#  The 0.2.0-alpha.7 tool registers its 10 SEP-2663 Tasks scenarios
+#  (tasks-lifecycle, tasks-capability-negotiation, tasks-wire-fields,
+#  tasks-request-state-removal, tasks-mrtr-input, tasks-request-headers,
+#  tasks-dispatch-and-envelope, tasks-status-notifications,
+#  tasks-required-task-error, tasks-mrtr-composition) in its `pending`
+#  suite, NOT the `draft` suite, so `--suite draft` does not select them.
+#  everything-server.php exposes the fixtures they need via enableTasks(),
+#  and run-conformance.php's server-draft/draft gate runs each explicitly
+#  after the suite (DRAFT_SERVER_EXTRA_SCENARIOS) so they ARE evaluated
+#  against this baseline. Of the ten: EIGHT pass, tasks-status-notifications
+#  is SKIPPED by the tool itself (0 checks executed — it is pending the
+#  tool's own subscriptions/listen rewrite, not an SDK gap), and
+#  tasks-mrtr-composition is the one expected failure (entry below). They are
+#  additionally covered by the SDK's own end-to-end tests
+#  (tests/Server/TasksExtensionTest.php, HTTP and stdio) and TaskManager unit
+#  tests. Re-evaluate at WS7 convergence.
 
 server:
   # --- One upstream tool bug (unchanged in nature; error code renumbered) ---
@@ -72,6 +90,28 @@ server:
     # run-conformance.php sets it automatically). On Windows dev machines
     # the concurrent events cannot be exercised locally; warnings do not
     # fail the scenario either way.
+
+  # --- SEP-2663 Tasks: synchronous-execution-model behavioral choice ---
+  - tasks-mrtr-composition
+    # INTENTIONAL MODEL CHOICE, not a bug (both behaviors are spec-permitted):
+    # the scenario's one check, sep-2663-mrtr-synchronous-before-task-creation,
+    # mandates that a task-augmented tool gather client input via an MRTR loop
+    # on tools/call (round 1 = InputRequiredResult with NO taskId) and only
+    # CREATE the task on the final round (round 2 = CreateTaskResult). The SDK
+    # uses the complementary spec mechanism instead: a task-augmented tool
+    # creates the handle immediately and surfaces input requests IN-TASK via
+    # the tasks/get `inputRequests` map answered by tasks/update (SEP-2663's
+    # input-during-a-task path), which the sibling scenario tasks-mrtr-input
+    # exercises and the SDK passes 3/3. The two patterns are mutually
+    # exclusive for a single tool, and the shared-hosting synchronous
+    # execution model (the SDK runs the tool body within the creating request
+    # rather than as a background worker) makes "gather input, THEN start
+    # long-running task work" indistinguishable from in-task input — so the
+    # SDK implements the single coherent in-task model. Of the other nine
+    # SEP-2663 scenarios, eight pass and tasks-status-notifications is skipped
+    # by the tool (0 checks, pending its subscriptions/listen rewrite).
+    # Re-evaluate at WS7 convergence; candidate for an upstream note that both
+    # sequences are conformant (SEP-2484).
 
 client:
   # --- Issuer-binding drift (re-checked at alpha.7: unchanged) ---

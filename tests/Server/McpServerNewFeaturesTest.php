@@ -22,7 +22,7 @@ use Mcp\Types\ListToolsResult;
 use Mcp\Types\Meta;
 use Mcp\Types\ProgressToken;
 use Mcp\Types\RequestId;
-use Mcp\Types\TaskCapability;
+use Mcp\Types\ExtensionIds;
 use Mcp\Types\TextContent;
 use Mcp\Server\Transport\Transport;
 use Psr\Log\NullLogger;
@@ -430,7 +430,9 @@ final class McpServerNewFeaturesTest extends TestCase
     }
 
     /**
-     * Test that enableTasks() registers tasks/get, tasks/list, tasks/cancel, tasks/result handlers.
+     * Test that enableTasks() registers exactly the SEP-2663 task methods:
+     * tasks/get, tasks/update, tasks/cancel. The removed tasks/list and
+     * tasks/result methods must NOT be registered.
      */
     public function testEnableTasksRegistersHandlers(): void {
         $server = new McpServer('test');
@@ -438,13 +440,15 @@ final class McpServerNewFeaturesTest extends TestCase
 
         $handlers = $server->getServer()->getHandlers();
         $this->assertArrayHasKey('tasks/get', $handlers);
-        $this->assertArrayHasKey('tasks/list', $handlers);
+        $this->assertArrayHasKey('tasks/update', $handlers);
         $this->assertArrayHasKey('tasks/cancel', $handlers);
-        $this->assertArrayHasKey('tasks/result', $handlers);
+        $this->assertArrayNotHasKey('tasks/list', $handlers);
+        $this->assertArrayNotHasKey('tasks/result', $handlers);
     }
 
     /**
-     * Test that enableTasks() causes tasks capability to be advertised.
+     * Test that enableTasks() causes the SEP-2663 Tasks extension to be
+     * advertised through the SEP-2133 extensions map (empty settings `{}`).
      */
     public function testEnableTasksExposesCapability(): void {
         $server = new McpServer('test');
@@ -456,13 +460,14 @@ final class McpServerNewFeaturesTest extends TestCase
             new NotificationOptions(),
             []
         );
-        $this->assertNotNull($caps->tasks);
-        $this->assertTrue($caps->tasks->list);
-        $this->assertTrue($caps->tasks->cancel);
+        $this->assertIsArray($caps->extensions);
+        $this->assertArrayHasKey(ExtensionIds::TASKS, $caps->extensions);
+        $this->assertSame([], $caps->extensions[ExtensionIds::TASKS]);
     }
 
     /**
-     * Test that McpServer without enableTasks() does not expose tasks capability.
+     * Test that McpServer without enableTasks() does not declare the Tasks
+     * extension.
      */
     public function testNoTasksCapabilityWithoutEnableTasks(): void {
         $server = new McpServer('test');
@@ -473,7 +478,7 @@ final class McpServerNewFeaturesTest extends TestCase
             new NotificationOptions(),
             []
         );
-        $this->assertNull($caps->tasks);
+        $this->assertNull($caps->extensions);
     }
 
     /**

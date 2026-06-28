@@ -7,20 +7,20 @@ namespace Mcp\Tests\Server;
 use Mcp\Server\McpServer;
 use Mcp\Server\McpServerException;
 use Mcp\Types\CallToolResult;
+use Mcp\Types\TaskCancelResult;
 use Mcp\Types\TaskGetResult;
-use Mcp\Types\TaskListResult;
 use Mcp\Types\TaskStatus;
 use Mcp\Types\TextContent;
 use PHPUnit\Framework\TestCase;
 
 /**
  * Tests that task handler responses produce the correct wire JSON shapes
- * per the MCP 2025-11-25 specification.
+ * per the SEP-2663 Tasks extension (revision 2026-07-28).
  *
- * - tasks/get: Task fields at root level (allOf[Result, Task])
- * - tasks/cancel: Task fields at root level (allOf[Result, Task])
- * - tasks/list: { tasks: [...] }
- * - tasks/result: Underlying result type with _meta["io.modelcontextprotocol/related-task"]
+ * - tasks/get: FLAT Result & DetailedTask, resultType "complete", task fields
+ *   at root level, inlining result/error/inputRequests by status.
+ * - tasks/cancel: empty ack {"resultType":"complete"} (idempotent).
+ * - tasks/list and tasks/result no longer exist (removed in SEP-2663).
  */
 final class TaskWireFormatTest extends TestCase
 {
@@ -57,7 +57,7 @@ final class TaskWireFormatTest extends TestCase
      */
     public function testTasksGetWireFormat(): void
     {
-        $task = $this->server->getTaskManager()->createTask(ttl: 30000, pollInterval: 5000);
+        $task = $this->server->getTaskManager()->createTask(ttlMs: 30000, pollIntervalMs: 5000);
 
         $params = new \stdClass();
         $params->taskId = $task->taskId;
@@ -69,29 +69,73 @@ final class TaskWireFormatTest extends TestCase
         // Serialize and verify wire shape
         $json = json_decode(json_encode($result), true);
 
-        // Task fields MUST be at root level
+        // FLAT Result & DetailedTask discriminated by resultType "complete"
+        $this->assertEquals('complete', $json['resultType']);
+
+        // Task fields MUST be at root level, using the SEP-2663 field names
         $this->assertArrayHasKey('taskId', $json);
         $this->assertArrayHasKey('status', $json);
         $this->assertArrayHasKey('createdAt', $json);
         $this->assertArrayHasKey('lastUpdatedAt', $json);
-        $this->assertArrayHasKey('ttl', $json);
-        $this->assertArrayHasKey('pollInterval', $json);
+        $this->assertArrayHasKey('ttlMs', $json);
+        $this->assertArrayHasKey('pollIntervalMs', $json);
 
-        // Must NOT have a nested "task" key
+        // Must NOT have a nested "task" key nor the legacy field names
         $this->assertArrayNotHasKey('task', $json);
+        $this->assertArrayNotHasKey('ttl', $json);
+        $this->assertArrayNotHasKey('pollInterval', $json);
 
         // Verify values
         $this->assertEquals($task->taskId, $json['taskId']);
         $this->assertEquals(TaskStatus::WORKING, $json['status']);
-        $this->assertEquals(30000, $json['ttl']);
-        $this->assertEquals(5000, $json['pollInterval']);
+        $this->assertEquals(30000, $json['ttlMs']);
+        $this->assertEquals(5000, $json['pollIntervalMs']);
     }
 
     /**
-     * Test that tasks/cancel returns Task fields at the root level with
-     * status "cancelled".
-     *
-     * Spec: CancelTaskResult is allOf[Result, Task].
+     * Test that tasks/get on a completed task inlines the original tool result
+     * at the top-level `result` key (the SEP-2663 replacement for the removed
+     * tasks/result method), with no related-task _meta anywhere.
+     */
+    public function testTasksGetCompletedInlinesResult(): void
+    {
+        $task = $this->server->getTaskManager()->createTask();
+        $toolResult = new CallToolResult(
+            content: [new TextContent('Weather: sunny, 72°F')],
+            isError: false,
+        );
+        $this->server->getTaskManager()->complete(
+            $task->taskId,
+            json_decode(json_encode($toolResult), true),
+        );
+
+        $params = new \stdClass();
+        $params->taskId = $task->taskId;
+        $result = ($this->handlers['tasks/get'])($params);
+
+        $this->assertInstanceOf(TaskGetResult::class, $result);
+
+        $json = json_decode(json_encode($result), true);
+
+        $this->assertEquals('complete', $json['resultType']);
+        $this->assertEquals(TaskStatus::COMPLETED, $json['status']);
+
+        // The original tool result is inlined under "result"
+        $this->assertArrayHasKey('result', $json);
+        $this->assertArrayHasKey('content', $json['result']);
+        $this->assertEquals('text', $json['result']['content'][0]['type']);
+        $this->assertEquals('Weather: sunny, 72°F', $json['result']['content'][0]['text']);
+
+        // The removed related-task _meta key must not appear anywhere
+        $encoded = json_encode($json);
+        $this->assertStringNotContainsString('io.modelcontextprotocol/related-task', $encoded);
+    }
+
+    /**
+     * Test that tasks/cancel returns the empty acknowledgement
+     * {"resultType":"complete"} — SEP-2663 cancellation is cooperative and
+     * eventually-consistent, so the ack carries no task fields. The cancelled
+     * task itself is observed via the TaskManager.
      */
     public function testTasksCancelWireFormat(): void
     {
@@ -101,24 +145,27 @@ final class TaskWireFormatTest extends TestCase
         $params->taskId = $task->taskId;
         $result = ($this->handlers['tasks/cancel'])($params);
 
-        $this->assertInstanceOf(TaskGetResult::class, $result);
+        $this->assertInstanceOf(TaskCancelResult::class, $result);
 
         $json = json_decode(json_encode($result), true);
 
-        // Task fields at root
-        $this->assertArrayHasKey('taskId', $json);
-        $this->assertArrayHasKey('status', $json);
+        // Empty ack: exactly {"resultType":"complete"}, no task fields
+        $this->assertSame(['resultType' => 'complete'], $json);
+        $this->assertArrayNotHasKey('taskId', $json);
+        $this->assertArrayNotHasKey('status', $json);
         $this->assertArrayNotHasKey('task', $json);
 
-        $this->assertEquals($task->taskId, $json['taskId']);
-        $this->assertEquals(TaskStatus::CANCELLED, $json['status']);
+        // The underlying task has transitioned to cancelled
+        $cancelled = $this->server->getTaskManager()->getTask($task->taskId);
+        $this->assertEquals(TaskStatus::CANCELLED, $cancelled->status);
     }
 
     /**
-     * Test that tasks/cancel for a terminal task returns a JSON-RPC error
-     * with code -32602 per spec.
+     * Test that tasks/cancel on a terminal task is an idempotent no-throw ack
+     * (SEP-2663) — the previous -32602 "not cancellable" error is obsolete —
+     * and that the task keeps its terminal status.
      */
-    public function testTasksCancelTerminalReturnsError(): void
+    public function testTasksCancelTerminalIsIdempotentAck(): void
     {
         $task = $this->server->getTaskManager()->createTask();
         $this->server->getTaskManager()->updateStatus($task->taskId, TaskStatus::COMPLETED);
@@ -126,140 +173,20 @@ final class TaskWireFormatTest extends TestCase
         $params = new \stdClass();
         $params->taskId = $task->taskId;
 
-        $this->expectException(McpServerException::class);
-        ($this->handlers['tasks/cancel'])($params);
+        $result = ($this->handlers['tasks/cancel'])($params);
+
+        $this->assertInstanceOf(TaskCancelResult::class, $result);
+        $this->assertSame(['resultType' => 'complete'], json_decode(json_encode($result), true));
+
+        // Terminal task is left untouched
+        $unchanged = $this->server->getTaskManager()->getTask($task->taskId);
+        $this->assertEquals(TaskStatus::COMPLETED, $unchanged->status);
     }
 
-    /**
-     * Test that tasks/list returns { tasks: [...] } with each task having
-     * fields at root level.
-     *
-     * Spec: ListTasksResult has a "tasks" array of Task objects.
-     */
-    public function testTasksListWireFormat(): void
-    {
-        $task1 = $this->server->getTaskManager()->createTask(ttl: 10000);
-        $task2 = $this->server->getTaskManager()->createTask(ttl: 20000);
-
-        $params = new \stdClass();
-        $result = ($this->handlers['tasks/list'])($params);
-
-        $this->assertInstanceOf(TaskListResult::class, $result);
-
-        $json = json_decode(json_encode($result), true);
-
-        $this->assertArrayHasKey('tasks', $json);
-        $this->assertIsArray($json['tasks']);
-        $this->assertCount(2, $json['tasks']);
-
-        // Each task in the array should have root-level fields
-        foreach ($json['tasks'] as $taskJson) {
-            $this->assertArrayHasKey('taskId', $taskJson);
-            $this->assertArrayHasKey('status', $taskJson);
-            $this->assertArrayHasKey('createdAt', $taskJson);
-        }
-
-        $taskIds = array_column($json['tasks'], 'taskId');
-        $this->assertContains($task1->taskId, $taskIds);
-        $this->assertContains($task2->taskId, $taskIds);
-    }
-
-    /**
-     * Test that tasks/result returns the underlying CallToolResult directly
-     * with _meta["io.modelcontextprotocol/related-task"] = { taskId: ... }.
-     *
-     * Spec: GetTaskPayloadResult returns exactly what the underlying request
-     * would have returned. For tool calls, that is a CallToolResult.
-     * The _meta field MUST include io.modelcontextprotocol/related-task.
-     */
-    public function testTasksResultWireFormat(): void
-    {
-        $task = $this->server->getTaskManager()->createTask();
-        $this->server->getTaskManager()->updateStatus($task->taskId, TaskStatus::COMPLETED);
-
-        // Store a CallToolResult as the task's result
-        $toolResult = new CallToolResult(
-            content: [new TextContent('Weather: sunny, 72°F')],
-            isError: false,
-        );
-        $this->server->getTaskManager()->setResult(
-            $task->taskId,
-            json_decode(json_encode($toolResult), true)
-        );
-
-        $params = new \stdClass();
-        $params->taskId = $task->taskId;
-        $result = ($this->handlers['tasks/result'])($params);
-
-        // Must be CallToolResult, not a generic wrapper
-        $this->assertInstanceOf(CallToolResult::class, $result);
-
-        $json = json_decode(json_encode($result), true);
-
-        // Must have CallToolResult fields at root
-        $this->assertArrayHasKey('content', $json);
-        $this->assertIsArray($json['content']);
-        $this->assertCount(1, $json['content']);
-        $this->assertEquals('text', $json['content'][0]['type']);
-        $this->assertEquals('Weather: sunny, 72°F', $json['content'][0]['text']);
-
-        // Must NOT have nested "task" or "result" keys
-        $this->assertArrayNotHasKey('task', $json);
-        $this->assertArrayNotHasKey('result', $json);
-
-        // Must have _meta with related-task
-        $this->assertArrayHasKey('_meta', $json);
-        $this->assertArrayHasKey('io.modelcontextprotocol/related-task', $json['_meta']);
-        $this->assertEquals(
-            ['taskId' => $task->taskId],
-            $json['_meta']['io.modelcontextprotocol/related-task']
-        );
-    }
-
-    /**
-     * Test that tasks/result preserves existing _meta from the stored result
-     * while adding the related-task metadata.
-     */
-    public function testTasksResultPreservesExistingMeta(): void
-    {
-        $task = $this->server->getTaskManager()->createTask();
-        $this->server->getTaskManager()->updateStatus($task->taskId, TaskStatus::COMPLETED);
-
-        // Store a result that already has _meta
-        $storedResult = [
-            'content' => [['type' => 'text', 'text' => 'result']],
-            'isError' => false,
-            '_meta' => ['custom-key' => 'custom-value'],
-        ];
-        $this->server->getTaskManager()->setResult($task->taskId, $storedResult);
-
-        $params = new \stdClass();
-        $params->taskId = $task->taskId;
-        $result = ($this->handlers['tasks/result'])($params);
-
-        $json = json_decode(json_encode($result), true);
-
-        // Both the original _meta key and the related-task key should be present
-        $this->assertArrayHasKey('_meta', $json);
-        $this->assertArrayHasKey('custom-key', $json['_meta']);
-        $this->assertEquals('custom-value', $json['_meta']['custom-key']);
-        $this->assertArrayHasKey('io.modelcontextprotocol/related-task', $json['_meta']);
-        $this->assertEquals($task->taskId, $json['_meta']['io.modelcontextprotocol/related-task']['taskId']);
-    }
-
-    /**
-     * Test that tasks/result for a task without a stored result throws an error.
-     */
-    public function testTasksResultNotAvailableThrows(): void
-    {
-        $task = $this->server->getTaskManager()->createTask();
-
-        $params = new \stdClass();
-        $params->taskId = $task->taskId;
-
-        $this->expectException(McpServerException::class);
-        ($this->handlers['tasks/result'])($params);
-    }
+    // tasks/list and tasks/result were removed in SEP-2663: the methods are no
+    // longer registered (calling them answers -32601 Method Not Found), and the
+    // completed payload is now inlined into tasks/get's `result` field (covered
+    // by testTasksGetCompletedInlinesResult above).
 
     /**
      * Test that tasks/get for a nonexistent task throws an error.

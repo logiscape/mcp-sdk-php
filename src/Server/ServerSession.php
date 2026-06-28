@@ -245,12 +245,6 @@ class ServerSession extends BaseSession {
             }
         }
 
-        if ($capability->tasks !== null) {
-            if ($clientCaps->tasks === null) {
-                return false;
-            }
-        }
-
         if ($capability->experimental !== null) {
             if ($clientCaps->experimental === null) {
                 return false;
@@ -1456,6 +1450,62 @@ class ServerSession extends BaseSession {
             code: \Mcp\Shared\McpError::MISSING_REQUIRED_CLIENT_CAPABILITY,
             message: 'Missing required client capability: ' . implode(', ', $requiredCapabilities),
             data: ['requiredCapabilities' => (object) $capabilitiesObject],
+        ));
+    }
+
+    /**
+     * Whether the client declared support for a SEP-2133 extension (by
+     * reverse-DNS id) in this request's `_meta` clientCapabilities envelope.
+     * Always false outside the modern path, where there is no extensions
+     * map to consult.
+     */
+    public function clientDeclaresExtension(string $extensionId): bool {
+        $capabilities = $this->clientParams?->capabilities;
+        if (!$capabilities instanceof ClientCapabilities) {
+            return false;
+        }
+        return is_array($capabilities->extensions)
+            && array_key_exists($extensionId, $capabilities->extensions);
+    }
+
+    /**
+     * Enforce a required SEP-2133 extension on the modern path: a server that
+     * can only serve a request as part of an extension (e.g. a task-required
+     * tool, or any `tasks/*` method) rejects a client that did not declare
+     * the extension with -32021 (MissingRequiredClientCapability), carrying
+     * `data.requiredCapabilities.extensions[<id>] = {}` per the SEP-2575
+     * object shape. No-op on legacy revisions, where extensions do not exist.
+     *
+     * @throws \Mcp\Shared\McpError When the current request selected the modern era.
+     */
+    public function raiseMissingExtensionIfModern(string $extensionId): void {
+        if (!$this->currentRequestModern) {
+            return;
+        }
+        $this->raiseMissingExtension($extensionId);
+    }
+
+    /**
+     * Unconditionally reject a request that requires a SEP-2133 extension the
+     * client did not declare, with -32021 (MissingRequiredClientCapability)
+     * carrying `data.requiredCapabilities.extensions[<id>] = {}`.
+     *
+     * Unlike {@see raiseMissingExtensionIfModern()}, this is NOT gated on the
+     * modern era: it guards methods that exist ONLY as part of an extension
+     * (e.g. `tasks/get`/`tasks/update`/`tasks/cancel`), which must never be
+     * served to a caller — legacy or modern — that did not opt in by
+     * declaring the extension. Extensions are a 2026-07-28 construct, so a
+     * legacy caller can never have declared one and is always rejected here.
+     *
+     * @throws \Mcp\Shared\McpError Always.
+     */
+    public function raiseMissingExtension(string $extensionId): void {
+        throw new \Mcp\Shared\McpError(new \Mcp\Shared\ErrorData(
+            code: \Mcp\Shared\McpError::MISSING_REQUIRED_CLIENT_CAPABILITY,
+            message: 'Missing required client capability: extensions.' . $extensionId,
+            data: ['requiredCapabilities' => (object) [
+                'extensions' => (object) [$extensionId => new \stdClass()],
+            ]],
         ));
     }
 
