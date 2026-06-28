@@ -73,13 +73,24 @@
         return;
       }
 
-      // Host -> view notifications. Per SEP-1865 the tool-result params ARE
-      // the CallToolResult (content / structuredContent / _meta at the top
-      // level), not nested under a `result` key.
+      // Host -> view notifications. Per SEP-1865, tool-input carries the
+      // original tools/call arguments, and tool-result params ARE the
+      // CallToolResult (content / structuredContent / _meta at the top level).
+      if (msg.method === 'ui/notifications/tool-input') {
+        prefillFromToolInput(msg.params);
+        return;
+      }
       if (msg.method === 'ui/notifications/tool-result') {
         renderToolResult(msg.params);
       }
     });
+
+    function prefillFromToolInput(params) {
+      const city = params && params.arguments && params.arguments.city;
+      if (typeof city === 'string') {
+        document.getElementById('cityInput').value = city;
+      }
+    }
 
     function renderToolResult(result) {
       if (!result) return;
