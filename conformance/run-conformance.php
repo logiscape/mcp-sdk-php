@@ -200,12 +200,21 @@ function resolveConformanceTool(string $projectDir, string $packageDirName): str
 
 function startServer(int $port, string $serverScript, string $phpBinary, &$serverProcess): void
 {
-    // Check for port conflicts
-    $conn = @fsockopen('localhost', $port, $errno, $errstr, 1);
-    if ($conn) {
+    // Check for port conflicts, tolerating the brief window in which a
+    // just-stopped server releases its socket. The draft aggregate starts and
+    // stops a server per scenario back-to-back; even after stopServer() has
+    // signalled the whole process tree, the OS may take a moment to free the
+    // listening socket. Poll for a few seconds before giving up so a genuine
+    // external conflict still fails, but our own teardown lag does not.
+    $waited = 0;
+    while (($conn = @fsockopen('localhost', $port, $errno, $errstr, 1)) !== false) {
         fclose($conn);
-        fwrite(STDERR, "ERROR: Port $port is already in use. Set CONFORMANCE_PORT to use a different port.\n");
-        exit(1);
+        if ($waited >= 5) {
+            fwrite(STDERR, "ERROR: Port $port is already in use. Set CONFORMANCE_PORT to use a different port.\n");
+            exit(1);
+        }
+        sleep(1);
+        $waited++;
     }
 
     echo "Starting conformance test server on port $port...\n";
@@ -287,18 +296,105 @@ function stopServer(&$serverProcess): void
             // Kill the process tree so child php-cgi workers are also stopped
             exec("taskkill /F /T /PID $pid 2>NUL", $output, $exitCode);
         } else {
-            proc_terminate($serverProcess, 15); // SIGTERM
-            // Give it a moment to exit gracefully
+            // PHP's built-in server in PHP_CLI_SERVER_WORKERS mode (set on
+            // POSIX in startServer) forks worker children that inherit and
+            // keep the listening socket bound. proc_terminate signals ONLY the
+            // master, so the workers survive and hold the port — and the next
+            // startServer aborts with "Port already in use". This is why the
+            // draft aggregate, which starts/stops a server per scenario,
+            // fails on Linux CI but not on Windows, where taskkill /F /T
+            // already tears down the whole tree. Mirror that here: collect the
+            // workers BEFORE terminating the master (afterwards they reparent
+            // to init and pgrep -P can no longer find them), then signal the
+            // master and every worker.
+            $workers = posixChildPids($pid);
+
+            proc_terminate($serverProcess, 15); // SIGTERM master
+            foreach ($workers as $worker) {
+                posixKill($worker, 15);
+            }
+
+            // Give the tree a moment to exit gracefully, then SIGKILL any
+            // straggler (harmless for already-exited PIDs).
             usleep(500_000);
-            $status = proc_get_status($serverProcess);
-            if ($status['running']) {
-                proc_terminate($serverProcess, 9); // SIGKILL
+            if (proc_get_status($serverProcess)['running']) {
+                proc_terminate($serverProcess, 9); // SIGKILL master
+            }
+            foreach ($workers as $worker) {
+                if (posixAlive($worker)) {
+                    posixKill($worker, 9);
+                }
             }
         }
     }
 
     proc_close($serverProcess);
     $serverProcess = null;
+}
+
+/**
+ * Best-effort list of the direct child PIDs of $pid on POSIX — the PHP
+ * built-in server's forked workers. Returns an empty list on Windows, when
+ * pgrep is unavailable, or when the process has no children.
+ *
+ * @return list<int>
+ */
+function posixChildPids(int $pid): array
+{
+    if (PHP_OS_FAMILY === 'Windows' || $pid <= 1) {
+        return [];
+    }
+
+    // Prefer the kernel's children list (no external tool needed; present on
+    // the GitHub Actions Linux runners), falling back to pgrep where the proc
+    // children file is unavailable.
+    $raw = @file_get_contents("/proc/$pid/task/$pid/children");
+    if (!is_string($raw) || trim($raw) === '') {
+        $raw = @shell_exec('pgrep -P ' . $pid . ' 2>/dev/null');
+    }
+    if (!is_string($raw) || trim($raw) === '') {
+        return [];
+    }
+
+    $pids = [];
+    foreach (preg_split('/\s+/', trim($raw)) ?: [] as $token) {
+        if ($token !== '' && ctype_digit($token)) {
+            $pids[] = (int) $token;
+        }
+    }
+    return $pids;
+}
+
+/**
+ * Send a signal to a POSIX PID, preferring ext-posix and falling back to the
+ * `kill` utility. Best-effort: signalling an already-dead PID is ignored.
+ */
+function posixKill(int $pid, int $signal): void
+{
+    if ($pid <= 1) {
+        return;
+    }
+    if (function_exists('posix_kill')) {
+        @posix_kill($pid, $signal);
+        return;
+    }
+    @exec('kill -' . (int) $signal . ' ' . $pid . ' 2>/dev/null');
+}
+
+/**
+ * Whether a POSIX PID is still alive (signal 0 is a liveness probe, not a
+ * delivered signal). False when the process is gone or cannot be probed.
+ */
+function posixAlive(int $pid): bool
+{
+    if ($pid <= 1) {
+        return false;
+    }
+    if (function_exists('posix_kill')) {
+        return @posix_kill($pid, 0);
+    }
+    @exec('kill -0 ' . $pid . ' 2>/dev/null', $output, $code);
+    return $code === 0;
 }
 
 function runServerTests(
