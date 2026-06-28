@@ -843,6 +843,37 @@ Two things worth knowing:
 
 To suggest values for a template's variables as the user types, pair it with a completion provider -- see [Part 10](#part-10-providing-completions).
 
+### Interactive UI with MCP Apps
+
+The [MCP Apps extension](https://github.com/modelcontextprotocol/ext-apps) (SEP-1865) lets a tool ship an interactive HTML view that a capable host renders in a sandboxed iframe. The `ui()` helper bundles the whole convention into one call:
+
+```php
+$server
+    ->tool('get_weather', 'Get the current weather', function (string $city): CallToolResult {
+        $data = ['city' => $city, 'temperatureC' => 21, 'condition' => 'Sunny'];
+        return new CallToolResult(
+            content: [new TextContent(text: "Weather in {$city}: {$data['condition']}")], // text fallback
+            structuredContent: $data,                                                      // data for the UI
+        );
+    })
+    ->ui(
+        tool: 'get_weather',
+        uri: 'ui://weather/dashboard',
+        name: 'Weather Dashboard',
+        html: file_get_contents(__DIR__ . '/dashboard.html'),
+    );
+```
+
+That single `ui()` call:
+
+1. registers `ui://weather/dashboard` as a resource with MIME `text/html;profile=mcp-app` (so hosts can prefetch, cache, and security-review it),
+2. links the tool to it via `_meta.ui.resourceUri`, and
+3. declares the Apps extension in the server's capabilities, advertised in `server/discover`.
+
+The extension adds **no new server method** -- a UI-originated action arrives as an ordinary `tools/call`, and the host↔iframe message envelope never reaches the server. Optional arguments set host hints: `visibility` (`['model','app']`; use `['app']` to hide a tool from the agent and expose it only to the UI), `csp`, `permissions` (`camera`/`microphone`/`geolocation`/`clipboardWrite`), `domain`, and `prefersBorder`.
+
+**Graceful degradation is automatic:** a host that can't render the UI ignores `_meta.ui`, and the tool still returns its normal `content`. Always return a meaningful text `content` block so non-UI hosts and the model stay functional. A complete runnable example lives in [`examples/apps_server/`](../examples/apps_server/).
+
 ---
 
 ## Part 4: Deploying Remote MCP Servers
@@ -2603,6 +2634,7 @@ $server->run();
 | `prompt(name, description, callback, title?, icons?)` | Register a prompt |
 | `resource(uri, name, callback, description?, mimeType?, title?, icons?, size?)` | Register a resource |
 | `resourceTemplate(uriTemplate, name, callback, description?, mimeType?, title?, icons?)` | Register a resource template (variables passed to the callback by name) |
+| `ui(tool, uri, name, html, description?, visibility?, csp?, permissions?, domain?, prefersBorder?)` | Attach an MCP Apps (SEP-1865) UI template to a registered tool |
 | `completionForPrompt(promptName, argumentName, provider)` | Register an argument-completion provider for a prompt |
 | `completionForResourceTemplate(uriTemplate, variableName, provider)` | Register a completion provider for a resource-template variable |
 | `httpOptions(array)` | Set HTTP transport configuration |

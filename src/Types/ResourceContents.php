@@ -48,6 +48,10 @@ abstract class ResourceContents implements McpModel {
 
     public function jsonSerialize(): mixed {
         $data = get_object_vars($this);
+        // get_object_vars() exposes the trait's own `extraFields` storage
+        // property — drop it so it never leaks onto the wire as a literal
+        // "extraFields" key; its contents are merged in explicitly below.
+        unset($data['extraFields']);
         return array_merge($data, $this->extraFields);
     }
 }

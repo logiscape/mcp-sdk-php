@@ -265,6 +265,42 @@ This file was introduced during the v1.7.x series. Structured entries below cove
     `subscriptions/listen` rewrite), and `tasks-mrtr-composition` is an
     expected baseline failure (its pre-creation-MRTR sequence is mutually
     exclusive with the SDK's in-task-input model — both spec-permitted).
+- **v2 WS5 — MCP Apps extension (SEP-1865).** Server-side support for the
+  MCP Apps extension (ext-apps stable revision `2026-01-26`), where the UI
+  renders host-side in a sandboxed iframe and the SDK's role is capability
+  declaration plus `_meta` plumbing — the extension adds no new RPC method.
+  - New `McpServer::ui(tool, uri, name, html, …)` helper attaches a `ui://`
+    template resource to a registered tool in one call: it registers the
+    resource with MIME `text/html;profile=mcp-app`
+    (`McpServer::UI_MIME_TYPE`), links the tool through `_meta.ui.resourceUri`
+    (dual-writing the deprecated flat `_meta["ui/resourceUri"]` key for host
+    back-compat, mirroring the reference ext-apps server SDK), and declares
+    the extension. Optional host hints: `visibility` (`model`/`app`), `csp`,
+    `permissions` (camera/microphone/geolocation/clipboardWrite, emitted as
+    empty objects), `domain`, and `prefersBorder`. The HTML may be a string
+    or a callback invoked lazily at read time. Resource-level `_meta.ui` is
+    emitted on the `resources/read` content (where the stable revision reads
+    it) and mirrored on the listed resource (draft dual-location).
+  - Declared via the SEP-2133 extensions map
+    (`capabilities.extensions["io.modelcontextprotocol/ui"] = { mimeTypes:
+    ["text/html;profile=mcp-app"] }`, `Mcp\Types\ExtensionIds::UI`),
+    advertised in `initialize` and `server/discover` through the new generic
+    `Server::declareExtension()`.
+  - Graceful degradation is automatic: a host that cannot render the UI
+    ignores `_meta.ui` and the tool still returns its ordinary `content`;
+    UI-originated interactions arrive as ordinary `tools/call` requests.
+  - Conformance: the pinned draft tool publishes no Apps scenarios, so the
+    extension is covered by unit tests (`tests/Server/AppsExtensionTest.php`)
+    and a runnable example (`examples/apps_server/`); both conformance tracks
+    remain regression-free.
+  - Fix: resource-content `_meta` now round-trips. On serialize,
+    `ResourceContents::jsonSerialize()` no longer leaks the trait's internal
+    `extraFields` storage as a literal wire key; on parse,
+    `TextResourceContents::fromArray()` / `BlobResourceContents::fromArray()`
+    now preserve extra fields instead of discarding them, so a host/client
+    retains the SEP-1865 `_meta.ui` (CSP, permissions, domain, border hints)
+    on `resources/read` content. `ExtraFieldsTrait` gains
+    `setExtraField()`/`getExtraField()` accessors.
 
 ### Changed
 

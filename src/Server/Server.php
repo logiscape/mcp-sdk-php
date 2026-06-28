@@ -68,6 +68,15 @@ class Server {
     private ?ServerSession $session = null;
     private LoggerInterface $logger;
 
+    /**
+     * SEP-2133 extensions explicitly declared by higher layers (e.g. the MCP
+     * Apps extension, which adds no RPC handler to key off). Merged into the
+     * `extensions` capability map by {@see getCapabilities()}.
+     *
+     * @var array<string, array<string, mixed>>
+     */
+    private array $declaredExtensions = [];
+
     public function __construct(
         private readonly string $name,
         ?LoggerInterface $logger = null,
@@ -100,6 +109,24 @@ class Server {
             serverVersion: $this->version,
             capabilities: $this->getCapabilities($notificationOptions, $experimentalCapabilities)
         );
+    }
+
+    /**
+     * Declare support for a SEP-2133 extension by reverse-DNS id, advertised
+     * in the `extensions` capability map ({@see getCapabilities()}) and so in
+     * the `initialize` result and `server/discover`.
+     *
+     * Use this for extensions that add no dedicated RPC handler the capability
+     * derivation can key off — notably the MCP Apps extension
+     * ({@see \Mcp\Types\ExtensionIds::UI}), declared by
+     * {@see \Mcp\Server\McpServer::ui()}. The Tasks extension is still derived
+     * from its registered `tasks/get` handler and does not need this.
+     *
+     * @param array<string, mixed> $settings Extension-specific settings; the
+     *        empty array is advertised as the empty object `{}`.
+     */
+    public function declareExtension(string $extensionId, array $settings = []): void {
+        $this->declaredExtensions[$extensionId] = $settings;
     }
 
     /**
@@ -152,14 +179,16 @@ class Server {
             $completionsCapability = new ServerCompletionsCapability();
         }
 
-        // Declare the SEP-2663 Tasks extension through the SEP-2133
-        // extensions map when task handlers are registered. The extension's
-        // capability value is the empty object `{}` (no settings). Tasks no
-        // longer uses a dedicated `tasks` capability slot.
-        $extensions = null;
+        // Build the SEP-2133 extensions map. Extensions explicitly declared
+        // through declareExtension() (e.g. the MCP Apps extension) come first,
+        // then the Tasks extension is derived from its registered handlers
+        // (its capability value is the empty object `{}`, no settings). Tasks
+        // no longer uses a dedicated `tasks` capability slot.
+        $extensions = $this->declaredExtensions;
         if (isset($this->requestHandlers['tasks/get'])) {
-            $extensions = [ExtensionIds::TASKS => []];
+            $extensions[ExtensionIds::TASKS] = $extensions[ExtensionIds::TASKS] ?? [];
         }
+        $extensions = $extensions === [] ? null : $extensions;
 
         return new ServerCapabilities(
             prompts: $promptsCapability,

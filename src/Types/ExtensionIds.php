@@ -39,6 +39,21 @@ final class ExtensionIds {
      */
     public const TASKS = 'io.modelcontextprotocol/tasks';
 
+    /**
+     * The MCP Apps extension (SEP-1865, repository `modelcontextprotocol/
+     * ext-apps`, stable revision `2026-01-26`). The capability value carries
+     * a `mimeTypes` array naming the UI template profiles in play — it MUST
+     * include {@see \Mcp\Server\McpServer::UI_MIME_TYPE}
+     * (`text/html;profile=mcp-app`), the only profile defined in the MVP.
+     *
+     * The extension adds NO new RPC methods: a server declares it, registers
+     * `ui://` template resources, and links them to tools through the
+     * `_meta.ui` metadata; UI-originated interactions arrive as ordinary
+     * `tools/call` requests. The host↔iframe `ui/*` postMessage envelope is
+     * entirely host-side and never reaches the server.
+     */
+    public const UI = 'io.modelcontextprotocol/ui';
+
     private function __construct() {
     }
 }

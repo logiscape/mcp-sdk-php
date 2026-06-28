@@ -53,7 +53,13 @@ class BlobResourceContents extends ResourceContents {
 
         $obj = new self($blob, $uri, $mimeType);
 
-        // See notes in TextResourceContents regarding extra fields.
+        // Preserve remaining keys as extra fields (ExtraFieldsTrait), so
+        // forward-compatible metadata such as the SEP-1865 `_meta.ui` on
+        // resources/read content survives the round-trip. See
+        // TextResourceContents::fromArray().
+        foreach ($data as $k => $v) {
+            $obj->$k = $v;
+        }
 
         $obj->validate();
         return $obj;

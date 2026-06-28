@@ -977,6 +977,50 @@ server package as the behavioral reference.
   HTTP, validated again in WS8.
 - `composer check` green; `composer conformance` regression-free.
 
+**Status (2026-06-28):** implemented and verified (step 2 complete; awaiting
+the manual real-host render check and step 3 human-initiated review).
+Research confirmed the prior notes against the ext-apps stable revision with
+**no drift**: extension id `io.modelcontextprotocol/ui`; UI template MIME
+`text/html;profile=mcp-app` (exact casing); tool→UI link
+`_meta.ui.resourceUri` with optional `_meta.ui.visibility` (`["model","app"]`,
+default both) and the deprecated flat `_meta["ui/resourceUri"]` (the reference
+ext-apps server SDK dual-writes both keys, so the SDK does too for host
+back-compat); capability value `extensions["io.modelcontextprotocol/ui"] = {
+mimeTypes: [...] }`. New findings folded into the implementation: (a) the spec
+sets **no** size bounds on template resources (host-defined; non-normative
+resource-limit guidance only); (b) the server's role is purely capability +
+`_meta` plumbing — the extension adds **no** new RPC method and the host↔iframe
+`ui/*` postMessage envelope never reaches the server, so UI-originated actions
+arrive as ordinary `tools/call`; (c) `specification/` has only `2026-01-26`
+and `draft` — no newer stable revision shipped, and the draft adds
+app-provided tools / sampling / file-download / view-initiated teardown plus a
+dual-location `_meta.ui` precedence rule (content wins), none adopted here;
+(d) the official conformance suite has **zero** Apps/`ui` scenarios, so the
+milestone is covered by unit tests and a manually-verifiable example rather
+than a conformance gate. Delivered: `Mcp\Types\ExtensionIds::UI`,
+`McpServer::UI_MIME_TYPE`, the generic `Server::declareExtension()` (Apps adds
+no handler to key capabilities off), and the first-class
+`McpServer::ui(tool, uri, name, html, …)` helper — registering the `ui://`
+template resource, linking the tool's `_meta.ui` (current + deprecated keys +
+validated `visibility`), emitting validated resource-level `_meta.ui`
+(`csp`/`permissions` as empty objects/`domain`/`prefersBorder`) on both the
+read content (stable) and the listed resource (draft), and declaring the
+extension in `initialize`/`server/discover`. Graceful degradation is by
+construction (the linked tool keeps returning ordinary `content`; `_meta.ui`
+is additive). A latent bug was fixed in passing:
+`ResourceContents::jsonSerialize()` leaked the trait's `extraFields` storage
+as a literal wire key, which blocked `_meta` on read content;
+`ExtraFieldsTrait` gained typed `setExtraField()`/`getExtraField()` accessors.
+Unit coverage in `tests/Server/AppsExtensionTest.php` (template registration,
+metadata emission, capability/discover declaration, visibility/csp/permission
+validation, and the degraded non-UI-host path); a runnable example built only
+on `->ui(...)` in `examples/apps_server/` (server + `dashboard.html` view
+implementing the host↔view handshake + README). Verification: `composer check`
+green (1192 tests; PHPStan clean); both stable conformance baselines stay
+empty and the draft track is regression-free (no Apps scenarios upstream).
+The completion criterion of rendering in a real MCP-Apps host (Claude /
+VS Code) is the human's manual milestone step and is not yet performed.
+
 ## WS6 — Backward compatibility (continuous)
 
 The additive, version-negotiated strategy means nothing in WS1–WS5 may break

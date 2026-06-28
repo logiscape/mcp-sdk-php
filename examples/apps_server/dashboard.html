@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Weather Dashboard</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; padding: 16px; }
+    .card { max-width: 360px; padding: 20px; border-radius: 12px;
+            background: Canvas; box-shadow: 0 1px 4px rgba(0,0,0,.15); }
+    h1 { font-size: 1.1rem; margin: 0 0 4px; }
+    .temp { font-size: 2.4rem; font-weight: 700; margin: 8px 0; }
+    .muted { opacity: .7; font-size: .9rem; }
+    .row { display: flex; justify-content: space-between; margin-top: 8px; }
+    form { display: flex; gap: 8px; margin-top: 16px; }
+    input { flex: 1; padding: 6px 8px; }
+    button { padding: 6px 12px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1 id="city">Weather</h1>
+    <div class="temp" id="temp">—</div>
+    <div class="row"><span class="muted">Condition</span><span id="condition">—</span></div>
+    <div class="row"><span class="muted">Humidity</span><span id="humidity">—</span></div>
+    <form id="lookup">
+      <input id="cityInput" placeholder="City name" value="" />
+      <button type="submit">Look up</button>
+    </form>
+  </div>
+
+  <script>
+    // ---------------------------------------------------------------------
+    // Minimal MCP Apps (SEP-1865) view: a JSON-RPC 2.0 client speaking to the
+    // host over window.postMessage. The host proxies non-`ui/`-prefixed
+    // messages (e.g. tools/call) to the MCP server. This script is the host
+    // side of the contract documented at modelcontextprotocol/ext-apps.
+    // ---------------------------------------------------------------------
+    const HOST = window.parent;
+    const pending = new Map();
+    let nextId = 1;
+
+    function postToHost(message) {
+      // Hosts sandbox the view in an opaque-origin iframe and validate the
+      // source window, so '*' is the conventional target origin for this
+      // bridge. (Production views may tighten this to the host origin.)
+      HOST.postMessage(message, '*');
+    }
+
+    function request(method, params) {
+      const id = nextId++;
+      return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        postToHost({ jsonrpc: '2.0', id, method, params });
+      });
+    }
+
+    function notify(method, params) {
+      postToHost({ jsonrpc: '2.0', method, params });
+    }
+
+    window.addEventListener('message', (event) => {
+      const msg = event.data;
+      if (!msg || msg.jsonrpc !== '2.0') return;
+
+      // Response to one of our requests.
+      if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
+        const entry = pending.get(msg.id);
+        if (!entry) return;
+        pending.delete(msg.id);
+        msg.error ? entry.reject(msg.error) : entry.resolve(msg.result);
+        return;
+      }
+
+      // Host -> view notifications. Per SEP-1865 the tool-result params ARE
+      // the CallToolResult (content / structuredContent / _meta at the top
+      // level), not nested under a `result` key.
+      if (msg.method === 'ui/notifications/tool-result') {
+        renderToolResult(msg.params);
+      }
+    });
+
+    function renderToolResult(result) {
+      if (!result) return;
+      const data = result.structuredContent;
+      if (!data) return;
+      document.getElementById('city').textContent = data.city ?? 'Weather';
+      document.getElementById('temp').textContent =
+        data.temperatureC != null ? `${data.temperatureC}°C` : '—';
+      document.getElementById('condition').textContent = data.condition ?? '—';
+      document.getElementById('humidity').textContent =
+        data.humidity != null ? `${data.humidity}%` : '—';
+      if (data.city) document.getElementById('cityInput').value = data.city;
+    }
+
+    // Re-fetch from the form by calling the tool through the host.
+    document.getElementById('lookup').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const city = document.getElementById('cityInput').value.trim();
+      if (!city) return;
+      try {
+        const result = await request('tools/call', {
+          name: 'get_weather',
+          arguments: { city },
+        });
+        renderToolResult(result);
+      } catch (err) {
+        console.error('get_weather failed', err);
+      }
+    });
+
+    // Handshake: announce the view, then signal readiness. The host replies to
+    // ui/initialize with McpUiInitializeResult and pushes the originating
+    // tool-call result via ui/notifications/tool-result.
+    request('ui/initialize', { appCapabilities: {} })
+      .then(() => notify('ui/notifications/initialized', {}))
+      .catch((err) => console.error('ui/initialize failed', err));
+  </script>
+</body>
+</html>

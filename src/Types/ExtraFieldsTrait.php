@@ -55,4 +55,23 @@ trait ExtraFieldsTrait
     {
         return $this->extraFields;
     }
+
+    /**
+     * Set a single extra (non-schema) field. Equivalent to the magic
+     * {@see __set()}, but a real method so static analysis can resolve it
+     * (the magic accessors are invisible to PHPStan).
+     */
+    public function setExtraField(string $name, mixed $value): void
+    {
+        $this->extraFields[$name] = $value;
+    }
+
+    /**
+     * Read a single extra field, or null when absent. The statically-typed
+     * counterpart to the magic {@see __get()}.
+     */
+    public function getExtraField(string $name): mixed
+    {
+        return $this->extraFields[$name] ?? null;
+    }
 }

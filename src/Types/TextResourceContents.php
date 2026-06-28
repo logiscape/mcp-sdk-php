@@ -50,13 +50,13 @@ class TextResourceContents extends ResourceContents {
 
         $obj = new self($text, $uri, $mimeType);
 
-        // No extraFieldsTrait in ResourceContents (?), if ResourceContents uses it, we can do the same pattern:
-        // If ResourceContents does not use ExtraFieldsTrait, we simply ignore extra fields or handle them differently.
-        // Let's assume ResourceContents does not allow extra fields for now:
-        if (!empty($data)) {
-            // If we want to allow extra fields, we must add ExtraFieldsTrait to ResourceContents.
-            // If not, throwing an exception might be appropriate, but to maintain consistency, let's just ignore them.
-            // Or we can handle them if ResourceContents also uses ExtraFieldsTrait. If it doesn't, do nothing.
+        // ResourceContents uses ExtraFieldsTrait: preserve any remaining keys
+        // as extra fields so forward-compatible metadata survives a
+        // round-trip — notably the SEP-1865 `_meta.ui` (CSP, permissions,
+        // domain, border hints) a host needs to sandbox an MCP App, which is
+        // carried on the resources/read content.
+        foreach ($data as $k => $v) {
+            $obj->$k = $v;
         }
 
         $obj->validate();

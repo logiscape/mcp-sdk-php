@@ -114,6 +114,22 @@ use ReflectionNamedType;
  */
 class McpServer
 {
+    /**
+     * The MIME type for MCP Apps (SEP-1865) UI template resources — the only
+     * profile defined in the stable `2026-01-26` revision. Exact spelling
+     * matters (lowercase, no space after the semicolon).
+     */
+    public const UI_MIME_TYPE = 'text/html;profile=mcp-app';
+
+    /** Allowed `_meta.ui.visibility` values (MCP Apps). */
+    private const UI_VISIBILITY = ['model', 'app'];
+
+    /** Allowed `_meta.ui.permissions` members (each an empty-object value). */
+    private const UI_PERMISSIONS = ['camera', 'microphone', 'geolocation', 'clipboardWrite'];
+
+    /** Allowed `_meta.ui.csp` keys (each a `string[]` of domains). */
+    private const UI_CSP_KEYS = ['connectDomains', 'resourceDomains', 'frameDomains', 'baseUriDomains'];
+
     /** The underlying MCP Server instance. */
     protected Server $server;
 
@@ -835,6 +851,255 @@ class McpServer
         ];
 
         return $this;
+    }
+
+    /**
+     * Attach an MCP Apps (SEP-1865) UI template to an already-registered tool.
+     *
+     * Bundles the three conventions the Apps extension defines so an
+     * app-enabled server stays a few lines of PHP:
+     *
+     *  1. Registers a `ui://` template resource carrying the UI document with
+     *     MIME {@see UI_MIME_TYPE} (`text/html;profile=mcp-app`), so hosts can
+     *     prefetch, cache, and security-review it ahead of execution. The
+     *     resource appears in `resources/list` and `resources/read`.
+     *  2. Links the named tool to that resource through the tool's
+     *     `_meta.ui.resourceUri` (plus optional `_meta.ui.visibility`). The
+     *     deprecated flat `_meta["ui/resourceUri"]` key is written alongside
+     *     it for host back-compat during the extension's pre-GA window,
+     *     mirroring the reference ext-apps server SDK.
+     *  3. Declares the Apps extension in the server's capabilities
+     *     (`extensions["io.modelcontextprotocol/ui"] = {mimeTypes: [...]}`),
+     *     advertised in `initialize` and `server/discover`.
+     *
+     * Graceful degradation is automatic: the linked tool keeps returning its
+     * ordinary `content` (the SDK does not add a special UI path), so a host
+     * that cannot render the UI simply ignores `_meta.ui` and the tool still
+     * works. UI-originated interactions reach the server as ordinary
+     * `tools/call` requests — there is no UI-specific server handler. The tool
+     * MUST be registered with {@see tool()} before calling this.
+     *
+     * The optional resource-level metadata (`csp`, `permissions`, `domain`,
+     * `prefersBorder`) is emitted as `_meta.ui` on the `resources/read`
+     * content (where the stable revision reads it) and mirrored on the listed
+     * resource (where the draft revision also allows it; content takes
+     * precedence). All four are host hints and may be omitted entirely.
+     *
+     * @param string $tool The name of the tool to link (registered first)
+     * @param string $uri The template resource URI (MUST begin with `ui://`)
+     * @param string $name The resource name
+     * @param string|callable $html The HTML5 document, or a callback returning it
+     * @param string $description The resource description
+     * @param array<int, string>|null $visibility Subset of `model`/`app`; null
+     *        omits the field (host default is both)
+     * @param array<string, array<int, string>>|null $csp Content-Security-Policy
+     *        domain allowlists keyed by connect/resource/frame/baseUri Domains
+     * @param array<int, string>|null $permissions Subset of camera/microphone/
+     *        geolocation/clipboardWrite
+     * @param string|null $domain Optional dedicated sandbox origin (host-defined)
+     * @param bool|null $prefersBorder Visual border/background preference
+     * @return self For method chaining
+     * @throws \InvalidArgumentException If the URI is not a `ui://` URI, the
+     *         tool is not registered, or a metadata value is out of range
+     */
+    public function ui(
+        string $tool,
+        string $uri,
+        string $name,
+        string|callable $html,
+        string $description = '',
+        ?array $visibility = null,
+        ?array $csp = null,
+        ?array $permissions = null,
+        ?string $domain = null,
+        ?bool $prefersBorder = null,
+    ): self {
+        if (!str_starts_with($uri, 'ui://')) {
+            throw new \InvalidArgumentException(
+                "MCP Apps UI resource URI must begin with 'ui://', got '{$uri}'"
+            );
+        }
+
+        $target = $this->findTool($tool);
+        if ($target === null) {
+            throw new \InvalidArgumentException(
+                "Cannot attach a UI template to unknown tool '{$tool}': register it with tool() first"
+            );
+        }
+
+        // (2) Link the tool. Preserve any pre-existing _meta and merge the ui
+        // block; dual-write the deprecated flat key for host back-compat.
+        $uiToolMeta = ['resourceUri' => $uri];
+        if ($visibility !== null) {
+            $uiToolMeta['visibility'] = $this->validateUiVisibility($visibility);
+        }
+        $existing = $target->getExtraField('_meta');
+        $meta = is_array($existing) ? $existing : [];
+        $meta['ui'] = $uiToolMeta;
+        $meta['ui/resourceUri'] = $uri;
+        $target->setExtraField('_meta', $meta);
+
+        // (1) Build the resource-level _meta.ui from the optional host hints.
+        $resourceMeta = $this->buildUiResourceMeta($csp, $permissions, $domain, $prefersBorder);
+
+        $resource = new Resource(
+            name: $name,
+            uri: $uri,
+            description: $description !== '' ? $description : null,
+            mimeType: self::UI_MIME_TYPE,
+        );
+        if ($resourceMeta !== null) {
+            // Draft revision also allows _meta.ui on the listing entry; the
+            // read content (below) carries the authoritative copy.
+            $resource->setExtraField('_meta', $resourceMeta);
+        }
+        $this->resources[] = $resource;
+
+        $this->resourceHandlers[$uri] = function () use ($html, $uri, $resourceMeta): ReadResourceResult {
+            $document = is_string($html) ? $html : $html();
+            if (!is_string($document)) {
+                throw McpServerException::invalidResourceResult($document);
+            }
+            $contents = new TextResourceContents(
+                text: $document,
+                uri: $uri,
+                mimeType: self::UI_MIME_TYPE,
+            );
+            if ($resourceMeta !== null) {
+                $contents->setExtraField('_meta', $resourceMeta);
+            }
+            return new ReadResourceResult(contents: [$contents]);
+        };
+
+        // (3) Declare the Apps extension so it is advertised in initialize and
+        // server/discover. Idempotent across multiple ui() calls.
+        $this->server->declareExtension(ExtensionIds::UI, ['mimeTypes' => [self::UI_MIME_TYPE]]);
+
+        return $this;
+    }
+
+    /**
+     * Find a registered Tool by name, or null. Returns the live object so
+     * callers can mutate it (e.g. attach `_meta`).
+     */
+    private function findTool(string $name): ?Tool
+    {
+        foreach ($this->tools as $tool) {
+            if ($tool->name === $name) {
+                return $tool;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Validate a `_meta.ui.visibility` array against the allowed values,
+     * returning it re-indexed. An empty array is rejected (it would hide the
+     * tool from the agent AND block app calls — omit the argument for the
+     * host default of both instead).
+     *
+     * @param array<int, string> $visibility
+     * @return array<int, string>
+     */
+    private function validateUiVisibility(array $visibility): array
+    {
+        if ($visibility === []) {
+            throw new \InvalidArgumentException(
+                'UI visibility cannot be empty; omit it for the default ["model", "app"]'
+            );
+        }
+        foreach ($visibility as $value) {
+            if (!in_array($value, self::UI_VISIBILITY, true)) {
+                throw new \InvalidArgumentException(
+                    "Invalid UI visibility '{$value}' (expected one of: "
+                    . implode(', ', self::UI_VISIBILITY) . ')'
+                );
+            }
+        }
+        return array_values($visibility);
+    }
+
+    /**
+     * Assemble the optional `_meta.ui` resource metadata block, or null when
+     * no hints were supplied.
+     *
+     * @param array<string, array<int, string>>|null $csp
+     * @param array<int, string>|null $permissions
+     * @return array<string, mixed>|null
+     */
+    private function buildUiResourceMeta(
+        ?array $csp,
+        ?array $permissions,
+        ?string $domain,
+        ?bool $prefersBorder,
+    ): ?array {
+        $ui = [];
+
+        if ($csp !== null) {
+            $ui['csp'] = $this->buildUiCsp($csp);
+        }
+        if ($permissions !== null) {
+            $ui['permissions'] = $this->buildUiPermissions($permissions);
+        }
+        if ($domain !== null) {
+            $ui['domain'] = $domain;
+        }
+        if ($prefersBorder !== null) {
+            $ui['prefersBorder'] = $prefersBorder;
+        }
+
+        return $ui === [] ? null : ['ui' => $ui];
+    }
+
+    /**
+     * Validate and normalize a `_meta.ui.csp` map: every key is a known CSP
+     * domain group and every value a list of domain strings.
+     *
+     * @param array<string, array<int, string>> $csp
+     * @return array<string, array<int, string>>
+     */
+    private function buildUiCsp(array $csp): array
+    {
+        $out = [];
+        foreach ($csp as $key => $domains) {
+            if (!in_array($key, self::UI_CSP_KEYS, true)) {
+                throw new \InvalidArgumentException(
+                    "Invalid UI csp key '{$key}' (expected one of: " . implode(', ', self::UI_CSP_KEYS) . ')'
+                );
+            }
+            if (!is_array($domains) || !array_is_list($domains)) {
+                throw new \InvalidArgumentException("UI csp '{$key}' must be a list of domain strings");
+            }
+            foreach ($domains as $domain) {
+                if (!is_string($domain)) {
+                    throw new \InvalidArgumentException("UI csp '{$key}' must contain only domain strings");
+                }
+            }
+            $out[$key] = array_values($domains);
+        }
+        return $out;
+    }
+
+    /**
+     * Validate a `_meta.ui.permissions` list and render it as the wire shape
+     * `{name: {}}` (each member an empty object, per the extension schema).
+     *
+     * @param array<int, string> $permissions
+     * @return array<string, \stdClass>
+     */
+    private function buildUiPermissions(array $permissions): array
+    {
+        $out = [];
+        foreach ($permissions as $permission) {
+            if (!in_array($permission, self::UI_PERMISSIONS, true)) {
+                throw new \InvalidArgumentException(
+                    "Invalid UI permission '{$permission}' (expected one of: "
+                    . implode(', ', self::UI_PERMISSIONS) . ')'
+                );
+            }
+            $out[$permission] = new \stdClass();
+        }
+        return $out;
     }
 
     /**
