@@ -29,14 +29,18 @@ namespace Mcp\Types;
  * `resources/subscribe` RPC. The required `notifications` param (a
  * {@see SubscriptionFilter}) opts in to specific change-notification types;
  * the server answers with `notifications/subscriptions/acknowledged` as the
- * FIRST message on the stream and never sends a JSON-RPC response — the
- * stream itself is the response, terminated by transport close (HTTP) or
- * `notifications/cancelled` (stdio).
+ * FIRST message on the stream. No JSON-RPC response arrives while the
+ * subscription is live — the stream itself is the response, terminated by
+ * transport close (HTTP) or `notifications/cancelled` (stdio); the one
+ * result this request can ever receive is the graceful end-of-subscription
+ * {@see SubscriptionsListenResult} when the SERVER ends the subscription
+ * on its own initiative (spec PR #2953).
  *
  * Every notification on the channel (including the acknowledgement) carries
- * `_meta["io.modelcontextprotocol/subscriptionId"]` = the stringified
- * JSON-RPC id of this request, so stdio clients can demultiplex concurrent
- * subscriptions.
+ * `_meta["io.modelcontextprotocol/subscriptionId"]` = the JSON-RPC id of
+ * this request in its original wire type (the schema types the key as
+ * RequestId — an integer id stays a JSON number), so stdio clients can
+ * demultiplex concurrent subscriptions.
  */
 class SubscriptionsListenRequest extends Request {
     public function __construct(?RequestParams $params = null) {

@@ -35,11 +35,16 @@ use Psr\Log\NullLogger;
  *
  * On stdio the subscription lives in-session: the server sends
  * `notifications/subscriptions/acknowledged` as the FIRST message of the
- * subscription (never a JSON-RPC response), registers the honored filter,
- * and tags every forwarded notification — including the ack — with
- * `_meta["io.modelcontextprotocol/subscriptionId"]` (the stringified
- * listen request id) so a client can demultiplex concurrent
- * subscriptions.
+ * subscription (no JSON-RPC response while the subscription is live),
+ * registers the honored filter, and tags every forwarded notification —
+ * including the ack — with
+ * `_meta["io.modelcontextprotocol/subscriptionId"]` — the listen request
+ * id in its ORIGINAL JSON-RPC wire type (the schema types the key as
+ * RequestId; an integer id stays a JSON number) — so a client can
+ * demultiplex concurrent subscriptions. When the SERVER ends the session on its own initiative
+ * (stop()), each active listen request is answered with the graceful
+ * end-of-subscription SubscriptionsListenResult (spec PR #2953);
+ * client-cancelled subscriptions get no response.
  */
 final class ServerSessionSubscriptionsTest extends TestCase
 {
@@ -106,7 +111,7 @@ final class ServerSessionSubscriptionsTest extends TestCase
         $this->assertSame('notifications/subscriptions/acknowledged', $inner->method);
 
         $params = json_decode((string) json_encode($inner->params), true);
-        $this->assertSame('31', $params['_meta'][MetaKeys::SUBSCRIPTION_ID], 'Ack carries the subscription id');
+        $this->assertSame(31, $params['_meta'][MetaKeys::SUBSCRIPTION_ID], 'Ack carries the listen id in its original wire type (RequestId, not stringified)');
         $this->assertTrue($params['notifications']['toolsListChanged'] ?? false);
 
         $this->assertArrayHasKey('31', $session->getActiveSubscriptions());
@@ -145,7 +150,7 @@ final class ServerSessionSubscriptionsTest extends TestCase
             $ids[] = $params['_meta'][MetaKeys::SUBSCRIPTION_ID];
         }
         sort($ids);
-        $this->assertSame(['1', '2'], $ids);
+        $this->assertSame([1, 2], $ids, 'Integer listen ids stay JSON numbers on every frame');
     }
 
     public function testResourceSubscriptionsDeliveredByUriOnStdio(): void
@@ -224,6 +229,56 @@ final class ServerSessionSubscriptionsTest extends TestCase
         $this->assertArrayHasKey('42', $session->getActiveSubscriptions());
         $session->deliverSubscriptionNotification('notifications/tools/list_changed');
         $this->assertCount(1, $transport->written);
+    }
+
+    public function testStopAnswersActiveSubscriptionsGracefully(): void
+    {
+        // Spec PR #2953: a server-initiated end of the subscription —
+        // here, session shutdown — answers each original listen request
+        // with { resultType: "complete", _meta: { subscriptionId } }
+        // before the transport closes, preserving the id's original wire
+        // type (int vs string).
+        // NOTE: the session is deliberately not start()ed — start() enters
+        // the synchronous stdio message loop and never returns against a
+        // transport with no messages. handleRequest()-driven subscriptions
+        // and stop() exercise the graceful-end path directly.
+        [$transport, $session] = $this->makeSession();
+        $this->listen($session, ['toolsListChanged' => true], id: 51);
+        $this->listen($session, ['promptsListChanged' => true], id: 'sub-b');
+        $transport->written = [];
+
+        $session->stop();
+
+        $this->assertCount(2, $transport->written, 'Every active subscription is answered at stop');
+        $byId = [];
+        foreach ($transport->written as $message) {
+            $inner = $message->message;
+            $this->assertInstanceOf(JSONRPCResponse::class, $inner, 'The graceful end is a JSON-RPC response');
+            $result = json_decode((string) json_encode($inner->result), true);
+            $this->assertSame('complete', $result['resultType']);
+            $byId[$inner->id->getValue()] = $result['_meta'][MetaKeys::SUBSCRIPTION_ID] ?? null;
+        }
+        $this->assertSame(51, $byId[51] ?? null, 'Int listen id: _meta subscriptionId equals the response id, typed (schema: RequestId)');
+        $this->assertSame('sub-b', $byId['sub-b'] ?? null, 'String listen id answered verbatim');
+        $this->assertSame([], $session->getActiveSubscriptions(), 'Subscriptions are dropped after the graceful end');
+    }
+
+    public function testStopDoesNotAnswerClientCancelledSubscription(): void
+    {
+        // A subscription the CLIENT already ended via notifications/cancelled
+        // must not be resurrected with a graceful-end response at stop().
+        [$transport, $session] = $this->makeSession();
+        $this->listen($session, ['toolsListChanged' => true], id: 61);
+        $cancel = \Mcp\Types\ClientNotification::fromMethodAndParams('notifications/cancelled', [
+            'requestId' => 61,
+            '_meta' => $this->envelope(),
+        ]);
+        $session->handleNotification($cancel);
+        $transport->written = [];
+
+        $session->stop();
+
+        $this->assertSame([], $transport->written, 'A cancelled subscription gets no graceful-end response');
     }
 
     public function testListenWithoutFilterAnswersInvalidParams(): void

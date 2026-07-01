@@ -47,9 +47,10 @@ namespace Mcp\Shared;
  * integers as decimal strings, booleans as lowercase true/false; values with
  * leading/trailing whitespace, characters outside printable ASCII
  * (0x20-0x7E), or that themselves match the base64 sentinel pattern are
- * wrapped as `=?base64?{base64(UTF-8 bytes)}?=`. The wrapper is emitted in
- * lowercase and accepted case-insensitively; a value without the complete
- * wrapper is literal and never decoded.
+ * wrapped as `=?base64?{base64(UTF-8 bytes)}?=`. The sentinel is
+ * case-sensitive lowercase (spec PR #2937 resolved the earlier
+ * case-insensitivity contradiction): a value whose prefix is not exactly
+ * `=?base64?` — including `=?BASE64?` — is a literal and is never decoded.
  *
  * These rules are HTTP-binding-only; the stdio transport has no headers and
  * is exempt.
@@ -163,22 +164,26 @@ final class McpHeaders
             return true;
         }
         // A literal that looks like the wrapper would be mis-decoded by a
-        // receiver; wrap it so it survives round-tripping.
-        return preg_match('/^=\?base64\?.*\?=$/i', $value) === 1;
+        // receiver; wrap it so it survives round-tripping. The sentinel is
+        // case-sensitive (#2937), so only an exact-lowercase match is
+        // ambiguous — a non-lowercase prefix is already a plain literal.
+        return preg_match('/^=\?base64\?.*\?=$/', $value) === 1;
     }
 
     /**
      * Decode a received Mcp-Param-* header value.
      *
      * The value must already be OWS-trimmed. A complete base64 sentinel
-     * wrapper (accepted case-insensitively) is strictly decoded; anything
-     * else is returned literally. Returns null when the wrapper is present
-     * but its payload is not canonical base64 (invalid characters, bad
-     * padding) — the server must reject such a request with HeaderMismatch.
+     * wrapper (case-sensitive lowercase per #2937 — a non-lowercase prefix
+     * such as `=?BASE64?` is treated as a literal value, never decoded) is
+     * strictly decoded; anything else is returned literally. Returns null
+     * when the wrapper is present but its payload is not canonical base64
+     * (invalid characters, bad padding) — the server must reject such a
+     * request with HeaderMismatch.
      */
     public static function decodeParamValue(string $value): ?string
     {
-        if (preg_match('/^=\?base64\?(.*)\?=$/is', $value, $m) !== 1) {
+        if (preg_match('/^=\?base64\?(.*)\?=$/s', $value, $m) !== 1) {
             return $value;
         }
         $payload = $m[1];

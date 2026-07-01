@@ -731,6 +731,64 @@ variant); stable conformance 40 server + 325 client, zero failures,
 baselines empty; draft track unchanged at the two documented
 upstream-tool baseline entries, `auth/authorization-server-migration`
 28/28.
+**Post-RC spec drift round (2026-07-01):** three normative changes merged
+into the draft spec after the RC lock were researched and absorbed, per
+"official text wins". (1) Spec PR #2953 (2026-06-23) added
+`SubscriptionsListenResult` — when the SERVER ends a subscription on its
+own initiative it SHOULD answer the original `subscriptions/listen`
+request with `{resultType: "complete", _meta:
+{"io.modelcontextprotocol/subscriptionId": <listen id>}}` before closing,
+so clients can distinguish a graceful end from an abrupt transport drop
+(which stays response-less and MAY trigger a reconnect). Implemented:
+`Mcp\Types\SubscriptionsListenResult`; the HTTP listen stream emits it as
+the final SSE frame when the lifetime budget elapses with the client
+still connected (never after a detected disconnect); stdio answers every
+active subscription at server-initiated session stop
+(`ServerSession::respondToActiveSubscriptions()`, original ids preserved
+int-vs-string, written transport-direct so legacy-era response adaptation
+cannot strip the modern-only shape; client-cancelled subscriptions are
+never answered). (2) Spec PR #2937 (2026-06-29) resolved the SEP-2243
+base64-sentinel case-sensitivity contradiction: the sentinel is
+case-sensitive lowercase `=?base64?…?=` and a non-lowercase prefix (e.g.
+`=?BASE64?`) is a literal value, never decoded — `McpHeaders` previously
+implemented the contradicted "accept case-insensitively" reading and was
+tightened on both encode and decode sides (a server now rejects an
+uppercase-wrapped header that mismatches the body as -32020, and matches
+it as a literal when the body carries the same literal). (3) Spec PR
+#2972 (2026-06-30, rc-high-priority) decoupled `Mcp-Param-*` emission
+from schema TTL: clients MUST build the headers from the most recently
+obtained `inputSchema` regardless of `ttlMs` and only omit them when no
+schema was ever retrieved — the SDK never coupled emission to TTL (the
+annotation cache refreshes on each `tools/list`), so this was
+verified-already-conformant and pinned with regression tests (`ttlMs: 0`
+listing still drives headers; never-listed tool sends headerless).
+`composer check` green; both conformance tracks regression-free against
+their baselines. Also noted for WS6/WS10: the draft changelog now
+describes OAuth Dynamic Client Registration as deprecated in favor of
+Client ID Metadata Documents (spec PR #2858) — a deprecation-registry
+item, no wire break.
+**Drift-round review (step 3):** two findings raised; verified against
+the official sources with one confirmed and one refuted. (1) CONFIRMED
+and widened: `_meta["io.modelcontextprotocol/subscriptionId"]` is typed
+`RequestId` in the draft schema — on the graceful-end result it "equals
+this response's `id`", and the subscriptions prose shows an integer
+listen id `1` carried as the JSON NUMBER `1` on the acknowledgement,
+every stream notification, and the result. WS3's stringify-everywhere
+reading ("the stringified listen request id") is therefore superseded
+for the WIRE value on all frames of the channel, not just the new
+result: the SDK now stamps the listen id in its original JSON-RPC type
+everywhere (HTTP stream frames, stdio frames, the graceful-end `_meta`),
+while the stringified form survives only as the internal bookkeeping
+key (`activeSubscriptions` map keys,
+`SubscriptionListenException::subscriptionId()` — docblocks updated).
+(2) REFUTED: the review claimed spec PR #2972 (Mcp-Param TTL decoupling)
+was still open and the drift round had treated proposed text as
+official; verified via the GitHub API (`merged: true`, merged
+2026-06-30, label rc-high-priority) and the raw `main` transport page,
+which carries the new normative text verbatim ("Clients MUST construct
+`Mcp-Param-*` headers using the most recently obtained `inputSchema`") —
+the rendered site had likely not rebuilt. No change; the drift-round
+records stand as written.
 **Upstream drift: Authorization Server Binding vs the alpha conformance
 tool (recorded 2026-06-12, MONITOR at every draft-pin bump).** The
 binding review's finding (1) — unbound pre-registered credentials

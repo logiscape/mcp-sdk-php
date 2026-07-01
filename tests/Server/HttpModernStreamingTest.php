@@ -42,10 +42,15 @@ use PHPUnit\Framework\TestCase;
  *
  * - subscriptions/listen: the long-lived notification channel. The
  *   acknowledgement is the FIRST frame, every frame carries
- *   _meta["io.modelcontextprotocol/subscriptionId"] (the stringified
- *   listen request id), the filter is strict (no leaking of notification
- *   types the client did not opt into), there is never a JSON-RPC
- *   response, and servers without SSE answer -32601/404.
+ *   _meta["io.modelcontextprotocol/subscriptionId"] — the listen request
+ *   id in its original JSON-RPC wire type (schema: RequestId; an integer
+ *   id stays a JSON number) — the filter is strict (no leaking of
+ *   notification types the client did not opt into), and servers without
+ *   SSE answer
+ *   -32601/404. The only JSON-RPC response the listen request can receive
+ *   is the graceful end-of-subscription SubscriptionsListenResult (spec
+ *   PR #2953) when the SERVER ends the stream on its own initiative (the
+ *   lifetime budget); an abrupt client disconnect carries no response.
  */
 final class HttpModernStreamingTest extends TestCase
 {
@@ -227,20 +232,34 @@ final class HttpModernStreamingTest extends TestCase
         $ack = $frames[0];
         $this->assertSame('notifications/subscriptions/acknowledged', $ack['method'], 'Ack MUST be the first frame');
         $this->assertSame(
-            '42',
+            42,
             $ack['params']['_meta'][MetaKeys::SUBSCRIPTION_ID],
-            'Subscription id is the stringified listen request id (on the ack too)'
+            'Subscription id is the listen request id in its original wire type (on the ack too)'
         );
         $this->assertTrue(
             $ack['params']['notifications']['toolsListChanged'] ?? false,
             'Ack echoes the honored filter subset'
         );
 
-        // No JSON-RPC response may ever appear on the stream.
-        foreach ($frames as $frame) {
-            $this->assertArrayNotHasKey('result', $frame);
+        // No JSON-RPC response appears while the subscription is live; the
+        // ONE response the listen request ever receives is the graceful
+        // end-of-subscription result (spec PR #2953) as the final frame,
+        // emitted here because the lifetime budget elapsed with the client
+        // still connected (a server-initiated end).
+        foreach ($frames as $i => $frame) {
             $this->assertArrayNotHasKey('error', $frame);
+            if ($i < count($frames) - 1) {
+                $this->assertArrayNotHasKey('result', $frame, 'No response while the subscription is live');
+            }
         }
+        $final = $frames[count($frames) - 1];
+        $this->assertSame(42, $final['id'], 'Graceful end answers the original listen request id');
+        $this->assertSame('complete', $final['result']['resultType']);
+        $this->assertSame(
+            42,
+            $final['result']['_meta'][MetaKeys::SUBSCRIPTION_ID],
+            'The graceful-end _meta subscriptionId equals the response id, typed (schema: RequestId)'
+        );
     }
 
     public function testListenDeliversMatchingBusEventsTagged(): void
@@ -267,7 +286,7 @@ final class HttpModernStreamingTest extends TestCase
 
         foreach ($frames as $frame) {
             if (($frame['method'] ?? '') === 'notifications/tools/list_changed') {
-                $this->assertSame('9', $frame['params']['_meta'][MetaKeys::SUBSCRIPTION_ID]);
+                $this->assertSame(9, $frame['params']['_meta'][MetaKeys::SUBSCRIPTION_ID], 'Integer listen id stays a JSON number on frames');
             }
         }
     }
@@ -319,7 +338,7 @@ final class HttpModernStreamingTest extends TestCase
         foreach ($frames as $frame) {
             if (($frame['method'] ?? '') === 'notifications/resources/updated') {
                 $uris[] = $frame['params']['uri'];
-                $this->assertSame('18', $frame['params']['_meta'][MetaKeys::SUBSCRIPTION_ID]);
+                $this->assertSame(18, $frame['params']['_meta'][MetaKeys::SUBSCRIPTION_ID], 'Integer listen id stays a JSON number on frames');
             }
         }
         $this->assertSame(['test://watched'], $uris, 'Only opted-in URIs may flow');
@@ -444,6 +463,12 @@ final class HttpModernStreamingTest extends TestCase
         $elapsed = microtime(true) - $start;
 
         $this->assertLessThan(0.1, $elapsed, 'An aborted connection must end the loop before the lifetime budget');
+
+        // An abrupt client disconnect carries NO graceful-end response
+        // (spec PR #2953: only a server-initiated end is answered).
+        foreach ($this->sseFrames($this->io->buffer) as $frame) {
+            $this->assertArrayNotHasKey('result', $frame, 'No response after a client disconnect');
+        }
     }
 }
 

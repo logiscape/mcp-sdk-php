@@ -366,11 +366,27 @@ final class HttpRequestMetadataHeadersTest extends TestCase
         $this->assertSame(200, $response->getStatusCode());
     }
 
-    public function testParamHeaderUppercaseWrapperAccepted(): void
+    public function testParamHeaderUppercaseWrapperIsLiteral(): void
     {
-        // Emit lowercase, accept any case (SEP-2243 receiver rule).
+        // The base64 sentinel is case-sensitive lowercase (spec PR #2937):
+        // a non-lowercase prefix is a literal value, never decoded. The
+        // literal '=?BASE64?SGVsbG8=?=' does not match the body's 'Hello',
+        // so the request is rejected as a header mismatch.
         $response = $this->callAnnotatedTool(
             ['region' => 'Hello'],
+            ['Mcp-Param-Region' => '=?BASE64?SGVsbG8=?='],
+            id: 210
+        );
+        $this->assertHeaderMismatch($response, 210);
+    }
+
+    public function testParamHeaderUppercaseWrapperMatchesAsLiteral(): void
+    {
+        // Complement of the mismatch case: when the BODY value is the same
+        // literal non-lowercase-wrapper string, the header matches as-is
+        // (no decoding happens on either side per spec PR #2937).
+        $response = $this->callAnnotatedTool(
+            ['region' => '=?BASE64?SGVsbG8=?='],
             ['Mcp-Param-Region' => '=?BASE64?SGVsbG8=?=']
         );
         $this->assertSame(200, $response->getStatusCode());

@@ -55,7 +55,9 @@ use Mcp\Types\LoggingLevel;
 use Mcp\Types\Notification;
 use Mcp\Types\NotificationParams;
 use Mcp\Types\PromptMessage;
+use Mcp\Types\RequestId;
 use Mcp\Types\Result;
+use Mcp\Types\SubscriptionsListenResult;
 use Mcp\Types\TextContent;
 use Mcp\Types\Tool;
 use Mcp\Server\InitializationOptions;
@@ -132,6 +134,17 @@ class ServerSession extends BaseSession {
     protected array $activeSubscriptions = [];
 
     /**
+     * The original JSON-RPC RequestIds of the active listen requests,
+     * keyed like $activeSubscriptions. Kept so a server-initiated end of
+     * the subscription can answer the original request with the graceful
+     * SubscriptionsListenResult (spec PR #2953) using the id's original
+     * wire type (int vs string).
+     *
+     * @var array<string, RequestId>
+     */
+    protected array $activeSubscriptionRequestIds = [];
+
+    /**
      * The raw wire-level `_meta` of the message currently being processed,
      * captured before typed request/notification construction. Era
      * detection falls back to it because some typed families (e.g.
@@ -199,6 +212,15 @@ class ServerSession extends BaseSession {
      * Stops the server session.
      */
     public function stop(): void {
+        // Server-initiated shutdown ends any active stdio subscriptions:
+        // answer their listen requests gracefully (spec PR #2953) while
+        // the transport can still carry the responses. This runs before
+        // the initialized guard — the guard exists to avoid double-stopping
+        // the transport, while subscriptions track their own state (the
+        // maps are cleared after responding, so a second stop() is a
+        // no-op here too).
+        $this->respondToActiveSubscriptions();
+
         if (!$this->isInitialized) {
             return;
         }
@@ -698,11 +720,15 @@ class ServerSession extends BaseSession {
      * Serve `subscriptions/listen` on the stdio transport (SEP-2575).
      *
      * The acknowledgement notification is sent as the FIRST message of the
-     * subscription and the request gets no JSON-RPC response — the
-     * subscription stays active for the life of the session (the spec's
-     * stdio binding: the client cancels via notifications/cancelled or by
-     * closing the transport; the server holds no subscription state across
-     * reconnections). Change notifications published through
+     * subscription and the request gets no JSON-RPC response while the
+     * subscription is live — the subscription stays active for the life of
+     * the session (the spec's stdio binding: the client cancels via
+     * notifications/cancelled or by closing the transport; the server
+     * holds no subscription state across reconnections). When the SERVER
+     * ends the session on its own initiative, each active listen request
+     * is answered with the graceful SubscriptionsListenResult (spec PR
+     * #2953) before the transport closes. Change notifications published
+     * through
      * deliverSubscriptionNotification() are forwarded to every active
      * subscription whose filter wants them, tagged with the subscription
      * id so the client can demultiplex.
@@ -730,15 +756,19 @@ class ServerSession extends BaseSession {
         );
         $subscriptionId = (string) $responder->getRequestId()->getValue();
         $this->activeSubscriptions[$subscriptionId] = $agreed;
+        $this->activeSubscriptionRequestIds[$subscriptionId] = $responder->getRequestId();
 
         $this->writeSubscriptionNotification(
             'notifications/subscriptions/acknowledged',
             ['notifications' => $agreed->jsonSerialize()],
-            $subscriptionId
+            $responder->getRequestId()->getValue()
         );
-        // Deliberately no $responder->sendResponse(): the stream of
-        // notifications IS the response (the listen request never gets a
-        // JSON-RPC result).
+        // Deliberately no $responder->sendResponse() here: the stream of
+        // notifications IS the response while the subscription is live.
+        // The one JSON-RPC result the listen request can ever receive is
+        // the graceful end-of-subscription SubscriptionsListenResult sent
+        // when the SERVER ends the subscription on its own initiative
+        // (spec PR #2953) — see respondToActiveSubscriptions().
     }
 
     /**
@@ -751,9 +781,15 @@ class ServerSession extends BaseSession {
         $uri = isset($params['uri']) && is_string($params['uri']) ? $params['uri'] : null;
         foreach ($this->activeSubscriptions as $subscriptionId => $filter) {
             if ($filter->wants($method, $uri)) {
-                // PHP silently converts numeric-string array keys to ints;
-                // the wire id is always the stringified form.
-                $this->writeSubscriptionNotification($method, $params, (string) $subscriptionId);
+                // PHP silently converts numeric-string array keys to ints,
+                // so the wire value comes from the stored RequestId — the
+                // schema types the _meta key as RequestId, preserving the
+                // listen id's original int-vs-string wire type.
+                $key = (string) $subscriptionId;
+                $wireId = isset($this->activeSubscriptionRequestIds[$key])
+                    ? $this->activeSubscriptionRequestIds[$key]->getValue()
+                    : $key;
+                $this->writeSubscriptionNotification($method, $params, $wireId);
             }
         }
     }
@@ -765,6 +801,48 @@ class ServerSession extends BaseSession {
      */
     public function getActiveSubscriptions(): array {
         return $this->activeSubscriptions;
+    }
+
+    /**
+     * Answer every active stdio listen request with the graceful
+     * end-of-subscription SubscriptionsListenResult (spec PR #2953) and
+     * drop the subscriptions. Called when the SERVER ends the
+     * subscriptions on its own initiative — session stop/shutdown — so a
+     * connected client can distinguish the clean end from an abrupt
+     * transport drop (which carries no response and MAY trigger a
+     * reconnect).
+     *
+     * The response is written directly to the transport: the graceful-end
+     * result is modern-only wire shape by definition (the subscription
+     * exists only on the 2026-07-28 path), while the session's era state
+     * at shutdown may have been restored to whatever a legacy handshake
+     * negotiated — adaptResponseForClient() must not strip it. Write
+     * failures are swallowed: at shutdown the peer may already be gone,
+     * and an unreachable client simply experiences the abrupt-drop case
+     * the spec also allows.
+     */
+    protected function respondToActiveSubscriptions(): void {
+        foreach (array_keys($this->activeSubscriptions) as $subscriptionId) {
+            $subscriptionId = (string) $subscriptionId;
+            $requestId = $this->activeSubscriptionRequestIds[$subscriptionId]
+                ?? new RequestId($subscriptionId);
+            try {
+                // The _meta subscriptionId is typed RequestId and MUST
+                // equal this response's own id — original wire type
+                // preserved, never stringified.
+                $this->transport->writeMessage(new JsonRpcMessage(new JSONRPCResponse(
+                    jsonrpc: '2.0',
+                    id: $requestId,
+                    result: new SubscriptionsListenResult($requestId->getValue())
+                )));
+            } catch (\Throwable $e) {
+                $this->logger->info(
+                    "Could not deliver graceful end for subscription $subscriptionId: " . $e->getMessage()
+                );
+            }
+        }
+        $this->activeSubscriptions = [];
+        $this->activeSubscriptionRequestIds = [];
     }
 
     /**
@@ -787,7 +865,7 @@ class ServerSession extends BaseSession {
         }
         $key = (string) $requestId;
         if (isset($this->activeSubscriptions[$key])) {
-            unset($this->activeSubscriptions[$key]);
+            unset($this->activeSubscriptions[$key], $this->activeSubscriptionRequestIds[$key]);
             $this->logger->info("Subscription $key cancelled by client");
         }
     }
@@ -796,11 +874,13 @@ class ServerSession extends BaseSession {
      * Write a notification onto the transport with the SEP-2575
      * subscription-correlation id stamped into `_meta`
      * (`io.modelcontextprotocol/subscriptionId` — required on every frame
-     * of the channel, including the acknowledgement).
+     * of the channel, including the acknowledgement). The id is typed
+     * RequestId in the schema: it carries the listen request's JSON-RPC id
+     * in its original wire type (int stays a JSON number).
      *
      * @param array<string, mixed> $params Notification params (without _meta)
      */
-    protected function writeSubscriptionNotification(string $method, array $params, string $subscriptionId): void {
+    protected function writeSubscriptionNotification(string $method, array $params, string|int $subscriptionId): void {
         $meta = new Meta();
         $meta->setField(MetaKeys::SUBSCRIPTION_ID, $subscriptionId);
 

@@ -28,9 +28,12 @@ use Mcp\Types\SubscriptionFilter;
  * Control-flow signal raised when a validated `subscriptions/listen`
  * request arrives on the HTTP path (SEP-2575, revision 2026-07-28).
  *
- * The listen request has no JSON-RPC response — its "response" is a
- * long-lived SSE stream of notifications that only the runner (which owns
- * the SAPI output adapter) can produce. HttpServerSession therefore
+ * The listen request's "response" is a long-lived SSE stream of
+ * notifications that only the runner (which owns the SAPI output adapter)
+ * can produce — the one JSON-RPC result it can ever receive is the
+ * graceful end-of-subscription SubscriptionsListenResult the runner emits
+ * when the server ends the stream on its own initiative (spec PR #2953).
+ * HttpServerSession therefore
  * validates the request, computes the filter subset the server agrees to
  * honor, and throws this exception up through message processing;
  * HttpServerRunner catches it and runs the streaming loop: the
@@ -47,8 +50,10 @@ class SubscriptionListenException extends \RuntimeException
     }
 
     /**
-     * The wire subscription id: the stringified JSON-RPC id of the listen
-     * request (spec: `io.modelcontextprotocol/subscriptionId`).
+     * The stringified listen request id — a bookkeeping key, NOT the wire
+     * value. On the wire, `io.modelcontextprotocol/subscriptionId` is
+     * typed RequestId and MUST carry the listen id in its original
+     * JSON-RPC type (use `$this->requestId->getValue()` for that).
      */
     public function subscriptionId(): string
     {

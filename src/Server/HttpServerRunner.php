@@ -341,9 +341,17 @@ class HttpServerRunner extends ServerRunner
      * the server agreed to honor — then forwards change events from the
      * configured SubscriptionBusInterface that pass the filter, every
      * frame's `_meta` tagged with `io.modelcontextprotocol/subscriptionId`
-     * (the stringified listen request id). There is never a JSON-RPC
-     * response: the stream ends when the client disconnects (surfaced by
-     * keep-alive writes) or the configured lifetime budget elapses. No
+     * — the listen request's JSON-RPC id in its ORIGINAL wire type (the
+     * schema types the key as RequestId: an integer id is carried as a
+     * JSON number, never stringified). The stream ends when the client
+     * disconnects (surfaced by keep-alive writes) or the configured
+     * lifetime budget elapses. Per spec PR #2953 (post-RC), when the
+     * SERVER ends the subscription on its own initiative — here, the
+     * lifetime budget — it SHOULD respond to the original listen request
+     * with a SubscriptionsListenResult before closing, so the client can
+     * distinguish a graceful end from an abrupt transport drop (which
+     * carries no response and MAY trigger a reconnect). A detected client
+     * disconnect gets no response: the peer is already gone. No
      * Mcp-Session-Id, no SSE event ids, no Last-Event-ID resumption — none
      * of those exist on the modern path.
      *
@@ -372,7 +380,9 @@ class HttpServerRunner extends ServerRunner
             $io->sendHeader('X-Accel-Buffering', 'no');
         }
 
-        $subscriptionId = $listen->subscriptionId();
+        // The wire value keeps the listen id's original JSON-RPC type
+        // (RequestId in the schema) — int stays a JSON number.
+        $subscriptionId = $listen->requestId->getValue();
         $filter = $listen->agreedFilter;
 
         $frame = static function (string $method, array $params) use ($subscriptionId): string {
@@ -400,9 +410,11 @@ class HttpServerRunner extends ServerRunner
         $io->flush();
         $deadline = microtime(true) + ($maxMs / 1000.0);
         $nextKeepalive = microtime(true) + ($keepaliveMs / 1000.0);
+        $clientGone = false;
 
         while (microtime(true) < $deadline) {
             if ($io->connectionAborted()) {
+                $clientGone = true;
                 break;
             }
 
@@ -429,12 +441,28 @@ class HttpServerRunner extends ServerRunner
                 $io->write(": keepalive\n\n");
                 $io->flush();
                 if ($io->connectionAborted()) {
+                    $clientGone = true;
                     break;
                 }
                 $nextKeepalive = microtime(true) + ($keepaliveMs / 1000.0);
             }
 
             usleep($pollMs * 1000);
+        }
+
+        if (!$clientGone && !$io->connectionAborted()) {
+            // Lifetime budget elapsed with the client still connected: the
+            // server is ending the subscription on its own initiative, so
+            // answer the original listen request with the graceful
+            // end-of-subscription result (spec PR #2953) as the stream's
+            // final frame before closing.
+            $result = new \Mcp\Types\SubscriptionsListenResult($subscriptionId);
+            $io->write('data: ' . json_encode([
+                'jsonrpc' => '2.0',
+                'id' => $listen->requestId->getValue(),
+                'result' => $result->jsonSerialize(),
+            ], JSON_UNESCAPED_SLASHES) . "\n\n");
+            $io->flush();
         }
 
         $response = new StreamedHttpMessage('');

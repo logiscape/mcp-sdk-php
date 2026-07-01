@@ -301,6 +301,32 @@ This file was introduced during the v1.7.x series. Structured entries below cove
     retains the SEP-1865 `_meta.ui` (CSP, permissions, domain, border hints)
     on `resources/read` content. `ExtraFieldsTrait` gains
     `setExtraField()`/`getExtraField()` accessors.
+- **Post-RC spec drift round (2026-07-01)** — three normative draft-spec
+  changes merged upstream after the RC lock, absorbed per the plan's
+  "official text wins" rule (details in `docs/v2-development-plan.md`, WS3):
+  - `SubscriptionsListenResult` (spec PR #2953): when the server ends a
+    subscription on its own initiative it answers the original
+    `subscriptions/listen` request with `{ resultType: "complete", _meta:
+    { "io.modelcontextprotocol/subscriptionId": <listen id> } }` before
+    closing, so clients can tell a graceful end from an abrupt drop. New
+    `Mcp\Types\SubscriptionsListenResult`; the HTTP listen stream emits it
+    as the final SSE frame when the lifetime budget elapses (never after a
+    detected client disconnect), and stdio answers every active
+    subscription at server-initiated session stop (client-cancelled
+    subscriptions are never answered). Review follow-up: the
+    `subscriptionId` `_meta` value is typed `RequestId` in the schema and
+    now preserves the listen id's original JSON-RPC wire type (an integer
+    id stays a JSON number) on EVERY frame of the subscription channel —
+    acknowledgement, stream notifications, and the graceful-end result —
+    replacing the earlier stringified stamping.
+  - SEP-2243 base64 sentinel made case-sensitive (spec PR #2937): only the
+    exact-lowercase `=?base64?…?=` wrapper is decoded; a non-lowercase
+    prefix (e.g. `=?BASE64?`) is treated as a literal header value on both
+    the emit and validate sides.
+  - SEP-2243 `Mcp-Param-*` emission decoupled from schema TTL (spec PR
+    #2972): verified already-conformant (the SDK always built headers from
+    the most recently obtained `inputSchema` and never consulted `ttlMs`)
+    and pinned with regression tests.
 
 ### Changed
 

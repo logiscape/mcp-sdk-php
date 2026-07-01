@@ -302,6 +302,66 @@ final class ClientToolHeaderAnnotationsTest extends TestCase
     }
 
     /**
+     * Spec PR #2972 (SEP-2243, post-RC): clients MUST construct
+     * Mcp-Param-* headers from the most recently obtained inputSchema
+     * regardless of the listing's TTL — cache staleness is never a reason
+     * to omit the headers. A tools/list result stamped ttlMs: 0
+     * (immediately stale under SEP-2549) must still drive header emission
+     * on a later tools/call.
+     */
+    public function testParamHeadersUseLatestSchemaRegardlessOfTtl(): void
+    {
+        [$session, $readStream, $writeStream] = $this->modernHttpSession();
+
+        $readStream->send($this->response(0, [
+            'resultType' => 'complete',
+            'ttlMs' => 0,
+            'cacheScope' => 'private',
+            'tools' => [$this->validTool()],
+        ]));
+        $session->listTools();
+        while ($writeStream->receive() !== null) {
+        }
+
+        $readStream->send($this->response(1, [
+            'resultType' => 'complete',
+            'content' => [['type' => 'text', 'text' => 'ok']],
+        ]));
+        $session->callTool('valid_tool', ['region' => 'us-west1']);
+
+        $sent = $writeStream->receive();
+        $this->assertInstanceOf(JsonRpcMessage::class, $sent);
+        $this->assertSame(
+            ['Mcp-Param-Region' => 'us-west1'],
+            $sent->httpHeaderHints,
+            'An expired ttlMs must not suppress Mcp-Param-* emission (spec PR #2972)'
+        );
+    }
+
+    /**
+     * Spec PR #2972 (SEP-2243, post-RC): a client that has never obtained
+     * the tool's inputSchema SHOULD send the request without Mcp-Param-*
+     * headers — the call still goes out on the wire, just unmirrored.
+     */
+    public function testNeverListedToolSendsWithoutParamHeaders(): void
+    {
+        [$session, $readStream, $writeStream] = $this->modernHttpSession();
+
+        $readStream->send($this->response(0, [
+            'resultType' => 'complete',
+            'content' => [['type' => 'text', 'text' => 'ok']],
+        ]));
+        $session->callTool('valid_tool', ['region' => 'us-west1']);
+
+        $sent = $writeStream->receive();
+        $this->assertInstanceOf(JsonRpcMessage::class, $sent);
+        $this->assertNull(
+            $sent->httpHeaderHints,
+            'No schema ever retrieved: send without Mcp-Param-* headers (spec PR #2972)'
+        );
+    }
+
+    /**
      * Stdio sessions (no HTTP transport mode) MUST ignore annotations:
      * tools/list results stay unfiltered, nothing is cached or rejected,
      * and no header hints are produced.

@@ -20,8 +20,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * SEP-2243 shared header rules: Mcp-Name source mapping, the Mcp-Param-*
- * value encoding (base64 sentinel for unsafe values, lowercase emission /
- * case-insensitive strict decoding), and x-mcp-header annotation
+ * value encoding (base64 sentinel for unsafe values, case-sensitive
+ * lowercase sentinel per spec PR #2937), and x-mcp-header annotation
  * validation (token charset, primitive types, case-insensitive
  * uniqueness).
  */
@@ -65,12 +65,19 @@ final class McpHeadersTest extends TestCase
         $encoded = McpHeaders::encodeParamValue($tricky);
         $this->assertNotSame($tricky, $encoded);
         $this->assertSame($tricky, McpHeaders::decodeParamValue($encoded));
+        // The sentinel is case-sensitive (spec PR #2937): a non-lowercase
+        // prefix is already an unambiguous literal, so it is emitted as-is
+        // and round-trips through the case-sensitive decoder untouched.
+        $upper = '=?BASE64?SGVsbG8=?=';
+        $this->assertSame($upper, McpHeaders::encodeParamValue($upper));
+        $this->assertSame($upper, McpHeaders::decodeParamValue($upper));
     }
 
     public function testDecodeStrictness(): void
     {
         $this->assertSame('Hello', McpHeaders::decodeParamValue('=?base64?SGVsbG8=?='));
-        $this->assertSame('Hello', McpHeaders::decodeParamValue('=?BASE64?SGVsbG8=?='), 'Wrapper accepted case-insensitively');
+        $this->assertSame('=?BASE64?SGVsbG8=?=', McpHeaders::decodeParamValue('=?BASE64?SGVsbG8=?='), 'Non-lowercase prefix is a literal value, never decoded (spec PR #2937)');
+        $this->assertSame('=?Base64?SGVsbG8=?=', McpHeaders::decodeParamValue('=?Base64?SGVsbG8=?='), 'Mixed-case prefix is a literal value (spec PR #2937)');
         $this->assertNull(McpHeaders::decodeParamValue('=?base64?SGVsbG8?='), 'Bad padding rejected');
         $this->assertNull(McpHeaders::decodeParamValue('=?base64?SGVs!!!bG8=?='), 'Invalid characters rejected');
         $this->assertSame('SGVsbG8=', McpHeaders::decodeParamValue('SGVsbG8='), 'No wrapper → literal');
