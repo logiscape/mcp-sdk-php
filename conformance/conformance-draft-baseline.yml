@@ -14,29 +14,49 @@
 # may legitimately add entries for genuinely-new upstream behavior, each
 # with its own root cause (recorded below).
 #
-# Last updated: 2026-06-27 (draft pin bumped 0.2.0-alpha.2 -> 0.2.0-alpha.7)
-# Conformance tool version: 0.2.0-alpha.7 (draft pin)
+# Last updated: 2026-07-01 (draft pin bumped 0.2.0-alpha.7 -> 0.2.0-alpha.9)
+# Conformance tool version: 0.2.0-alpha.9 (draft pin)
 #
-# Pin-bump note (0.2.0-alpha.2 -> 0.2.0-alpha.7):
+# Pin-bump note (0.2.0-alpha.7 -> 0.2.0-alpha.9): two builds, three PRs, all
+# draft-track only (stable `latest` unchanged at 0.1.16). Net effect on this
+# baseline: TWO entries cleared, ONE entry's root cause replaced, everything
+# else unchanged. No SDK code change accompanies this bump — the two cleared
+# entries are upstream fixes catching up to already-spec-correct SDK behavior.
+#  * #376 (alpha.9) fixed sep-2575-server-rejects-undeclared-capability: the
+#    tool now asserts error.data.requiredCapabilities as the schema's
+#    ClientCapabilities OBJECT ({"sampling":{}}) instead of a string array —
+#    exactly what the SDK has always emitted. That check now SUCCEEDS. This
+#    was the long-standing "upstream tool bug" server-stateless entry; it is
+#    resolved upstream (the SEP-2484 candidate the prior baseline named).
+#  * #371 (alpha.8) fixed the http-custom-headers fixture to use
+#    spec-permitted x-mcp-header types (priority number->integer, float_val
+#    annotation dropped). The SDK's spec-faithful rejection of number-typed
+#    x-mcp-header now passes: http-custom-headers is 18/18 and LEFT this
+#    baseline (was flagged as a stale entry until removed).
+#  * #372 (alpha.8) changed missing-prerequisite checks from SKIPPED to a
+#    hard "Not testable" FAILURE. This did NOT break any Tasks scenario (the
+#    fixtures are present), but it converted one previously-skipped
+#    server-stateless check into a failure — see the rewritten
+#    server-stateless entry below. It is the reason server-stateless remains
+#    a one-failure entry (a DIFFERENT failure than before the bump).
+#
+# Prior pin history (0.2.0-alpha.2 -> 0.2.0-alpha.7, 2026-06-27):
 #  * alpha.5 (#353) adopted the SEP-2907 draft error-code renumber —
 #    HeaderMismatch -32001->-32020, MissingRequiredClientCapability
 #    -32003->-32021, UnsupportedProtocolVersion -32004->-32022 — which the
-#    SDK now emits; the server header-mismatch and unsupported-version
-#    checks pass against the renumbered codes.
+#    SDK emits.
 #  * alpha.4 (#343/#341) tightened the stateless server checks (HTTP 400 on
 #    invalid per-request _meta, error.data.requested echo on
-#    unsupported-version, required result members on mock responses); the
-#    SDK already satisfies these.
-#  * alpha.3 (#331) retired the RC-window DRAFT-2026-v1 wire identifier (the
-#    tool now speaks 2026-07-28 only) and alpha.5 (#347) made the
-#    hand-rolled client-direction mocks answer server/discover. Those two
-#    changes surface the two NEW client-track entries below. They are
-#    upstream drift, not SDK regressions, and no renumber-bearing alpha
-#    avoids them: the renumber (#353), the DRAFT-2026-v1 retirement (#331),
-#    and the discover-on-mock change (#347) had all landed by alpha.5.
+#    unsupported-version); the SDK already satisfies these.
+#  * alpha.3 (#331) retired the RC-window DRAFT-2026-v1 wire identifier and
+#    alpha.5 (#347) made the hand-rolled client-direction mocks answer
+#    server/discover — the two changes behind the json-schema-ref-no-deref
+#    and request-metadata client entries below.
 #
-# WS4 Tasks extension (SEP-2663) scenario gating note (2026-06-27):
-#  The 0.2.0-alpha.7 tool registers its 10 SEP-2663 Tasks scenarios
+# WS4 Tasks extension (SEP-2663) scenario gating note (re-verified
+# 2026-07-01 @ alpha.9 — #372's skip->fail change did NOT break any Tasks
+# scenario; the fixtures are all present, so the eight passers still pass):
+#  The 0.2.0-alpha.9 tool registers its 10 SEP-2663 Tasks scenarios
 #  (tasks-lifecycle, tasks-capability-negotiation, tasks-wire-fields,
 #  tasks-request-state-removal, tasks-mrtr-input, tasks-request-headers,
 #  tasks-dispatch-and-envelope, tasks-status-notifications,
@@ -54,35 +74,47 @@
 #  tests. Re-evaluate at WS7 convergence.
 
 server:
-  # --- One upstream tool bug (unchanged in nature; error code renumbered) ---
+  # --- One upstream tool bug (NEW root cause at alpha.9; see history below) ---
   - server-stateless
-    # 26/27 checks pass after the alpha.7 bump (up from 22/23 at alpha.2:
-    # alpha.4's #343 added the HTTP-400-on-invalid-_meta check and the
-    # data.requested echo on unsupported-version, both already satisfied).
-    # The renumbered header-mismatch check
-    # (sep-2575-http-server-header-mismatch-400, now -32020 before -32022)
-    # and the subscriptions/listen acknowledgement-first / subscriptionId /
-    # notification-filter-containment checks all pass.
+    # 27/28 checks pass at alpha.9 (up from 26/27 at alpha.7). The prior
+    # failing check — sep-2575-server-rejects-undeclared-capability, the
+    # requiredCapabilities string-array-vs-object tool bug — was FIXED
+    # upstream by #376 (alpha.9) and now SUCCEEDS: the tool asserts the
+    # ClientCapabilities OBJECT ({"sampling": {}}) the SDK has always emitted.
     #
-    # The one failing check, sep-2575-server-rejects-undeclared-capability
-    # (UPSTREAM TOOL BUG, not pursued in the SDK): the SDK emits
-    # data.requiredCapabilities as a ClientCapabilities OBJECT
-    # ({"sampling": {}}) with the renumbered code -32021, which is what the
-    # SEP-2575 final text, the draft schema.ts (requiredCapabilities:
-    # ClientCapabilities), its canonical example
-    # (MissingRequiredClientCapabilityError/missing-elicitation-capability.json),
-    # the TypeScript SDK v2 types, AND the tool's own new SEP-2663 Tasks
-    # scenario (which asserts a data.requiredCapabilities.extensions[...]
-    # OBJECT) all specify. The conformance tool's stateless.ts check still
-    # asserts a string array (["sampling"]) — now contradicting the tool's
-    # OWN vendored draft schema and its OWN Tasks scenario, so the tool is
-    # internally self-contradictory on the pinned 0.2.0-alpha.7. Official
-    # text wins (guiding principle; conformance/README.md no-shortcuts
-    # rule): the SDK keeps the schema's object shape and this check stays an
-    # expected failure until the tool is fixed upstream. Re-checked at the
-    # alpha.7 bump (still failing); strong candidate for an upstream
-    # issue/PR per SEP-2484. The companion check
-    # sep-2575-missing-capability-http-400 (status only) passes.
+    # The one remaining failing check is NOW a DIFFERENT one:
+    # sep-2575-http-server-no-independent-requests-on-stream (UPSTREAM TOOL
+    # BUG introduced by #372, alpha.8; not pursued in the SDK). Root cause,
+    # verified against the tool's vendored scenario source
+    # (node_modules/conformance-draft/dist/index.js, class server-stateless):
+    # the scenario builds ONE generic request _meta with
+    #   "io.modelcontextprotocol/clientCapabilities": {}   (empty)
+    # and reuses it for every probe. This check drives the streaming probe by
+    # calling tools/call name=test_streaming_elicitation with those EMPTY
+    # capabilities. That fixture legitimately requires the elicitation
+    # capability, so the SDK — per SEP-2575 — MUST reject the call with
+    # -32021 MissingRequiredClientCapability (the very behavior the sibling
+    # check sep-2575-server-rejects-undeclared-capability REWARDS two checks
+    # earlier, using test_missing_capability/sampling). Before #372 this
+    # unexercisable check reported SKIPPED; #372 removed that escape hatch and
+    # now scores it as a hard "Not testable" FAILURE:
+    #   "the 'test_streaming_elicitation' call was rejected (code -32021), so
+    #    the response stream could not be exercised".
+    # The probe never declares the elicitation capability its own fixture
+    # needs, so a spec-correct capability-enforcing server cannot pass it as
+    # written. The only ways to "pass" would be to (a) strip the capability
+    # requirement from the fixture — an engineered workaround that defeats the
+    # fixture's purpose (demonstrating SEP-2322 elicitation-as-InputRequiredResult,
+    # never a server-initiated stream request) and violates the no-shortcuts
+    # rule, or (b) stop enforcing capability declaration — a spec violation
+    # that would fail sep-2575-server-rejects-undeclared-capability. Official
+    # text wins: the SDK keeps the spec-mandated -32021 and this check stays
+    # an expected failure until fixed upstream. Strong SEP-2484 candidate:
+    # the stream probe should declare the elicitation capability (or the
+    # fixture contract should be a capability-free streaming diagnostic).
+    # Re-check at the next pin bump. The companion capability checks
+    # (sep-2575-server-rejects-undeclared-capability,
+    # sep-2575-missing-capability-http-400) both pass.
     #
     # The two SHOULD-level warnings (prompts/tools list_changed delivered
     # to an open subscriptions/listen stream) pass only where PHP's CLI
@@ -146,26 +178,16 @@ client:
     # SEP-2484. See the upstream drift record in
     # docs/v2-development-plan.md (WS3).
 
-  # --- number-typed x-mcp-header staleness (upstream fix merged, lands at
-  #     alpha.8 — still failing at alpha.7) ---
-  - http-custom-headers
-    # UPSTREAM TOOL STALENESS, not pursued in the SDK: the scenario's
-    # advertised tools annotate `number`-typed parameters
-    # (priority/float_val) with x-mcp-header and REQUIRE the client to
-    # mirror them — but the final SEP-2243 text explicitly prohibits
-    # x-mcp-header on type `number` (string/integer/boolean only) and
-    # mandates that HTTP clients REJECT tool definitions violating the
-    # constraints. The SDK follows the final text, so it excludes the
-    # scenario's tools as invalid and never mirrors them; the scenario's
-    # five checks then fail unexercised. The companion
-    # http-invalid-tool-headers scenario (no number case) passes 11/11, as
-    # does http-custom-header-server-validation on the server track.
-    # Upstream PR #371 ("fix(http-custom-headers): use spec-permitted
-    # x-mcp-header types") fixes the fixture, but it merged AFTER the
-    # 0.2.0-alpha.7 tag, so it is NOT in the pinned tool. Expected to clear
-    # when the pin reaches 0.2.0-alpha.8+; re-check at the next pin bump.
+  # (CLEARED at 0.2.0-alpha.9) http-custom-headers — upstream PR #371
+  # (alpha.8) fixed the fixture to use spec-permitted x-mcp-header types
+  # (priority number->integer, float_val annotation dropped), so the SDK's
+  # spec-faithful rejection of number-typed x-mcp-header now passes 18/18.
+  # Removed from this baseline at the alpha.9 bump; the companion
+  # http-invalid-tool-headers (11/11) and http-custom-header-server-validation
+  # (server track, 9/9) continue to pass.
 
-  # --- Two NEW upstream-drift entries surfaced by the alpha.7 bump ---
+  # --- Two upstream-drift entries surfaced by the alpha.3/alpha.5 changes
+  #     (carried over the alpha.7 bump; unchanged at alpha.9) ---
   - json-schema-ref-no-deref
     # UPSTREAM TOOL INCONSISTENCY, not pursued in the SDK: alpha.5 (#347)
     # made this scenario's hand-rolled mock answer server/discover, but the
