@@ -327,6 +327,39 @@ This file was introduced during the v1.7.x series. Structured entries below cove
     #2972): verified already-conformant (the SDK always built headers from
     the most recently obtained `inputSchema` and never consulted `ttlMs`)
     and pinned with regression tests.
+- **v2 WS6 — SEP-2596/SEP-2577 feature-lifecycle deprecation.** The spec's
+  deprecated-features registry is mirrored as `Mcp\Shared\FeatureLifecycle`
+  (Roots, Sampling, and Logging deprecated at `2026-07-28` by SEP-2577;
+  Dynamic Client Registration at `2026-07-28` by spec PR #2858 in favor of
+  Client ID Metadata Documents; the `includeContext:
+  "thisServer"|"allServers"` sampling values at `2025-11-25` by SEP-2596).
+  Per SEP-2596 there is NO wire-level deprecation signal and wire behavior
+  is unchanged — deprecated features keep working for at least the
+  twelve-month window. The SDK's obligations are implemented as:
+  - Runtime warnings (SEP-2596/2577 SHOULD): one PSR-3 warning per feature
+    per session when a deprecated feature is exercised on a session whose
+    negotiated revision deprecates it (`EmitsDeprecationWarnings` trait on
+    both sessions). Warned exercise points: server `sendLogMessage()`, the
+    `io.modelcontextprotocol/logLevel` `_meta` opt-in,
+    `sendSamplingRequest()`, `SamplingContext::createMessage()`,
+    `InputContext::wantSample()/wantRoots()`, and the deprecated
+    `includeContext` values; client `setLoggingLevel()`,
+    `sendRootsListChanged()`, and MRTR servicing of sampling/roots input
+    requests; auth `DynamicClientRegistration::register()`. Sessions on
+    revisions where a feature is still Active stay silent.
+  - Language-native API deprecation marking: `@deprecated` docblocks on the
+    20 roots/sampling/logging `Types/` classes (including the sampling
+    `ToolUseContent`/`ToolResultContent` content types), the deprecated
+    capability slots themselves (`ClientCapabilities::$roots`/`$sampling`,
+    `ServerCapabilities::$logging` — matching the schema's member-level
+    markers), the `MetaKeys::LOG_LEVEL` constant, the feature APIs
+    (including method overrides, which do not inherit PHPDoc), and the
+    value-level `includeContext` deprecation (2025-11-25, SEP-2596) on
+    `CreateMessageRequest::$includeContext`, the `RequestParams`
+    `@property` line, and `SamplingContext::createMessage()`, mirroring
+    the draft schema's annotation wording.
+  - `MetaKeys::LOG_LEVEL` re-verified against the draft schema as official
+    and deprecated-at-birth (SEP-2577).
 
 ### Changed
 

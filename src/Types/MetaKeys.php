@@ -46,7 +46,14 @@ final class MetaKeys {
 
     /**
      * Desired log level for this request (optional; replaces logging/setLevel
-     * under 2026-07-28, deprecated from introduction by SEP-2577).
+     * under 2026-07-28).
+     *
+     * @deprecated Deprecated from introduction as of protocol version
+     *             2026-07-28 (SEP-2577 deprecates the Logging feature
+     *             wholesale). The key remains the only way modern requests
+     *             opt in to notifications/message for at least the
+     *             twelve-month window; migrate to stderr logging for stdio
+     *             transports and OpenTelemetry for observability.
      */
     public const LOG_LEVEL = 'io.modelcontextprotocol/logLevel';
 

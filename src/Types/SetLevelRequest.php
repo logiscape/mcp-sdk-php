@@ -28,6 +28,13 @@ declare(strict_types=1);
 
 namespace Mcp\Types;
 
+/**
+ * @deprecated Deprecated as of protocol version 2026-07-28 (SEP-2577). The
+ *             Logging feature remains in the specification (and this SDK) for
+ *             at least twelve months; migrate to stderr logging for stdio
+ *             transports and OpenTelemetry for observability. See the
+ *             deprecated features registry.
+ */
 class SetLevelRequest extends Request {
     public function __construct(
         LoggingLevel $level,

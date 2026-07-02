@@ -49,7 +49,7 @@ namespace Mcp\Types;
  * @property float|null $temperature Sampling temperature (sampling/createMessage)
  * @property Meta|null $metadata Provider-specific metadata (sampling/createMessage)
  * @property ModelPreferences|null $modelPreferences Model preferences (sampling/createMessage)
- * @property string|null $includeContext Context-inclusion hint (sampling/createMessage)
+ * @property string|null $includeContext Context-inclusion hint (sampling/createMessage; the "thisServer"/"allServers" values are DEPRECATED as of 2025-11-25 per SEP-2596 — omit or use "none")
  * @property array<int, Tool>|null $tools Tools offered for sampling (sampling/createMessage, 2025-11-25)
  * @property ToolChoice|null $toolChoice Tool-choice hint (sampling/createMessage, 2025-11-25)
  * @property array<int, array<string, mixed>>|null $_samplingResults Preloaded sampling results (internal)

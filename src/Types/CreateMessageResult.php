@@ -35,6 +35,11 @@ namespace Mcp\Types;
  * Per the MCP spec, CreateMessageResult extends SamplingMessage, so content
  * can be a single content block or an array of content blocks (e.g. multiple
  * ToolUseContent blocks when stopReason is "toolUse").
+ *
+ * @deprecated Deprecated as of protocol version 2026-07-28 (SEP-2577). The
+ *             Sampling feature remains in the specification (and this SDK)
+ *             for at least twelve months; migrate to direct LLM provider API
+ *             integration. See the deprecated features registry.
  */
 class CreateMessageResult extends Result {
     /**

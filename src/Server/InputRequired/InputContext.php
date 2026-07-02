@@ -105,9 +105,14 @@ final class InputContext
      *
      * @param array<int, \Mcp\Types\SamplingMessage> $messages
      * @return array<string, mixed>|null
+     *
+     * @deprecated The Sampling feature is deprecated as of protocol revision
+     *             2026-07-28 (SEP-2577); migration: integrate directly with
+     *             LLM provider APIs. See the deprecated features registry.
      */
     public function wantSample(string $key, array $messages, int $maxTokens, ?string $systemPrompt = null): ?array
     {
+        $this->session->warnDeprecatedFeature(\Mcp\Shared\FeatureLifecycle::SAMPLING);
         $raw = $this->exchangeOrFail()->resolve($key);
         if (is_array($raw) && isset($raw['role'], $raw['content'])) {
             $this->exchangeOrFail()->accept($key, $raw);
@@ -126,9 +131,15 @@ final class InputContext
      * array once supplied, null while pending.
      *
      * @return array<string, mixed>|null
+     *
+     * @deprecated The Roots feature is deprecated as of protocol revision
+     *             2026-07-28 (SEP-2577); migration: pass directories or files
+     *             via tool parameters, resource URIs, or server configuration.
+     *             See the deprecated features registry.
      */
     public function wantRoots(string $key): ?array
     {
+        $this->session->warnDeprecatedFeature(\Mcp\Shared\FeatureLifecycle::ROOTS);
         $raw = $this->exchangeOrFail()->resolve($key);
         if (is_array($raw) && isset($raw['roots']) && is_array($raw['roots'])) {
             $this->exchangeOrFail()->accept($key, $raw);

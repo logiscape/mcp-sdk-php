@@ -98,6 +98,12 @@ class HttpServerSession extends ServerSession
      * @param string[]|null $stopSequences
      * @param array<int, \Mcp\Types\Tool>|null $tools
      * @throws \BadMethodCallException Always — use SamplingContext.
+     *
+     * @deprecated The Sampling feature is deprecated as of protocol revision
+     *             2026-07-28 (SEP-2577); it keeps working for at least the
+     *             twelve-month deprecation window. Migration: integrate
+     *             directly with LLM provider APIs. See the deprecated
+     *             features registry.
      */
     public function sendSamplingRequest(
         array $messages,

@@ -125,6 +125,12 @@ class Client {
      * {@see ClientSession::sendRootsListChanged()}.
      *
      * @param callable(): \Mcp\Types\ListRootsResult $handler
+     *
+     * @deprecated The Roots feature is deprecated as of protocol revision
+     *             2026-07-28 (SEP-2577); it keeps working for at least the
+     *             twelve-month deprecation window. Migration: pass directories
+     *             or files via tool parameters, resource URIs, or server
+     *             configuration. See the deprecated features registry.
      */
     public function onListRoots(callable $handler, bool $listChanged = true): void {
         if ($this->session !== null) {

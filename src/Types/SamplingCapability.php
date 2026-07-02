@@ -31,6 +31,11 @@ namespace Mcp\Types;
 /**
  * Represents the `sampling` object in ClientCapabilities.
  * The schema says sampling?: object with arbitrary fields.
+ *
+ * @deprecated Deprecated as of protocol version 2026-07-28 (SEP-2577). The
+ *             Sampling feature remains in the specification (and this SDK)
+ *             for at least twelve months; migrate to direct LLM provider API
+ *             integration. See the deprecated features registry.
  */
 class SamplingCapability implements McpModel {
     use ExtraFieldsTrait;

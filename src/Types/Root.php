@@ -29,6 +29,13 @@ declare(strict_types=1);
 
 namespace Mcp\Types;
 
+/**
+ * @deprecated Deprecated as of protocol version 2026-07-28 (SEP-2577). The
+ *             Roots feature remains in the specification (and this SDK) for
+ *             at least twelve months; migrate to passing directories or files
+ *             via tool parameters, resource URIs, or server configuration.
+ *             See the deprecated features registry.
+ */
 class Root implements McpModel {
     use ExtraFieldsTrait;
 

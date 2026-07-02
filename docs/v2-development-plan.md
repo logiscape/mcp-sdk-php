@@ -1170,6 +1170,68 @@ fails with the session's BadMethodCallException (-32603) instead of
 silently lacking injection — prompt-side input gathering is modern-only
 by design (the legacy suspend/resume store is tools-only).
 
+**Status (2026-07-01, deprecation-lifecycle milestone):** the SEP-2596 /
+SEP-2577 scope item is implemented and verified (step 2 complete; awaiting
+step 3 human-initiated review). Research findings, applied per "official
+text wins": (1) there is **no wire-level deprecation annotation** — SEP-2596
+explicitly scopes a wire signal out (an Open Question), so "annotations
+surfaced per spec" means schema/docs `@deprecated` markers plus two SDK
+obligations: language-native API deprecation marking, and a SHOULD-level
+runtime warning when a deprecated feature is exercised (SEP-2596) or a
+deprecated capability is negotiated (SEP-2577) — "wire-level behavior is
+unchanged. No types are removed, no capability negotiation changes."
+(2) The deprecated-features registry (`docs/specification/draft/deprecated.mdx`)
+holds six rows, not three: Roots/Sampling/Logging (SEP-2577, `2026-07-28`),
+Dynamic Client Registration (spec PR #2858, `2026-07-28`, migrate to CIMD),
+the `includeContext: "thisServer"|"allServers"` sampling values (SEP-2596
+transition provisions, `2025-11-25` — servers SHOULD omit or use `"none"`,
+and SHOULD only send the deprecated values to a client declaring
+`sampling.context`), and the 2024-11-05 HTTP+SSE transport (`2025-03-26`;
+N/A — the SDK v2 implements Streamable HTTP only). (3) WS1's
+forward-declared `MetaKeys::LOG_LEVEL` re-verified against the draft
+schema: official (`RequestMetaObject`, optional `LoggingLevel`),
+deprecated-at-birth by SEP-2577 as WS2's research predicted — WS1 item (c)
+closed. Delivered: `Mcp\Shared\FeatureLifecycle` (the registry mirrored as
+code: states, deprecating revisions, migration paths, warning messages) and
+the `EmitsDeprecationWarnings` trait on both sessions — one PSR-3 warning
+per feature per session, gated on the negotiated revision having the
+feature Deprecated (a 2025-11-25 session exercising Sampling is exercising
+an Active feature and stays silent; the RC-window draft alias
+canonicalizes). Exercise points wired: server `sendLogMessage()`, the
+`logLevel` `_meta` opt-in, `sendSamplingRequest()`,
+`SamplingContext::createMessage()`, `InputContext::wantSample()/wantRoots()`,
+the deprecated `includeContext` values (both sampling senders); client
+`setLoggingLevel()`, `sendRootsListChanged()`, and the MRTR servicing of
+sampling/roots input requests; auth `DynamicClientRegistration::register()`
+(no negotiated revision to gate on — the warning states the deprecating
+revision). `@deprecated` docblocks added to the 20 roots/sampling/logging
+`Types/` classes (including `ToolUseContent`/`ToolResultContent`, added in
+the step-3 review round), the deprecated capability slots themselves
+(`ClientCapabilities::$roots`/`$sampling`, `ServerCapabilities::$logging`
+as promoted-property docblocks, matching the schema's member-level markers
+— second review round; the schema's deprecated members are exactly those
+three plus the `logLevel` meta key), the `MetaKeys::LOG_LEVEL` constant,
+and the feature APIs (mirroring the schema's annotation wording; PHPStan
+has no deprecation-rules extension, so internal use stays build-clean).
+A third review round completed the value-level `includeContext`
+deprecation (2025-11-25, SEP-2596 — distinct from Sampling's 2026-07-28):
+annotated on `CreateMessageRequest::$includeContext` (promoted-property
+docblock), the `RequestParams` `@property` line, and
+`SamplingContext::createMessage()`'s `@param`; and the
+`HttpServerSession::sendSamplingRequest()` override (which throws
+unconditionally on HTTP) now carries the same `@deprecated` tag as the
+base method — PHPDoc is not inherited by overrides. Wire behavior deliberately untouched — features keep working
+through the twelve-month window. Coverage:
+`tests/Shared/FeatureLifecycleTest.php`,
+`tests/Server/ServerDeprecationWarningsTest.php`,
+`tests/Client/ClientDeprecationWarningsTest.php`,
+`tests/Client/Auth/DcrDeprecationWarningTest.php`. The negotiation-time
+warning for capability declarations rides the exercise points rather than
+per-request envelope adoption — on the stateless path every request is a
+negotiation, and warning there would repeat the message on every request
+carrying the capability (documented judgment call; the SHOULD is honored
+at first exercise per session).
+
 **Completion criteria**
 
 - The cross-revision matrix runs in CI as part of `composer test` and is

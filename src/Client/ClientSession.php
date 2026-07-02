@@ -96,6 +96,18 @@ use InvalidArgumentException;
  * The client interacts with a server by sending requests and notifications, and receiving responses.
  */
 class ClientSession extends BaseSession {
+    use \Mcp\Shared\EmitsDeprecationWarnings;
+
+    /** @see EmitsDeprecationWarnings — gate on this session's negotiated revision. */
+    protected function deprecationProtocolVersion(): ?string {
+        return $this->negotiatedProtocolVersion;
+    }
+
+    /** @see EmitsDeprecationWarnings */
+    protected function deprecationLogger(): \Psr\Log\LoggerInterface {
+        return $this->logger;
+    }
+
     /** @var InitializeResult|null */
     private ?InitializeResult $initResult = null;
 
@@ -824,6 +836,12 @@ class ClientSession extends BaseSession {
      * Pass false to advertise `{ "listChanged": false }` for a static root set.
      *
      * @param callable(): ListRootsResult $handler
+     *
+     * @deprecated The Roots feature is deprecated as of protocol revision
+     *             2026-07-28 (SEP-2577); it keeps working for at least the
+     *             twelve-month deprecation window. Migration: pass directories
+     *             or files via tool parameters, resource URIs, or server
+     *             configuration. See the deprecated features registry.
      */
     public function onListRoots(callable $handler, bool $listChanged = true): void {
         if ($this->initialized && !$this->isRestored) {
@@ -880,6 +898,12 @@ class ClientSession extends BaseSession {
      * multi-round-trip loop in executeModernCall()).
      *
      * @param callable(CreateMessageRequest): CreateMessageResult $handler
+     *
+     * @deprecated The Sampling feature is deprecated as of protocol revision
+     *             2026-07-28 (SEP-2577); it keeps working for at least the
+     *             twelve-month deprecation window. Migration: integrate
+     *             directly with LLM provider APIs. See the deprecated
+     *             features registry.
      */
     public function onSampling(callable $handler): void {
         if ($this->initialized && !$this->isRestored) {
@@ -1095,9 +1119,18 @@ class ClientSession extends BaseSession {
      * @throws RuntimeException If the session is not initialized or if sending the request fails.
      *
      * @return EmptyResult The result of the setLoggingLevel request.
+     *
+     * @deprecated The Logging feature is deprecated as of protocol revision
+     *             2026-07-28 (SEP-2577) and the `logging/setLevel` RPC does
+     *             not exist on the modern path (removed by the stateless
+     *             redesign; modern requests opt in per-request via the
+     *             `io.modelcontextprotocol/logLevel` `_meta` key). Migration:
+     *             log to stderr for stdio transports; use OpenTelemetry for
+     *             observability. See the deprecated features registry.
      */
     public function setLoggingLevel(LoggingLevel $level): EmptyResult {
         $this->ensureInitialized();
+        $this->warnDeprecatedFeature(\Mcp\Shared\FeatureLifecycle::LOGGING);
         $setLevelRequest = new \Mcp\Types\SetLevelRequest($level);
         $this->logger->info('Setting logging level on server');
         return $this->sendRequest($setLevelRequest, EmptyResult::class);
@@ -1597,6 +1630,7 @@ class ClientSession extends BaseSession {
      * @return array<string, mixed>
      */
     private function serviceSamplingInputRequest(array $params): array {
+        $this->warnDeprecatedFeature(\Mcp\Shared\FeatureLifecycle::SAMPLING);
         if ($this->samplingHandler === null) {
             throw new RuntimeException(
                 'input_required requested sampling/createMessage but no sampling handler is registered (see onSampling())'
@@ -1616,6 +1650,7 @@ class ClientSession extends BaseSession {
      * @return array<string, mixed>
      */
     private function serviceRootsInputRequest(): array {
+        $this->warnDeprecatedFeature(\Mcp\Shared\FeatureLifecycle::ROOTS);
         if ($this->rootsHandler === null) {
             throw new RuntimeException(
                 'input_required requested roots/list but no roots handler is registered (see onListRoots())'
@@ -1696,9 +1731,14 @@ class ClientSession extends BaseSession {
      * @throws RuntimeException If the session is not initialized or if sending the notification fails.
      *
      * @return void
+     *
+     * @deprecated The Roots feature is deprecated as of protocol revision
+     *             2026-07-28 (SEP-2577); see {@see onListRoots()} for the
+     *             migration path.
      */
     public function sendRootsListChanged(): void {
         $this->ensureInitialized();
+        $this->warnDeprecatedFeature(\Mcp\Shared\FeatureLifecycle::ROOTS);
         $rootsListChangedNotification = new \Mcp\Types\RootsListChangedNotification();
         $this->logger->info('Sending RootsListChangedNotification to server');
         $this->sendNotification($rootsListChangedNotification);

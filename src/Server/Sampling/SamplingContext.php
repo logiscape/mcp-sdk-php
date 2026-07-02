@@ -55,6 +55,11 @@ use Mcp\Types\ToolChoice;
  * protocol version doesn't cover it), {@see createMessage()} and
  * {@see prompt()} return null — aligned with the spec's "MUST NOT send without
  * capability" rule. Tool handlers decide how to surface that.
+ *
+ * @deprecated The Sampling feature is deprecated as of protocol revision
+ *             2026-07-28 (SEP-2577); it keeps working for at least the
+ *             twelve-month deprecation window. Migration: integrate directly
+ *             with LLM provider APIs. See the deprecated features registry.
  */
 class SamplingContext
 {
@@ -119,6 +124,10 @@ class SamplingContext
      *
      * @param SamplingMessage[] $messages
      * @param string[]|null $stopSequences
+     * @param string|null $includeContext The `"thisServer"`/`"allServers"` values are DEPRECATED as
+     *        of protocol version 2025-11-25 (SEP-2596; removed no later than the Sampling feature
+     *        itself): omit or use `"none"`, and only send the deprecated values to a client
+     *        declaring the `sampling.context` capability.
      * @param array<int, \Mcp\Types\Tool>|null $tools Requires the client's `sampling.tools`
      *        sub-capability. When the client hasn't advertised it, this method returns null without
      *        sending a request; callers should retry without tools or choose a different fallback.
@@ -137,6 +146,10 @@ class SamplingContext
         ?Meta $_meta = null,
         ?string $inputKey = null,
     ): ?CreateMessageResult {
+        $this->session->warnDeprecatedFeature(\Mcp\Shared\FeatureLifecycle::SAMPLING);
+        if ($includeContext === 'thisServer' || $includeContext === 'allServers') {
+            $this->session->warnDeprecatedFeature(\Mcp\Shared\FeatureLifecycle::SAMPLING_INCLUDE_CONTEXT);
+        }
         if (!$this->supportsSampling()) {
             // Modern path (SEP-2575): a request whose envelope did not
             // declare the sampling capability fails with -32021 instead of

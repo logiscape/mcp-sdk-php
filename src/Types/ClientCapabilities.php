@@ -46,7 +46,19 @@ class ClientCapabilities extends Capabilities {
      *        (see {@see ExtensionIds}); the Tasks extension is declared here.
      */
     public function __construct(
+        /**
+         * @deprecated Deprecated as of protocol version 2026-07-28
+         *             (SEP-2577 deprecates the Roots feature). The
+         *             capability keeps negotiating unchanged for at least
+         *             twelve months; see the deprecated features registry.
+         */
         public ?ClientRootsCapability $roots = null,
+        /**
+         * @deprecated Deprecated as of protocol version 2026-07-28
+         *             (SEP-2577 deprecates the Sampling feature). The
+         *             capability keeps negotiating unchanged for at least
+         *             twelve months; see the deprecated features registry.
+         */
         public ?SamplingCapability $sampling = null,
         ?ExperimentalCapabilities $experimental = null,
         public ?ElicitationCapability $elicitation = null,

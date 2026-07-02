@@ -37,6 +37,12 @@ namespace Mcp\Types;
  * }
  *
  * No params are described, so we assume none are required.
+ *
+ * @deprecated Deprecated as of protocol version 2026-07-28 (SEP-2577). The
+ *             Roots feature remains in the specification (and this SDK) for
+ *             at least twelve months; migrate to passing directories or files
+ *             via tool parameters, resource URIs, or server configuration.
+ *             See the deprecated features registry.
  */
 class ListRootsRequest extends Request {
     public function __construct() {

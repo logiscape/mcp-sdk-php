@@ -55,6 +55,12 @@ class ServerCapabilities extends Capabilities {
      * @param array<string, mixed>|null $extensions SEP-2133 extension map
      */
     public function __construct(
+        /**
+         * @deprecated Deprecated as of protocol version 2026-07-28
+         *             (SEP-2577 deprecates the Logging feature). The
+         *             capability keeps negotiating unchanged for at least
+         *             twelve months; see the deprecated features registry.
+         */
         public ?ServerLoggingCapability $logging = null,
         public ?ServerCompletionsCapability $completions = null,
         public ?ServerPromptsCapability $prompts = null,

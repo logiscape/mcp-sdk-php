@@ -37,6 +37,12 @@ use Psr\Log\NullLogger;
  * that supports the registration endpoint.
  *
  * @see https://datatracker.ietf.org/doc/html/rfc7591
+ *
+ * @deprecated Dynamic Client Registration is deprecated as of MCP protocol
+ *             revision 2026-07-28 (spec PR #2858) in favor of Client ID
+ *             Metadata Documents ({@see \Mcp\Client\Auth\ClientIdMetadataDocument}).
+ *             It remains supported for at least the twelve-month deprecation
+ *             window; see the specification's deprecated features registry.
  */
 class DynamicClientRegistration
 {
@@ -76,6 +82,15 @@ class DynamicClientRegistration
                 'Authorization server does not support dynamic client registration'
             );
         }
+
+        // SEP-2596 runtime warning: DCR is Deprecated (2026-07-28, spec PR
+        // #2858). The authorization layer has no negotiated MCP revision to
+        // gate on — the warning states the deprecating revision instead.
+        $this->logger->warning(
+            \Mcp\Shared\FeatureLifecycle::warningMessage(
+                \Mcp\Shared\FeatureLifecycle::DYNAMIC_CLIENT_REGISTRATION
+            )
+        );
 
         $this->logger->debug('Registering client via DCR', [
             'registration_endpoint' => $as->registrationEndpoint,

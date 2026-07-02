@@ -39,6 +39,11 @@ namespace Mcp\Types;
  * content blocks. Array form is required for tool use in sampling, where
  * assistant messages contain multiple ToolUseContent blocks and user
  * messages contain multiple ToolResultContent blocks.
+ *
+ * @deprecated Deprecated as of protocol version 2026-07-28 (SEP-2577). The
+ *             Sampling feature remains in the specification (and this SDK)
+ *             for at least twelve months; migrate to direct LLM provider API
+ *             integration. See the deprecated features registry.
  */
 class SamplingMessage implements McpModel {
     use ExtraFieldsTrait;

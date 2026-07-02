@@ -87,6 +87,8 @@ use InvalidArgumentException;
  * Similar to Python's ServerSession, but synchronous and integrated with our PHP classes.
  */
 class ServerSession extends BaseSession {
+    use \Mcp\Shared\EmitsDeprecationWarnings;
+
     protected InitializationState $initializationState = InitializationState::NotInitialized;
     protected ?InitializeRequestParams $clientParams = null;
     protected LoggerInterface $logger;
@@ -1129,12 +1131,19 @@ class ServerSession extends BaseSession {
      * @param LoggingLevel $level The logging level.
      * @param mixed $data The data to log.
      * @param string|null $logger The logger name.
+     *
+     * @deprecated The Logging feature is deprecated as of protocol revision
+     *             2026-07-28 (SEP-2577); it keeps working for at least the
+     *             twelve-month deprecation window. Migration: log to stderr
+     *             for stdio transports; use OpenTelemetry for observability.
+     *             See the deprecated features registry.
      */
     public function sendLogMessage(
         LoggingLevel $level,
         mixed $data,
         ?string $logger = null
     ): void {
+        $this->warnDeprecatedFeature(\Mcp\Shared\FeatureLifecycle::LOGGING);
         $params = [
             'level' => $level->value,
             'data' => $data,
@@ -1280,6 +1289,15 @@ class ServerSession extends BaseSession {
      *        feature and the client's `sampling.tools` sub-capability. When either is missing, this
      *        method returns null without writing to the transport; callers should retry without tools
      *        or choose a different fallback.
+     *
+     * @deprecated The Sampling feature is deprecated as of protocol revision
+     *             2026-07-28 (SEP-2577); it keeps working for at least the
+     *             twelve-month deprecation window. Migration: integrate
+     *             directly with LLM provider APIs. The `includeContext`
+     *             values `"thisServer"`/`"allServers"` were already
+     *             deprecated at 2025-11-25 (SEP-2596): omit the field or use
+     *             `"none"`, and only send the deprecated values to a client
+     *             declaring the `sampling.context` capability.
      */
     public function sendSamplingRequest(
         array $messages,
@@ -1294,6 +1312,10 @@ class ServerSession extends BaseSession {
         ?ToolChoice $toolChoice = null,
         ?Meta $_meta = null,
     ): ?CreateMessageResult {
+        $this->warnDeprecatedFeature(\Mcp\Shared\FeatureLifecycle::SAMPLING);
+        if ($includeContext === 'thisServer' || $includeContext === 'allServers') {
+            $this->warnDeprecatedFeature(\Mcp\Shared\FeatureLifecycle::SAMPLING_INCLUDE_CONTEXT);
+        }
         // Client must declare the sampling capability.
         $requiredCap = new ClientCapabilities(sampling: new SamplingCapability());
         if (!$this->checkClientCapability($requiredCap)) {
@@ -1490,6 +1512,18 @@ class ServerSession extends BaseSession {
             return false;
         }
         return Version::supportsFeature($this->negotiatedProtocolVersion, $feature);
+    }
+
+    /** @see EmitsDeprecationWarnings — gate on this session's negotiated revision. */
+    protected function deprecationProtocolVersion(): ?string {
+        return $this->initializationState === InitializationState::Initialized
+            ? $this->negotiatedProtocolVersion
+            : null;
+    }
+
+    /** @see EmitsDeprecationWarnings */
+    protected function deprecationLogger(): \Psr\Log\LoggerInterface {
+        return $this->logger;
     }
 
     /**
@@ -1691,7 +1725,13 @@ class ServerSession extends BaseSession {
     public function getCurrentRequestLogLevel(): ?string {
         $fields = $this->currentRawMeta?->getExtraFields() ?? [];
         $level = $fields[MetaKeys::LOG_LEVEL] ?? null;
-        return is_string($level) ? $level : null;
+        if (is_string($level)) {
+            // A client opting in to notifications/message is negotiating
+            // the deprecated Logging feature (SEP-2577).
+            $this->warnDeprecatedFeature(\Mcp\Shared\FeatureLifecycle::LOGGING);
+            return $level;
+        }
+        return null;
     }
 
     /**

@@ -31,6 +31,11 @@ namespace Mcp\Types;
 
 /**
  * Request to create a message via sampling
+ *
+ * @deprecated Deprecated as of protocol version 2026-07-28 (SEP-2577). The
+ *             Sampling feature remains in the specification (and this SDK)
+ *             for at least twelve months; migrate to direct LLM provider API
+ *             integration. See the deprecated features registry.
  */
 class CreateMessageRequest extends Request {
     /**
@@ -46,6 +51,14 @@ class CreateMessageRequest extends Request {
         public ?float $temperature = null,
         public ?Meta $metadata = null,
         public ?ModelPreferences $modelPreferences = null,
+        /**
+         * @deprecated The `"thisServer"` and `"allServers"` values are
+         *             deprecated as of protocol version 2025-11-25
+         *             (SEP-2596) and will be removed no later than the
+         *             Sampling feature itself (SEP-2577). Omit the field or
+         *             use `"none"`; only send the deprecated values to a
+         *             client declaring the `sampling.context` capability.
+         */
         public ?string $includeContext = null,
         public ?array $tools = null,
         public ?ToolChoice $toolChoice = null,
