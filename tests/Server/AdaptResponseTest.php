@@ -98,9 +98,14 @@ final class AdaptResponseTest extends TestCase
     }
 
     /**
-     * Test that no adaptation happens for clients using the latest version.
+     * Nothing is stripped for clients on the latest version: every content
+     * type and the structuredContent ride through unchanged (the modern
+     * path only STAMPS the required 2026-07-28 fields). Adaptation
+     * operates on a copy — the handler's own instance is never mutated,
+     * so a cached result reused across requests/eras keeps its state
+     * (see HttpModernRequestTest::testHandlerCachedResultSurvivesCrossEraAdaptation).
      */
-    public function testNoAdaptationForLatestVersion(): void {
+    public function testNothingStrippedForLatestVersion(): void {
         $session = $this->createInitializedSession(Version::LATEST_PROTOCOL_VERSION);
 
         $result = new CallToolResult(
@@ -113,7 +118,13 @@ final class AdaptResponseTest extends TestCase
         );
 
         $adapted = $session->adaptResponseForClient($result);
-        $this->assertSame($result, $adapted, 'No adaptation should occur for latest version');
+        $this->assertInstanceOf(CallToolResult::class, $adapted);
+        $this->assertNotSame($result, $adapted, 'Adaptation works on a copy, never the handler instance');
+        $this->assertCount(3, $adapted->content, 'No content stripped for the latest version');
+        $this->assertNotNull($adapted->content[0]->annotations, 'Annotations preserved');
+        $this->assertSame(['key' => 'value'], $adapted->structuredContent, 'structuredContent preserved');
+        $this->assertSame('complete', $adapted->resultType, 'Modern path stamps the required resultType');
+        $this->assertNull($result->resultType, 'Stamping never leaks into the handler instance');
     }
 
     /**

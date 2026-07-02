@@ -1232,6 +1232,48 @@ negotiation, and warning there would repeat the message on every request
 carrying the capability (documented judgment call; the SHOULD is honored
 at first exercise per session).
 
+**Status (2026-07-01, matrix/mixed-era/audit milestone):** the remaining
+WS6 deliverables are implemented and verified (step 2 complete; awaiting
+step 3 human-initiated review). Research: the draft versioning page's
+dual-era text was re-verified — "A dual-era server selects its behavior
+from how the client opens" (modern per-request `_meta` → stateless; an
+`initialize` request → legacy semantics scoped to the process/session) and
+"A dual-era server MAY serve both eras concurrently on the same endpoint
+or process" — no drift from WS2's implementation. Delivered:
+(1) `tests/Server/CrossRevisionMatrixTest.php` — the consolidated
+cross-revision matrix over the real `McpServer` surface on the HTTP
+runner, per revision (`2024-11-05` → `2025-11-25` legacy columns plus the
+`2026-07-28` modern column): handshake echo, session-header
+minting/echoing/requirement, SEP-2549 stamping-vs-absence, SEP-2164
+`-32002` (HTTP 200) vs `-32602`+`data.uri` (HTTP 400), and a REAL
+`Last-Event-ID` resumption round-trip (progress-token SSE response →
+replay from its first event id) on every legacy revision, with the modern
+column asserting no handshake (404/-32601), no session header, and no
+resumable channel. Runs in `composer test` (CI). (2) The mixed-era
+one-instance criterion: `testMixedEraTrafficOnOneRunner` and the reverse
+interleaving already existed (WS2); the missing piece — a handler-CACHED
+`Result` reused across eras — was added
+(`testHandlerCachedResultSurvivesCrossEraAdaptation`) and drove the WS1
+re-review fix: `ServerSession::adaptResponseForClient()` now adapts a
+shallow CLONE, never the handler's instance (red-first verified: without
+the clone, a legacy response stripped the cached instance's
+`ttlMs`/`cacheScope` and later modern clients received re-stamped
+conservative defaults; modern stamping likewise no longer leaks SDK
+defaults into handler state). (3) The v1→v2 API audit document,
+[docs/api-audit-v2.md](api-audit-v2.md) — the scattered WS1–WS4 audit
+items consolidated into Breaking (B1–B8) / Behavioral (M1–M9) / Additive /
+wire-automatic sections with explicit dispositions (notably:
+`HttpServerTransport::start()` idempotency recorded as behavioral, not
+breaking), feeding WS10's migration guide. A latent parse bug surfaced by
+the matrix was fixed: `ClientRequest::createInitializeRequest()` passed
+raw wire `_meta` (a decoded array) into the typed `?Meta` parameter, so
+any `initialize` carrying `_meta` — SEP-414 trace context, or a
+modern-enveloped probe hitting the removed method — crashed with a
+TypeError instead of being answered per era; it now converts via the same
+`extractMeta()` helper as every other request family. Still open in WS6
+(continuous duties): the standing no-legacy-regression watch (measured at
+every milestone) and any future deprecation-registry additions.
+
 **Completion criteria**
 
 - The cross-revision matrix runs in CI as part of `composer test` and is

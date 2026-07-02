@@ -1741,6 +1741,19 @@ class ServerSession extends BaseSession {
      * @return mixed The adapted response
      */
     public function adaptResponseForClient($response): mixed {
+        // Adapt a shallow copy, never the handler's own instance: results
+        // may be cached by handlers and reused across requests — and, on a
+        // dual-era server, across ERAS. Mutating in place would let a
+        // legacy response permanently strip the handler's own
+        // resultType/ttlMs/cacheScope (a later modern client would then
+        // get re-stamped conservative defaults instead of the handler's
+        // values), and would leak modern-stamped SDK defaults back into
+        // handler state. The adapted fields are scalars, so a shallow
+        // clone isolates every mutation below.
+        if ($response instanceof Result) {
+            $response = clone $response;
+        }
+
         // Modern path (2026-07-28): stamp the fields the stateless revision
         // requires on every result instead of stripping anything.
         if (Version::supportsFeature($this->negotiatedProtocolVersion, 'stateless_lifecycle')) {

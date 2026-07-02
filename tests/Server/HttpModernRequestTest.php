@@ -524,6 +524,94 @@ final class HttpModernRequestTest extends TestCase
     }
 
     /**
+     * A handler-cached Result served across ERAS on one runner keeps the
+     * handler's own values: response adaptation must operate on a copy,
+     * never mutate the handler's instance (WS1 re-review finding). Without
+     * the clone, the legacy response would strip resultType/ttlMs/cacheScope
+     * off the CACHED object, and the next modern client would receive
+     * re-stamped conservative defaults (ttlMs 0) instead of the handler's
+     * declared hints.
+     */
+    public function testHandlerCachedResultSurvivesCrossEraAdaptation(): void
+    {
+        // A handler that always returns the SAME Result instance, carrying
+        // its own cache hints (the pattern of a handler memoizing its
+        // list result).
+        $cached = new ListToolsResult([]);
+        $cached->setCacheHints(60000, \Mcp\Types\CacheableResult::CACHE_SCOPE_PUBLIC);
+
+        $server = new Server('cached-result-test');
+        $server->registerHandler('tools/list', function (?RequestParams $params) use ($cached): Result {
+            return $cached;
+        });
+        $runner = new HttpServerRunner(
+            $server,
+            new InitializationOptions(
+                serverName: 'cached-result-test',
+                serverVersion: '1.0.0',
+                capabilities: $server->getCapabilities(new NotificationOptions(), []),
+            ),
+            [],
+            null,
+            null,
+            new BufferedIo()
+        );
+
+        // 1) Modern client: the handler's own hints ride the wire.
+        $modern1 = json_decode((string) $runner->handleRequest($this->postRequest(
+            $this->body('tools/list', ['_meta' => $this->validEnvelope()], id: 1),
+            headerVersion: '2026-07-28'
+        ))->getBody(), true);
+        $this->assertSame(60000, $modern1['result']['ttlMs'], 'Handler-declared ttlMs served to the first modern client');
+        $this->assertSame('public', $modern1['result']['cacheScope']);
+
+        // 2) Legacy client: initialize, then list — modern fields stripped
+        // from ITS response.
+        $initResponse = $runner->handleRequest($this->postRequest((string) json_encode([
+            'jsonrpc' => '2.0',
+            'id' => 2,
+            'method' => 'initialize',
+            'params' => [
+                'protocolVersion' => '2025-11-25',
+                'capabilities' => [],
+                'clientInfo' => ['name' => 'legacy-client', 'version' => '1.0'],
+            ],
+        ])));
+        $sessionId = $initResponse->getHeader('Mcp-Session-Id');
+        $this->assertNotNull($sessionId);
+        $runner->handleRequest($this->postRequest((string) json_encode([
+            'jsonrpc' => '2.0',
+            'method' => 'notifications/initialized',
+        ]), sessionId: $sessionId));
+
+        $legacy = json_decode((string) $runner->handleRequest($this->postRequest(
+            $this->body('tools/list', [], id: 3),
+            sessionId: $sessionId
+        ))->getBody(), true);
+        $this->assertArrayNotHasKey('resultType', $legacy['result']);
+        $this->assertArrayNotHasKey('ttlMs', $legacy['result']);
+
+        // 3) Modern client again: the legacy strip must NOT have destroyed
+        // the cached instance's hints — the handler's values still ride.
+        $modern2 = json_decode((string) $runner->handleRequest($this->postRequest(
+            $this->body('tools/list', ['_meta' => $this->validEnvelope()], id: 4),
+            headerVersion: '2026-07-28'
+        ))->getBody(), true);
+        $this->assertSame(
+            60000,
+            $modern2['result']['ttlMs'],
+            'The legacy response must not strip the handler-cached instance (adaptation clones, never mutates)'
+        );
+        $this->assertSame('public', $modern2['result']['cacheScope']);
+
+        // 4) The handler's instance itself is untouched by every request:
+        // its own hints intact and no SDK stamping leaked back into it.
+        $this->assertSame(60000, $cached->getTtlMs(), 'Handler state never mutated by adaptation');
+        $this->assertSame('public', $cached->getCacheScope());
+        $this->assertNull($cached->resultType, 'Modern stamping must not leak into handler state');
+    }
+
+    /**
      * The reverse interleaving of testMixedEraTrafficOnOneRunner: a MODERN
      * request arrives FIRST on a fresh runner, then a legacy client
      * initializes. The ephemeral modern session must not outlive its

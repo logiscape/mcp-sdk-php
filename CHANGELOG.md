@@ -360,6 +360,29 @@ This file was introduced during the v1.7.x series. Structured entries below cove
     the draft schema's annotation wording.
   - `MetaKeys::LOG_LEVEL` re-verified against the draft schema as official
     and deprecated-at-birth (SEP-2577).
+- **v2 WS6 — cross-revision matrix, mixed-era hardening, API audit.**
+  - `tests/Server/CrossRevisionMatrixTest.php`: every supported revision
+    (`2024-11-05` through `2026-07-28`) exercised against the real
+    `McpServer` surface over the HTTP runner — handshake negotiation,
+    session-header contract, real `Last-Event-ID` SSE resumption
+    round-trips on every legacy revision (and none on the modern path),
+    era-correct SEP-2164 error codes, and SEP-2549 result
+    stamping/stripping.
+  - Fix: `ServerSession::adaptResponseForClient()` adapts a shallow clone
+    instead of mutating the handler's `Result` in place — a handler-cached
+    result served to a legacy client no longer loses its own
+    `ttlMs`/`cacheScope` for subsequent modern clients, and modern
+    stamping no longer leaks SDK defaults into handler state (covered by a
+    cross-era cached-result test on one runner).
+  - Fix: `initialize` requests carrying `_meta` (e.g. SEP-414 trace
+    context) no longer crash typed request construction with a TypeError —
+    the wire `_meta` array is converted like every other request family.
+  - `docs/api-audit-v2.md`: the v1→v2 PHP API audit — breaking changes
+    (typed `McpError` on HTTP, `McpError` propagation from tool handlers,
+    `callTool()` return union, removed experimental Tasks surface,
+    mandatory issuer binding, `x-mcp-header` filtering, and more),
+    behavioral changes, and the additive v2 surface — feeding the WS10
+    migration guide.
 
 ### Changed
 
