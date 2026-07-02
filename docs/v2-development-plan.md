@@ -492,8 +492,8 @@ fix the comment when touching the transport.
 - `composer check` green; `composer conformance` regression-free, with both
   tracks' baselines shrinking, not growing.
 
-**Status (2026-06-12):** implemented and verified (step 2 complete; awaiting
-step 3 human-initiated review). Research drift findings, applied per
+**Status (2026-06-12):** implemented, verified, and code-reviewed (step 3);
+Committed and tagged as v2.0.0-alpha1. Research drift findings, applied per
 "official text wins": (1) `subscriptions/listen` is **SEP-2575**, not
 SEP-2260 — SEP-2260 is the rule that server requests must be associated
 with a client request (the basis of the no-server-requests-on-streams
@@ -958,7 +958,7 @@ surface. Significant drift from this plan, applied per "official text wins":
 - `composer check` green; `composer conformance` regression-free.
 
 **Status (2026-06-27):** implemented, verified, and code-reviewed (two review
-rounds, all findings fixed); ready for human approval/commit. The pre-release
+rounds, all findings fixed); Human approved and committed. The pre-release
 Tasks surface was replaced cleanly (no shims) with the SEP-2663 model:
 - Types: flat `CreateTaskResult` (`Result & Task`, `resultType: "task"`) from
   `tools/call`, flat `TaskGetResult` (`DetailedTask`, `resultType: "complete"`,
@@ -1035,8 +1035,7 @@ server package as the behavioral reference.
   HTTP, validated again in WS8.
 - `composer check` green; `composer conformance` regression-free.
 
-**Status (2026-06-28):** implemented and verified (step 2 complete; awaiting
-the manual real-host render check and step 3 human-initiated review).
+**Status (2026-06-28):** implemented, verified, and code-reviewed (step 3);
 Research confirmed the prior notes against the ext-apps stable revision with
 **no drift**: extension id `io.modelcontextprotocol/ui`; UI template MIME
 `text/html;profile=mcp-app` (exact casing); tool→UI link
@@ -1171,8 +1170,8 @@ silently lacking injection — prompt-side input gathering is modern-only
 by design (the legacy suspend/resume store is tools-only).
 
 **Status (2026-07-01, deprecation-lifecycle milestone):** the SEP-2596 /
-SEP-2577 scope item is implemented and verified (step 2 complete; awaiting
-step 3 human-initiated review). Research findings, applied per "official
+SEP-2577 scope item is implemented, verified, and code-reviewed (step 3);
+Human approved and committed. Research findings, applied per "official
 text wins": (1) there is **no wire-level deprecation annotation** — SEP-2596
 explicitly scopes a wire signal out (an Open Question), so "annotations
 surfaced per spec" means schema/docs `@deprecated` markers plus two SDK
@@ -1233,8 +1232,8 @@ carrying the capability (documented judgment call; the SHOULD is honored
 at first exercise per session).
 
 **Status (2026-07-01, matrix/mixed-era/audit milestone):** the remaining
-WS6 deliverables are implemented and verified (step 2 complete; awaiting
-step 3 human-initiated review). Research: the draft versioning page's
+WS6 deliverables are implemented, verified, and code-reviewed (step 3);
+Human approved and committed. Research: the draft versioning page's
 dual-era text was re-verified — "A dual-era server selects its behavior
 from how the client opens" (modern per-request `_meta` → stateless; an
 `initialize` request → legacy semantics scoped to the process/session) and
