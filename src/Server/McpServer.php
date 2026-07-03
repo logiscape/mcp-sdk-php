@@ -36,6 +36,7 @@ use Mcp\Server\Transport\Http\FileSessionStore;
 use Mcp\Server\Transport\Http\HttpIoInterface;
 use Mcp\Server\Transport\Http\SessionStoreInterface;
 use Mcp\Server\Transport\Http\StandardPhpAdapter;
+use Mcp\Server\Transport\TransportClosedException;
 use Mcp\Types\BlobResourceContents;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\CompleteResult;
@@ -1561,6 +1562,11 @@ class McpServer
                 'code' => -32603,
                 'message' => 'Task tools require the modern input mechanism',
             ]);
+        } catch (TransportClosedException $e) {
+            // Client disconnected mid-round (stdio EOF): the session is
+            // shutting down and the in-memory task record dies with the
+            // process — propagate instead of recording a bogus failure.
+            throw $e;
         } catch (\Throwable $e) {
             $result = new CallToolResult(
                 content: [new TextContent(text: 'Error: ' . $e->getMessage())],
@@ -1881,6 +1887,12 @@ class McpServer
                 return $this->buildInputRequiredResult($e, 'tools/call', (string) $name);
             } catch (ClientRequestSuspendException $e) {
                 throw $e; // Must propagate to HttpServerSession for suspend/resume
+            } catch (TransportClosedException $e) {
+                // Client disconnected while the tool was blocked on a client
+                // round-trip (stdio elicitation/sampling): never convert the
+                // shutdown signal into an isError result — propagate so the
+                // session's message loop can exit.
+                throw $e;
             } catch (\Mcp\Shared\McpError $e) {
                 // Protocol-level errors must surface as JSON-RPC errors,
                 // never as isError tool results: McpServerException

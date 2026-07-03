@@ -486,6 +486,19 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 
 ### Fixed
 
+- The stdio server now detects EOF on stdin and shuts down cleanly instead
+  of busy-waiting forever (issue #61). Per the MCP lifecycle, a client
+  initiates stdio shutdown by closing the server's stdin and *waiting for
+  the process to exit*; previously `StdioServerTransport::readMessage()`
+  treated EOF as "no data yet", leaving the process spinning in a 10 ms
+  sleep loop until the client escalated to `SIGTERM` — which never arrives
+  in some Docker setups, orphaning the process. `readMessage()` now throws
+  the new `Mcp\Server\Transport\TransportClosedException` at EOF, which
+  `ServerSession` treats as a clean shutdown signal (the message loop exits
+  and the session stops). Handler-wrapping catch blocks in `ServerSession`
+  and `McpServer` rethrow it so a tool blocked on a stdio
+  elicitation/sampling round-trip cannot swallow the shutdown into an
+  error response aimed at a dead stream.
 - `HttpServerSession::toArray()` deep-normalizes `clientParams`, so
   declared client capabilities (e.g. a bare `elicitation: {}`) survive
   cross-request restoration on session stores that keep PHP values in
