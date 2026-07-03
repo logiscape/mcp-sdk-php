@@ -138,8 +138,10 @@ class StdioServerTransport implements Transport {
      *
      * @return JsonRpcMessage|null
      *   Returns a JsonRpcMessage if successfully parsed,
-     *   or null if no data is available.
+     *   or null if no data is available yet.
      * @throws RuntimeException if transport not started
+     * @throws TransportClosedException if stdin has reached EOF (the client
+     *         closed the stream to initiate shutdown per the MCP lifecycle)
      * @throws McpError on JSON parsing or validation error
      */
     public function readMessage(): ?JsonRpcMessage {
@@ -149,7 +151,16 @@ class StdioServerTransport implements Transport {
 
         $line = fgets($this->stdin);
         if ($line === false) {
-            // No data to read
+            // fgets() returns false both when a non-blocking stream has no
+            // data yet and at EOF; only feof() tells them apart. EOF means
+            // the client closed our stdin — the spec's stdio shutdown
+            // signal — so no message can ever arrive again.
+            if (feof($this->stdin)) {
+                throw new TransportClosedException(
+                    'stdin closed (EOF) — client disconnected'
+                );
+            }
+            // No data to read yet
             return null;
         }
 

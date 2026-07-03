@@ -32,6 +32,7 @@ use Mcp\Server\Transport\Http\FileSessionStore;
 use Mcp\Server\Transport\Http\HttpIoInterface;
 use Mcp\Server\Transport\Http\SessionStoreInterface;
 use Mcp\Server\Transport\Http\StandardPhpAdapter;
+use Mcp\Server\Transport\TransportClosedException;
 use Mcp\Types\BlobResourceContents;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\CompleteResult;
@@ -965,6 +966,12 @@ class McpServer
                 $result = $handler($arguments, $meta);
             } catch (ClientRequestSuspendException $e) {
                 throw $e; // Must propagate to HttpServerSession for suspend/resume
+            } catch (TransportClosedException $e) {
+                // Client disconnected while the tool was blocked on a client
+                // round-trip (stdio elicitation/sampling): never convert the
+                // shutdown signal into an isError result — propagate so the
+                // session's message loop can exit.
+                throw $e;
             } catch (McpServerException $e) {
                 throw $e; // Programming errors should propagate
             } catch (\Throwable $e) {

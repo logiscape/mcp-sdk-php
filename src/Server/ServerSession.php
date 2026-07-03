@@ -67,6 +67,7 @@ use Mcp\Types\SamplingMessage;
 use Mcp\Types\TaskRequestParams;
 use Mcp\Types\ToolChoice;
 use Mcp\Server\Transport\Transport;
+use Mcp\Server\Transport\TransportClosedException;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use RuntimeException;
@@ -234,6 +235,12 @@ class ServerSession extends BaseSession {
             try {
                 $result = $handler($params); // call the user-defined handler
                 $responder->sendResponse($result);
+            } catch (TransportClosedException $e) {
+                // The client disconnected while the handler was blocked on a
+                // client round-trip (stdio elicitation/sampling). Writing an
+                // error response to the dead stream is pointless — propagate
+                // so startMessageProcessing() can shut the session down.
+                throw $e;
             } catch (\Mcp\Shared\McpError $e) {
                 $this->logger->error("Handler error for method '$method': " . $e->getMessage());
                 $responder->sendResponse($e->error);
@@ -886,8 +893,19 @@ class ServerSession extends BaseSession {
         // This could be a loop or a separate thread in a real implementation
         // For demonstration, we'll use a simple loop
         while ($this->isInitialized) {
-            $message = $this->readNextMessage();
-            $this->handleIncomingMessage($message);
+            try {
+                $message = $this->readNextMessage();
+                $this->handleIncomingMessage($message);
+            } catch (TransportClosedException $e) {
+                // The client closed our stdin — the spec's stdio shutdown
+                // signal. stop() (idempotent, so ServerRunner's own stop()
+                // in its finally block stays a no-op) stops the transport
+                // and resets the initialized flag so the process can exit
+                // cleanly.
+                $this->logger->info('Client closed the connection; shutting down: ' . $e->getMessage());
+                $this->stop();
+                return;
+            }
         }
     }
 
