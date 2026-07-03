@@ -572,6 +572,27 @@ This file was introduced during the v1.7.x series. Structured entries below cove
     co-tenant could pre-plant a known secret at the predictable shared-temp
     path, the secret was momentarily world-readable on creation, and a
     crashed writer left a stub that permanently blocked initialization.
+- HTTP session detach/resume now restores the modern (`2026-07-28`) era.
+  `ClientSession::createRestored()` predates the dual-era negotiation work
+  and left a resumed session legacy-era regardless of the negotiated
+  version, so its requests carried neither the SEP-2575 `_meta` envelope
+  nor the mirrored `MCP-Protocol-Version` header — a modern server's
+  per-request era detection then classified them as legacy and correctly
+  rejected them with HTTP 400 "Session ID required" (the webclient hit this
+  on the first `tools/list` after resuming). `createRestored()` and
+  `Client::resumeHttpSession()` accept a new optional trailing
+  `$modernWireVersion` parameter (pass the original session's
+  `getModernWireVersion()` to preserve the RC-window `DRAFT-2026-v1` alias)
+  and auto-detect modern mode when the persisted negotiated version is
+  itself a modern revision — sound because `initialize` caps at
+  `2025-11-25`, so a modern negotiated version proves the original session
+  probed `server/discover`. Resumed modern sessions stamp the per-request
+  envelope again, and `resumeHttpSession()` now mirrors `connect()`'s era
+  split by skipping the legacy-only steps on the modern path (no
+  `MCP-Protocol-Version` force-set on the session manager, no standalone
+  GET SSE stream — the sessionless lifecycle has neither). The webclient
+  reference persists `modernWireVersion` in its session snapshot and passes
+  it through on resume. Legacy resumes are byte-identical to before.
 
 ## [1.7.3]
 

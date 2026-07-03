@@ -296,6 +296,15 @@ class ClientSession extends BaseSession {
      * Used to resume a previously established MCP session (e.g., across PHP requests).
      * The session is immediately ready for operations without sending initialize/initialized.
      *
+     * Modern-era (2026-07-28) sessions resume their per-request behavior too:
+     * when $modernWireVersion is given — or when the negotiated version is
+     * itself a modern revision — the restored session re-enters modern mode,
+     * so every outgoing request and notification is stamped with the SEP-2575
+     * `_meta` envelope again (servers MUST NOT infer it from prior requests).
+     * The auto-detection is sound because a modern revision can only be
+     * negotiated via the server/discover probe: initialize() requests at most
+     * LATEST_LEGACY_PROTOCOL_VERSION.
+     *
      * @param MemoryStream $readStream Stream to read incoming messages from
      * @param MemoryStream $writeStream Stream to write outgoing messages to
      * @param InitializeResult $initResult The initialization result from the original session
@@ -303,6 +312,12 @@ class ClientSession extends BaseSession {
      * @param int $nextRequestId The next request ID to use (to avoid collisions)
      * @param float|null $readTimeout Optional read timeout in seconds
      * @param LoggerInterface|null $logger PSR-3 compliant logger
+     * @param string|null $modernWireVersion The wire identifier the original
+     *        modern-era session carried in its `_meta` envelopes (the dated
+     *        revision or the RC-window draft alias). Pass the original
+     *        session's getModernWireVersion() to preserve an alias across the
+     *        resume; defaults to $negotiatedProtocolVersion when that is a
+     *        modern revision.
      * @return self A session ready for operations
      */
     public static function createRestored(
@@ -312,7 +327,8 @@ class ClientSession extends BaseSession {
         string $negotiatedProtocolVersion,
         int $nextRequestId,
         ?float $readTimeout = null,
-        ?LoggerInterface $logger = null
+        ?LoggerInterface $logger = null,
+        ?string $modernWireVersion = null
     ): self {
         $session = new self($readStream, $writeStream, $readTimeout, $logger);
         $session->initResult = $initResult;
@@ -321,6 +337,13 @@ class ClientSession extends BaseSession {
         $session->isInitialized = true;
         $session->isRestored = true;
         $session->setNextRequestId($nextRequestId);
+
+        $wireVersion = $modernWireVersion
+            ?? (Version::isModernVersion($negotiatedProtocolVersion) ? $negotiatedProtocolVersion : null);
+        if ($wireVersion !== null) {
+            $session->modernWireVersion = $wireVersion;
+            $session->negotiatedProtocolVersion = Version::canonicalizeVersion($wireVersion);
+        }
         return $session;
     }
 

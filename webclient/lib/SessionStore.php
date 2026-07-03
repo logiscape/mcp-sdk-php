@@ -162,7 +162,8 @@ final class SessionStore
                 $mcp['protocolVersion'],
                 (int)$mcp['nextRequestId'],
                 $config['headers'],
-                $this->buildHttpOptions($config)
+                $this->buildHttpOptions($config),
+                $mcp['modernWireVersion'] ?? null
             );
             return $client;
         }
@@ -209,6 +210,10 @@ final class SessionStore
                 ),
                 'protocolVersion' => $session->getNegotiatedProtocolVersion(),
                 'nextRequestId' => $session->getNextRequestId(),
+                // Modern-era wire identifier (null for legacy sessions);
+                // preserved so a resume keeps stamping the exact identifier
+                // the server negotiated (e.g. the DRAFT-2026-v1 alias).
+                'modernWireVersion' => $session->getModernWireVersion(),
             ];
         } catch (Throwable $e) {
             $this->logger->error('Failed to persist MCP session: ' . $e->getMessage());

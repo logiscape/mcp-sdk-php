@@ -383,6 +383,14 @@ class Client {
      * Reconstructs the transport with restored session state and creates a
      * ClientSession that is immediately ready for operations.
      *
+     * Modern-era (2026-07-28) sessions are sessionless (SEP-2567): there is no
+     * Mcp-Session-Id to restore, and the resumed session re-enters modern mode
+     * (via $modernWireVersion or auto-detection from the negotiated version)
+     * so every request carries the SEP-2575 `_meta` envelope again. The
+     * legacy-only steps — feeding the negotiated version into the session
+     * manager's request headers and opening the standalone GET SSE stream —
+     * are skipped on the modern era, mirroring connect().
+     *
      * @param string                    $url                      The HTTP(S) URL of the MCP server
      * @param array<string, mixed>      $sessionManagerState      Session manager state from toArray()
      * @param array<string, mixed>      $initResultData           InitializeResult data (serialized)
@@ -390,6 +398,11 @@ class Client {
      * @param int                       $nextRequestId            The next request ID counter value
      * @param array<string, string>     $headers                  HTTP headers
      * @param array<string, mixed>      $httpOptions              HTTP configuration options
+     * @param string|null               $modernWireVersion        Wire identifier the original
+     *        modern-era session stamped into its `_meta` envelopes (pass the
+     *        original session's getModernWireVersion() to preserve the
+     *        RC-window draft alias); null for legacy sessions or to
+     *        auto-detect from $negotiatedProtocolVersion
      * @return ClientSession The restored client session ready for operations
      */
     public function resumeHttpSession(
@@ -399,7 +412,8 @@ class Client {
         string $negotiatedProtocolVersion,
         int $nextRequestId,
         array $headers = [],
-        array $httpOptions = []
+        array $httpOptions = [],
+        ?string $modernWireVersion = null
     ): ClientSession {
         try {
             // Restore session manager from persisted state
@@ -429,9 +443,6 @@ class Client {
                 sseReconnectBudget: $httpOptions['sseReconnectBudget'] ?? 60.0
             );
 
-            // Set the negotiated protocol version on the session manager
-            $sessionManager->setProtocolVersion($negotiatedProtocolVersion);
-
             // Create transport with restored session manager
             $transport = new StreamableHttpTransport(
                 config: $httpConfig,
@@ -455,8 +466,18 @@ class Client {
                 negotiatedProtocolVersion: $negotiatedProtocolVersion,
                 nextRequestId: $nextRequestId,
                 readTimeout: $httpOptions['readTimeout'] ?? null,
-                logger: $this->logger
+                logger: $this->logger,
+                modernWireVersion: $modernWireVersion
             );
+
+            // Legacy era only: feed the negotiated version back into the
+            // session manager so it rides subsequent request headers. On the
+            // modern era the MCP-Protocol-Version header is mirrored
+            // per-request from the _meta envelope by the transport instead
+            // (see connect()).
+            if (!$this->session->isModernMode()) {
+                $sessionManager->setProtocolVersion($negotiatedProtocolVersion);
+            }
 
             // Wire dispatch path so interleaved server-initiated messages on
             // subsequent POST SSE responses are serviced synchronously.
@@ -499,8 +520,12 @@ class Client {
             // The persisted standaloneLastEventId (restored by
             // HttpSessionManager::fromArray) is sent as Last-Event-ID so the
             // server can replay anything that would have been delivered to
-            // the previous process after it detached.
-            $transport->startStandaloneSseStream();
+            // the previous process after it detached. The standalone GET
+            // stream does not exist on the 2026-07-28 path (no session id to
+            // attach it to), so modern resumes skip it — mirroring connect().
+            if (!$this->session->isModernMode()) {
+                $transport->startStandaloneSseStream();
+            }
 
             $this->logger->info('HTTP session resumed successfully', [
                 'sessionId' => $sessionManager->getSessionId(),
