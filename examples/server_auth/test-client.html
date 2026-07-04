@@ -223,14 +223,30 @@
             </div>
             
             <div class="form-group">
-                <label for="sessionId">Session ID (Optional - will be auto-generated if empty)</label>
+                <label for="sessionId">Session ID (Optional - legacy path only; auto-generated if empty)</label>
                 <input type="text" id="sessionId" placeholder="Leave empty for new session">
             </div>
-            
+
+            <div class="form-group">
+                <label>Modern era (2026-07-28) — stateless, no handshake, no session: every request carries
+                    <code>_meta</code> protocol metadata plus <code>MCP-Protocol-Version</code> and
+                    <code>Mcp-Method</code> headers</label>
+                <div class="button-group">
+                    <button onclick="testModernRequest('server/discover')">Discover (2026-07-28)</button>
+                    <button onclick="testModernRequest('tools/list')">Tools List (2026-07-28)</button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Legacy era (2025-11-25 and older) — initialize handshake, then session-scoped requests</label>
+                <div class="button-group">
+                    <button onclick="testInitialize()">Initialize (legacy)</button>
+                    <button onclick="testLegacyRequest('tools/list')">Tools List (legacy)</button>
+                </div>
+            </div>
+
             <div class="button-group">
                 <button onclick="fetchMetadata()">Fetch Resource Metadata</button>
-                <button onclick="testInitialize()">Test Initialize</button>
-                <button onclick="testRequest('tools/list')">Test Tools List</button>
                 <button onclick="clearResults()" class="secondary">Clear Results</button>
             </div>
         </div>
@@ -240,6 +256,22 @@
 
     <script>
         let currentSessionId = null;
+
+        // The modern era's per-request protocol metadata (SEP-2575): version,
+        // client info, and client capabilities ride in _meta on EVERY request,
+        // replacing the initialize handshake.
+        const MODERN_PROTOCOL_VERSION = "2026-07-28";
+
+        function modernMeta() {
+            return {
+                "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL_VERSION,
+                "io.modelcontextprotocol/clientInfo": {
+                    name: "MCP Test Client",
+                    version: "1.0.0"
+                },
+                "io.modelcontextprotocol/clientCapabilities": {}
+            };
+        }
 
         async function makeRequest(url, options = {}) {
             const result = {
@@ -260,9 +292,13 @@
                 options.headers['Authorization'] = `Bearer ${authToken}`;
             }
 
-            // Add session ID if available
+            // Add session ID if available — legacy path only. Modern
+            // (2026-07-28) requests are stateless: Mcp-Session-Id is never
+            // sent and would be ignored by the server.
+            const modern = options.modern === true;
+            delete options.modern;
             const sessionId = document.getElementById('sessionId').value.trim() || currentSessionId;
-            if (sessionId && options.method !== 'GET') {
+            if (sessionId && options.method !== 'GET' && !modern) {
                 options.headers = options.headers || {};
                 options.headers['Mcp-Session-Id'] = sessionId;
             }
@@ -326,14 +362,14 @@
                 return;
             }
 
-            showLoading('Sending initialize request...');
+            showLoading('Sending legacy initialize request...');
 
             const initRequest = {
                 jsonrpc: "2.0",
                 id: 1,
                 method: "initialize",
                 params: {
-                    protocolVersion: "2025-03-26",
+                    protocolVersion: "2025-11-25",
                     capabilities: {},
                     clientInfo: {
                         name: "MCP Test Client",
@@ -351,10 +387,10 @@
                 body: JSON.stringify(initRequest)
             });
 
-            displayResult('Initialize Request', result);
+            displayResult('Initialize Request (legacy)', result);
         }
 
-        async function testRequest(method) {
+        async function testLegacyRequest(method) {
             const serverUrl = document.getElementById('serverUrl').value.trim();
             if (!serverUrl) {
                 alert('Please enter a server URL');
@@ -366,7 +402,7 @@
                 return;
             }
 
-            showLoading(`Sending ${method} request...`);
+            showLoading(`Sending legacy ${method} request...`);
 
             const request = {
                 jsonrpc: "2.0",
@@ -384,7 +420,46 @@
                 body: JSON.stringify(request)
             });
 
-            displayResult(`${method} Request`, result);
+            displayResult(`${method} Request (legacy)`, result);
+        }
+
+        // Modern era (2026-07-28): no handshake, no session. Every request is
+        // self-contained — protocol metadata in params._meta, mirrored by the
+        // MCP-Protocol-Version header, plus the SEP-2243 Mcp-Method request-
+        // metadata header. server/discover replaces initialize for learning
+        // the server's capabilities, and its result is cacheable (ttlMs /
+        // cacheScope).
+        async function testModernRequest(method) {
+            const serverUrl = document.getElementById('serverUrl').value.trim();
+            if (!serverUrl) {
+                alert('Please enter a server URL');
+                return;
+            }
+
+            showLoading(`Sending modern ${method} request...`);
+
+            const request = {
+                jsonrpc: "2.0",
+                id: Date.now(),
+                method: method,
+                params: {
+                    _meta: modernMeta()
+                }
+            };
+
+            const result = await makeRequest(serverUrl, {
+                method: 'POST',
+                modern: true,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'MCP-Protocol-Version': MODERN_PROTOCOL_VERSION,
+                    'Mcp-Method': method
+                },
+                body: JSON.stringify(request)
+            });
+
+            displayResult(`${method} Request (2026-07-28)`, result);
         }
 
         function displayResult(title, result, isMetadata = false) {

@@ -383,6 +383,43 @@ This file was introduced during the v1.7.x series. Structured entries below cove
     mandatory issuer binding, `x-mcp-header` filtering, and more),
     behavioral changes, and the additive v2 surface — feeding the WS10
     migration guide.
+- **v2 WS9 — examples and webclient.** The example programs now demonstrate
+  the v2 surface and the `2026-07-28` defaults; every runnable example was
+  executed end-to-end over both stdio and HTTP.
+  - New `examples/README.md` index organizing the directory (existing file
+    paths kept stable). New examples, one per major v2 feature:
+    `stateless_server.php` (the `2026-07-28` stateless model, plus
+    structured output, resources, a resource template, and a prompt);
+    `client_negotiation.php` (dual-era negotiation from the client side
+    with `--mode=auto|modern|legacy`); `tasks_server.php` /
+    `tasks_client.php` (the SEP-2663 Tasks lifecycle end-to-end: extension
+    declaration, the `CreateTaskResult` handle, `tasks/get` polling, and
+    in-task input answered via `tasks/update`); and
+    `elicitation_server.php` / `elicitation_client.php` (SEP-2322
+    multi-round-trip input through `ElicitationContext` and `onElicit`).
+    The MCP Apps example (`examples/apps_server/`, added in WS5) completes
+    the per-feature set.
+  - `examples/server_auth/` modernized: `server_auth.php` is rewritten from
+    the v1 low-level `Server` + `registerHandler()` pattern onto the fluent
+    `McpServer` API with `withAuth()` (same filename and endpoints), and
+    its autoloading falls back from the deployment layout (`vendor/` next
+    to the script) to the repository root so it also runs from a checkout.
+    `test-client.html` now exercises both protocol eras — a modern
+    `server/discover` / stateless `tools/list` path carrying the SEP-2575
+    `_meta` envelope with the `MCP-Protocol-Version` and SEP-2243
+    `Mcp-Method` headers (and no `Mcp-Session-Id`), alongside the
+    relabeled legacy initialize→session flow, whose handshake probe was
+    also bumped from the stale `2025-03-26` to `2025-11-25`. The README
+    testing walkthrough covers both paths.
+  - `examples/client_http.php` reports the negotiated era, fixes a PHP 8.4
+    implicit-nullable deprecation, and loads the autoloader CWD-relative
+    like the other examples.
+  - The three `simple_server*.php` quick-start examples were verified
+    v2-clean and unchanged; the README and AGENTS.md quick-start snippets
+    were extracted verbatim and run against the v2 SDK (both work,
+    negotiating the modern era). The `webclient/` reference was audited as
+    already v2-current (no changes needed) and all example and webclient
+    files are `php -l` clean.
 
 ### Changed
 

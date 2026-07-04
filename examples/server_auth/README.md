@@ -33,7 +33,9 @@ Upload the following files to your web document root (typically `public_html`):
 
 ### 3. Configure Your Server
 
-Edit `mcp-config.php` with your specific values:
+Edit `mcp-config.php` with your specific values. The file defaults to RS256
+(JWKS-based validation); switch to HS256 for local testing with
+`generate-token.php`:
 
 ```php
 // Set configuration constants
@@ -45,7 +47,7 @@ define('MCP_RESOURCE_ID', 'https://yoursite.com/server_auth.php');
 
 **Important Configuration Notes:**
 
-- **`MCP_JWT_ALGORITHM`**: HS256 can be used with generate-token.php while RS256 is recommended for production.
+- **`MCP_JWT_ALGORITHM`**: HS256 can be used with generate-token.php while RS256 (the file's default) is recommended for production.
 - **`MCP_JWT_SECRET`**: Replace with a strong, random secret key. Use at least 32 characters.
 - **`MCP_AUTH_ISSUER`**: URL of your OAuth authorization server
 - **`MCP_RESOURCE_ID`**: Full URL to your MCP server endpoint (server_auth.php)
@@ -103,7 +105,10 @@ Your authenticated MCP server will:
 
 Test the authentication flow:
 
-The included file test-client.html features a basic MCP server test tool. Connecting to server_auth.php without a Bearer Token should allow you to fetch the resource metadata, but an Initialize Request should fail with a 401 error. Connecting with a valid Bearer Token should allow you to initialize a session, and then fetch the list of available tools.
+The included file test-client.html features a basic MCP server test tool covering both protocol eras. Without a Bearer Token you should be able to fetch the resource metadata, but any MCP request should fail with a 401 error. With a valid Bearer Token:
+
+- **Modern era (2026-07-28)**: "Discover" and "Tools List" send stateless, self-contained requests — protocol metadata travels in each request's `_meta` (mirrored by the `MCP-Protocol-Version` header, plus the `Mcp-Method` request-metadata header), with no handshake and no session.
+- **Legacy era (2025-11-25 and older)**: "Initialize" performs the classic handshake and captures the returned `Mcp-Session-Id`, after which the legacy "Tools List" runs against that session.
 
 ## Production Deployment
 
@@ -160,12 +165,12 @@ Contact your hosting provider if the standard configuration doesn't work.
 ## Example MCP Server
 
 The included `server_auth.php` demonstrates:
-- OAuth token validation
-- Session management
-- Protected MCP tools and resources
+- OAuth token validation via `McpServer::withAuth()`
+- Session management for legacy-era clients (2026-07-28 clients are served statelessly)
+- Protected MCP tools, prompts, and resources registered through the fluent `McpServer` API
 - Proper error responses
 
-Customize the handlers to implement your specific MCP functionality while maintaining the authentication framework.
+Register your own tools, prompts, and resources on the `McpServer` instance to implement your specific MCP functionality while maintaining the authentication framework.
 
 ## Additional Resources
 

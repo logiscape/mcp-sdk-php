@@ -1466,6 +1466,67 @@ demonstrate v2.
 - Examples referenced from documentation actually exist at the referenced
   paths.
 
+**Status (2026-07-04):** implemented and verified (steps 1–2); code review
+(step 3) pending. Research found zero upstream drift since the 2026-07-01
+assessment (no normative spec/ext-tasks/ext-apps merges after 2026-07-01;
+spec PR #2972 was already absorbed by WS3's drift round). Delivered: an
+`examples/README.md` index organizing the directory (existing paths kept
+stable — every documentation-referenced path still exists); four new-feature
+example sets — `stateless_server.php` (the 2026-07-28 stateless model, with
+structured output, resources, a resource template, and a prompt),
+`client_negotiation.php` (dual-era negotiation with
+`--mode=auto|modern|legacy`), `tasks_server.php`/`tasks_client.php`
+(SEP-2663 end-to-end: extension declaration, `CreateTaskResult` handle,
+`tasks/get` polling, in-task input via `input_required` → `tasks/update`),
+and `elicitation_server.php`/`elicitation_client.php` (SEP-2322 MRTR through
+`ElicitationContext`/`onElicit`); the Apps example (WS5) already existed and
+was re-verified end-to-end (`ui://` resource, `mcp-app` MIME profile,
+`structuredContent`). Existing examples: the three `simple_server*.php`
+files were already v2-clean and are unchanged — the README and AGENTS.md
+quick-start snippets were extracted verbatim and executed against the SDK
+(both run, negotiating the modern era); `client_http.php` gained
+negotiated-era reporting, an explicit-nullable logger parameter, and
+CWD-relative autoloading consistent with the other examples;
+`server_auth/server_auth.php` was modernized from the v1 low-level
+`Server`+`registerHandler()` pattern onto the fluent `McpServer` API with
+`withAuth()` (filename preserved — its README, config, and `.htaccess`
+rules reference it), its `test-client.html` initialize probe bumped from
+`2025-03-26` to `2025-11-25`, and its README aligned (RS256 file default
+noted). The webclient audited as already v2-current (WS3 auth +
+modern-resume work; no hardcoded protocol versions) — no changes needed;
+all webclient and example files are `php -l` clean. Every runnable example
+was executed end-to-end over BOTH stdio and HTTP: auto/modern/legacy
+negotiation, task polling with in-task input, MRTR elicitation, and the
+OAuth server (metadata endpoint, 401-without-token, 404 path gating, plus
+authenticated legacy `initialize` and modern discover/list flows against an
+HS256 validator). One behavioral note is captured in the tasks example: a
+server tool may only elicit from clients advertising the elicitation
+capability, so `tasks_client.php` registers an `onElicit` handler even
+though in-task input arrives via `tasks/get`. `composer check` green (1237
+tests; PHPStan clean). Conformance was deliberately not re-run: the change
+set touches only `examples/` (zero `src/` or `conformance/` changes), so
+neither track's fixtures load any changed code.
+**Review round (step 3, 2026-07-04):** two findings raised; both verified
+as legitimate and fixed. (1) `server_auth/test-client.html` exercised only
+the legacy handshake path — it now offers both eras side by side: modern
+"Discover (2026-07-28)" and "Tools List (2026-07-28)" buttons send
+stateless requests carrying the SEP-2575 `_meta` envelope
+(protocolVersion/clientInfo/clientCapabilities) with the
+`MCP-Protocol-Version` and SEP-2243 `Mcp-Method` headers and never send
+`Mcp-Session-Id`, while the legacy buttons are labeled as such and keep
+the initialize→session flow; the server_auth README's testing walkthrough
+now describes both paths. Verified live against the served example with an
+HS256 validator: modern discover returns the full DiscoverResult
+(resultType, supportedVersions, ttlMs/cacheScope), modern stateless
+tools/list works with no session, unauthenticated modern requests get 401,
+and the legacy initialize→tools/list flow is unchanged (no `resultType` on
+the legacy-adapted result). (2) `server_auth/server_auth.php` required
+`__DIR__ . '/vendor/autoload.php'` (deployment layout) and fataled when
+run from the repository root as `examples/README.md` instructs — it now
+falls back to the repo-root `vendor/` when no local `vendor/` exists,
+verified by serving it from the checkout with no vendor junction present.
+`php -l` clean on the changed files.
+
 ## WS10 — Documentation
 
 The last gate: the docs describe what v2 actually is.

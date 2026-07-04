@@ -2,9 +2,16 @@
 
 /**
  * Example MCP HTTP Server That Requires Authentication
- * 
- * This server provides the same functionality as the HTTP test server but requires OAuth 2.1 for authentication.
- * It's designed to work in standard PHP hosting environments.
+ *
+ * An OAuth 2.1-protected MCP server built on the McpServer convenience
+ * wrapper, designed for standard PHP hosting environments (cPanel/Apache).
+ * withAuth() enables bearer-token validation on every MCP request and serves
+ * the RFC 9728 protected-resource metadata at
+ * /.well-known/oauth-protected-resource (see README.md for the .htaccess
+ * rules that route it here and forward the Authorization header).
+ *
+ * Configuration (issuer, resource id, JWT algorithm/secret/JWKS) is loaded
+ * from mcp-config.php.
  *
  * (c) 2025 Logiscape LLC <https://logiscape.com>
  *
@@ -18,36 +25,25 @@
  * @link       https://github.com/logiscape/mcp-sdk-php
  */
 
-// Autoload dependencies
-require __DIR__ . '/vendor/autoload.php';
+// Autoload dependencies — deployment layout first (vendor/ uploaded next to
+// this script, per README.md), falling back to the repository checkout so the
+// example also runs from the repo root:
+//   php -S localhost:8000 examples/server_auth/server_auth.php
+$autoload = file_exists(__DIR__ . '/vendor/autoload.php')
+    ? __DIR__ . '/vendor/autoload.php'
+    : __DIR__ . '/../../vendor/autoload.php';
+require $autoload;
 
-use Mcp\Server\Server;
-use Mcp\Server\HttpServerRunner;
-use Mcp\Server\Transport\Http\StandardPhpAdapter;
+use Mcp\Server\Auth\JwtTokenValidator;
+use Mcp\Server\McpServer;
 use Mcp\Server\Transport\Http\Environment;
 use Mcp\Server\Transport\Http\FileSessionStore;
-use Mcp\Server\Auth\JwtTokenValidator;
-use Mcp\Types\Prompt;
-use Mcp\Types\PromptArgument;
-use Mcp\Types\PromptMessage;
-use Mcp\Types\ListPromptsResult;
-use Mcp\Types\TextContent;
-use Mcp\Types\Role;
-use Mcp\Types\GetPromptResult;
-use Mcp\Types\GetPromptRequestParams;
-use Mcp\Types\Tool;
-use Mcp\Types\ToolInputSchema;
-use Mcp\Types\ToolInputProperties;
-use Mcp\Types\ListToolsResult;
 use Mcp\Types\CallToolResult;
-use Mcp\Types\Resource;
-use Mcp\Types\ResourceTemplate;
-use Mcp\Types\ListResourcesResult;
-use Mcp\Types\ListResourceTemplatesResult;
-use Mcp\Types\ReadResourceResult;
-use Mcp\Types\TextResourceContents;
+use Mcp\Types\TextContent;
 
-// Handle MCP requests to allowed endpoints
+// Only serve MCP traffic on the expected endpoints. The well-known paths are
+// answered by the SDK with the OAuth protected-resource metadata; everything
+// else on this vhost gets a plain 404.
 $requestUri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
 $allowedPaths = [
     '/server_auth.php',
@@ -61,231 +57,8 @@ if (!in_array($requestUri, $allowedPaths)) {
     exit;
 }
 
-ini_set('display_errors', '1');
-error_reporting(E_ALL);
-
-// Configure error handling for production
-//if (getenv('MCP_DEBUG') !== 'true') {
-//    error_reporting(E_ERROR | E_PARSE);
-//    ini_set('display_errors', '0');
-//}
-
-// Check HTTP method - allow GET for metadata endpoint
-$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-$isMetadataEndpoint = (stripos($requestUri, '/.well-known/oauth-protected-resource') !== false);
-
-if ($isMetadataEndpoint && $method !== 'GET') {
-    http_response_code(405);
-    header('Allow: GET');
-    echo json_encode(['error' => 'Method not allowed']);
-    exit;
-} elseif (!$isMetadataEndpoint && !in_array($method, ['GET', 'POST', 'DELETE'])) {
-    http_response_code(405);
-    header('Allow: GET, POST, DELETE');
-    echo json_encode(['error' => 'Method not allowed']);
-    exit;
-}
-
-// Create server instance
-$server = new Server('mcp-example-auth-server');
-
-// Register prompt handlers
-$server->registerHandler('prompts/list', function($params) {
-    $prompt = new Prompt(
-        name: 'example-prompt',
-        description: 'An example prompt template',
-        arguments: [
-            new PromptArgument(
-                name: 'arg1',
-                description: 'Example argument',
-                required: true
-            )
-        ]
-    );
-    return new ListPromptsResult([$prompt]);
-});
-
-$server->registerHandler('prompts/get', function($params) {
-    $name = $params->name;
-    $arguments = $params->arguments;
-    if ($name !== 'example-prompt') {
-        throw new \InvalidArgumentException("Unknown prompt: {$name}");
-    }
-    
-    // Get argument value safely
-    $argValue = $arguments->arg1 ?? 'none';
-    
-    return new GetPromptResult(
-        messages: [
-            new PromptMessage(
-                role: Role::USER,
-                content: new TextContent(
-                    text: "Example prompt text with argument: $argValue"
-                )
-            )
-        ],
-        description: 'Example prompt'
-    );
-});
-
-// Register tool handlers
-$server->registerHandler('tools/list', function($params) {
-    // Create properties object
-    $properties = ToolInputProperties::fromArray([
-        'num1' => [
-            'type' => 'number',
-            'description' => 'First number'
-        ],
-        'num2' => [
-            'type' => 'number',
-            'description' => 'Second number'
-        ]
-    ]);
-
-    // Create schema with properties and required fields
-    $inputSchema = new ToolInputSchema(
-        properties: $properties,
-        required: ['num1', 'num2']
-    );
-
-    // Create calculator tool
-    $calculator = new Tool(
-        name: 'add-numbers',
-        description: 'Adds two numbers together',
-        inputSchema: $inputSchema
-    );
-    
-    // Create a second tool for testing
-    $properties2 = ToolInputProperties::fromArray([
-        'text' => [
-            'type' => 'string',
-            'description' => 'Text to transform'
-        ]
-    ]);
-    
-    $inputSchema2 = new ToolInputSchema(
-        properties: $properties2,
-        required: ['text']
-    );
-    
-    $textTool = new Tool(
-        name: 'uppercase',
-        description: 'Converts text to uppercase',
-        inputSchema: $inputSchema2
-    );
-
-    return new ListToolsResult([$calculator, $textTool]);
-});
-
-$server->registerHandler('tools/call', function($params) {
-    $name = $params->name;
-    $arguments = $params->arguments ?? [];
-
-    switch ($name) {
-        case 'add-numbers':
-            // Validate and convert arguments to numbers
-            $num1 = filter_var($arguments['num1'] ?? null, FILTER_VALIDATE_FLOAT);
-            $num2 = filter_var($arguments['num2'] ?? null, FILTER_VALIDATE_FLOAT);
-
-            if ($num1 === false || $num2 === false) {
-                return new CallToolResult(
-                    content: [new TextContent(
-                        text: "Error: Both arguments must be valid numbers"
-                    )],
-                    isError: true
-                );
-            }
-
-            $sum = $num1 + $num2;
-            return new CallToolResult(
-                content: [new TextContent(
-                    text: "The sum of {$num1} and {$num2} is {$sum}"
-                )]
-            );
-            
-        case 'uppercase':
-            $text = $arguments['text'] ?? '';
-            if (empty($text)) {
-                return new CallToolResult(
-                    content: [new TextContent(
-                        text: "Error: Text cannot be empty"
-                    )],
-                    isError: true
-                );
-            }
-            
-            return new CallToolResult(
-                content: [new TextContent(
-                    text: "Uppercase version: " . strtoupper($text)
-                )]
-            );
-            
-        default:
-            throw new \InvalidArgumentException("Unknown tool: {$name}");
-    }
-});
-
-// Register resource handlers
-$server->registerHandler('resources/list', function($params) {
-    $resources = [
-        new Resource(
-            uri: 'example://greeting',
-            name: 'Greeting Text',
-            description: 'A simple greeting message',
-            mimeType: 'text/plain'
-        ),
-        new Resource(
-            uri: 'example://server-info',
-            name: 'Server Information',
-            description: 'Information about the server environment',
-            mimeType: 'text/plain'
-        )
-    ];
-    
-    return new ListResourcesResult($resources);
-});
-
-$server->registerHandler('resources/read', function($params) {
-    $uri = $params->uri;
-    
-    switch ($uri) {
-        case 'example://greeting':
-            return new ReadResourceResult(
-                contents: [new TextResourceContents(
-                    uri: $uri,
-                    text: "Hello from the example MCP HTTP server!",
-                    mimeType: 'text/plain'
-                )]
-            );
-            
-        case 'example://server-info':
-            $info = [
-                "Server Time: " . date('Y-m-d H:i:s'),
-                "PHP Version: " . PHP_VERSION,
-                "Server Software: " . ($_SERVER['SERVER_SOFTWARE'] ?? 'Unknown'),
-                "HTTP Transport: MCP HTTP Transport",
-                "Environment: " . (Environment::isSharedHosting() ? 'Shared Hosting' : 'Standard Server'),
-                "Session Timeout: " . (Environment::detectMaxExecutionTime() ?: 'No limit') . " seconds"
-            ];
-            
-            return new ReadResourceResult(
-                contents: [new TextResourceContents(
-                    uri: $uri,
-                    text: implode("\n", $info),
-                    mimeType: 'text/plain'
-                )]
-            );
-            
-        default:
-            throw new \InvalidArgumentException("Unknown resource: {$uri}");
-    }
-});
-
 // Include auth configuration file
 require_once __DIR__ . '/mcp-config.php';
-
-// === AUTHORIZATION CONFIGURATION ===
-// Configuration is loaded from mcp-config.php
 
 // Create JWT validator based on algorithm
 if (MCP_JWT_ALGORITHM === 'RS256') {
@@ -298,7 +71,7 @@ if (MCP_JWT_ALGORITHM === 'RS256') {
         jwksUri: MCP_JWKS_URI
     );
 } else {
-    // HS256 with shared secret
+    // HS256 with shared secret (pairs with generate-token.php for testing)
     $tokenValidator = new JwtTokenValidator(
         key: MCP_JWT_SECRET,
         algorithm: 'HS256',
@@ -307,36 +80,74 @@ if (MCP_JWT_ALGORITHM === 'RS256') {
     );
 }
 
-// Configure HTTP options
-$httpOptions = [
-    'session_timeout' => 1800, // 30 minutes
-    'max_queue_size' => 500,   // Smaller queue for shared hosting
-    'enable_sse' => false,     // No SSE for compatibility
-    'shared_hosting' => true,  // Assume shared hosting for max compatibility
-    'server_header' => 'MCP-PHP-Server/1.0',
-    'auth_enabled' => true,    // Enable authentication
-    'authorization_servers' => [MCP_AUTH_ISSUER],
-    'resource' => MCP_RESOURCE_ID,
-    'token_validator' => $tokenValidator,
-];
-
 try {
-    // Create the adapter and handle the request
-    // 1) Create a file-based store, pointing to an absolute or relative path
-    $fileStore = new FileSessionStore(__DIR__ . '/mcp_sessions'); 
-    
-    // 2) Create a runner that uses that store
-    $runner = new HttpServerRunner($server, $server->createInitializationOptions(), $httpOptions, null, $fileStore);
-    
-    // 3) Create a StandardPhpAdapter and pass your runner in directly
-    $adapter = new StandardPhpAdapter($runner);
-    
-    // 4) Handle the request
-    $adapter->handle();
+    $server = new McpServer('mcp-example-auth-server');
+
+    $server
+        // Tools — input schemas are generated from the callback signatures.
+        ->tool('add-numbers', 'Adds two numbers together', function (float $num1, float $num2): string {
+            return "The sum of {$num1} and {$num2} is " . ($num1 + $num2);
+        })
+        ->tool('uppercase', 'Converts text to uppercase', function (string $text): CallToolResult {
+            if (trim($text) === '') {
+                return new CallToolResult(
+                    content: [new TextContent(text: 'Error: Text cannot be empty')],
+                    isError: true
+                );
+            }
+            return new CallToolResult(
+                content: [new TextContent(text: 'Uppercase version: ' . strtoupper($text))]
+            );
+        })
+
+        // A prompt with one required argument.
+        ->prompt('example-prompt', 'An example prompt template', function (string $arg1): string {
+            return "Example prompt text with argument: {$arg1}";
+        })
+
+        // Resources
+        ->resource(
+            uri: 'example://greeting',
+            name: 'Greeting Text',
+            callback: fn (): string => 'Hello from the example MCP HTTP server!',
+            description: 'A simple greeting message'
+        )
+        ->resource(
+            uri: 'example://server-info',
+            name: 'Server Information',
+            callback: fn (): string => implode("\n", [
+                'Server Time: ' . date('Y-m-d H:i:s'),
+                'PHP Version: ' . PHP_VERSION,
+                'Server Software: ' . ($_SERVER['SERVER_SOFTWARE'] ?? 'Unknown'),
+                'Environment: ' . (Environment::isSharedHosting() ? 'Shared Hosting' : 'Standard Server'),
+                'Max Execution Time: ' . (Environment::detectMaxExecutionTime() ?: 'No limit') . ' seconds',
+            ]),
+            description: 'Information about the server environment'
+        )
+
+        // Require a valid bearer token on every MCP request and advertise the
+        // authorization server in the protected-resource metadata.
+        ->withAuth($tokenValidator, MCP_AUTH_ISSUER, MCP_RESOURCE_ID)
+
+        // Conservative HTTP options for shared hosting. To enable DNS-rebinding
+        // protection on a production host, also set
+        // 'allowed_origins' => ['yourdomain.com'].
+        ->httpOptions([
+            'session_timeout' => 1800, // Legacy-session lifetime: 30 minutes
+            'enable_sse' => false,     // Plain JSON responses for compatibility
+            'shared_hosting' => true,  // Assume shared hosting for max compatibility
+        ])
+
+        // Legacy-era clients get file-backed sessions next to this script;
+        // 2026-07-28 clients are served statelessly and never touch the store.
+        ->sessionStore(new FileSessionStore(__DIR__ . '/mcp_sessions'))
+
+        // Handle the current HTTP request.
+        ->runHttp();
 } catch (\Exception $e) {
     // Log error to error_log
     error_log('MCP Server error: ' . $e->getMessage());
-    
+
     // Return error response
     http_response_code(500);
     header('Content-Type: application/json');

@@ -6,10 +6,14 @@
  * This example demonstrates how to connect to an MCP server over HTTP
  * and list all available prompts, tools, and resources.
  * 
- * Usage: php mcp_http_client.php https://example.com/mcp [--insecure] [--headers=key:value,...]
+ * Works against servers from both protocol eras: with the default 'auto'
+ * negotiation the client probes the modern (2026-07-28) stateless path first
+ * and falls back to the legacy initialize handshake automatically.
+ *
+ * Usage: php client_http.php https://example.com/mcp [--insecure] [--headers=key:value,...]
  */
 
-require_once __DIR__ . '/vendor/autoload.php';
+require 'vendor/autoload.php';
 
 use Mcp\Client\Client;
 use Mcp\Types\Resource;
@@ -28,7 +32,7 @@ class McpHttpClient {
     private array $options = [];
     private ?LoggerInterface $logger = null;
     
-    public function __construct(LoggerInterface $logger = null) {
+    public function __construct(?LoggerInterface $logger = null) {
         $this->client = new Client($logger);
         $this->logger = $logger;
     }
@@ -62,9 +66,9 @@ class McpHttpClient {
                 }
             } elseif (strpos($arg, '--timeout=') === 0) {
                 $this->options['readTimeout'] = (float)substr($arg, 10);
-            } elseif (strpos($arg, '--no-sse') === 0) {
+            } elseif ($arg === '--no-sse') {
                 $this->options['enableSse'] = false;
-            } elseif (strpos($arg, '--help') === 0 || $arg === '-h') {
+            } elseif ($arg === '--help' || $arg === '-h') {
                 $this->showUsage();
                 return false;
             } else {
@@ -81,7 +85,7 @@ class McpHttpClient {
      * Display usage information.
      */
     private function showUsage(): void {
-        echo "Usage: php mcp_http_client.php <endpoint> [options]\n";
+        echo "Usage: php client_http.php <endpoint> [options]\n";
         echo "\n";
         echo "Options:\n";
         echo "  --insecure            Disable TLS certificate verification\n";
@@ -91,7 +95,7 @@ class McpHttpClient {
         echo "  --help, -h            Show this help message\n";
         echo "\n";
         echo "Example:\n";
-        echo "  php mcp_http_client.php https://example.com/mcp --headers=Authorization:Bearer\ token\n";
+        echo "  php client_http.php https://example.com/mcp --headers=Authorization:Bearer\ token\n";
     }
     
     /**
@@ -117,10 +121,13 @@ class McpHttpClient {
             // Get server information from the initialize result
             $initResult = $session->getInitializeResult();
             
+            $era = $session->isModernMode() ? 'modern (2026-07-28, stateless)' : 'legacy (initialize handshake)';
+
             echo "Server Information:\n";
             echo "  Name: {$initResult->serverInfo->name}\n";
             echo "  Version: {$initResult->serverInfo->version}\n";
             echo "  Protocol Version: {$initResult->protocolVersion}\n";
+            echo "  Negotiated Era: {$era}\n";
             
             if (isset($initResult->instructions)) {
                 echo "  Instructions: " . substr($initResult->instructions, 0, 100) . 
