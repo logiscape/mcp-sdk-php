@@ -14,31 +14,47 @@
 # may legitimately add entries for genuinely-new upstream behavior, each
 # with its own root cause (recorded below).
 #
-# Last updated: 2026-07-01 (draft pin bumped 0.2.0-alpha.7 -> 0.2.0-alpha.9)
+# Last updated: 2026-07-03 (request-metadata cleared via SDK fix; other
+# root causes re-verified against the reference SDKs, the draft spec
+# text, and the tool source — details per entry)
 # Conformance tool version: 0.2.0-alpha.9 (draft pin)
 #
-# Pin-bump note (0.2.0-alpha.7 -> 0.2.0-alpha.9): two builds, three PRs, all
-# draft-track only (stable `latest` unchanged at 0.1.16). Net effect on this
-# baseline: TWO entries cleared, ONE entry's root cause replaced, everything
-# else unchanged. No SDK code change accompanies this bump — the two cleared
-# entries are upstream fixes catching up to already-spec-correct SDK behavior.
+# (CLEARED at pin 0.2.0-alpha.9, 2026-07-03, via SDK FIX) request-metadata —
+# the entry's open question ("should the SDK retry an already-attempted-but-
+# advertised version exactly once?") was resolved YES against three sources:
+#  * Spec: the draft's only retry rule is unconditional — "The client SHOULD
+#    select a mutually supported version from the `supported` list and retry
+#    the request" (basic/versioning.mdx §Protocol Version Negotiation). No
+#    text anywhere excludes a version the client already attempted (verified
+#    absence across versioning/discover/transports/schema.ts).
+#  * Reference SDKs: the TypeScript client retries the SAME rejected version
+#    exactly once (packages/client/src/client/versionNegotiation.ts, one-shot
+#    `correctiveUsed` guard: "runs exactly once (even when the mutual version
+#    equals the just-rejected one)"); the Python client likewise
+#    (src/mcp/client/_probe.py, `attempt == 0` bound). Neither excludes
+#    attempted versions.
+#  * Tool history: conformance issue #280 (closed via PR #270) documents the
+#    same-version transient rejection as the scenario's intended design
+#    ("infinite loops are prevented (since we never retry more than once)").
+# SDK change: ClientSession::negotiate() now allows exactly one corrective
+# -32022 retry (same version permitted) and throws on a second rejection;
+# pickAdvertisedModernVersion() dropped its attempted-versions exclusion
+# (sendRequest()'s adopt-and-retry was already structurally once-only).
+# Covered by ClientNegotiationTest (same-version retry, second-rejection
+# stop, forced-modern same-version adopt-and-retry).
+#
+# Pin-bump note (0.2.0-alpha.7 -> 0.2.0-alpha.9, 2026-07-01): two builds,
+# three PRs, all draft-track only (stable `latest` unchanged at 0.1.16).
 #  * #376 (alpha.9) fixed sep-2575-server-rejects-undeclared-capability: the
 #    tool now asserts error.data.requiredCapabilities as the schema's
-#    ClientCapabilities OBJECT ({"sampling":{}}) instead of a string array —
-#    exactly what the SDK has always emitted. That check now SUCCEEDS. This
-#    was the long-standing "upstream tool bug" server-stateless entry; it is
-#    resolved upstream (the SEP-2484 candidate the prior baseline named).
+#    ClientCapabilities OBJECT ({"sampling":{}}) — exactly what the SDK has
+#    always emitted. That check now SUCCEEDS.
 #  * #371 (alpha.8) fixed the http-custom-headers fixture to use
-#    spec-permitted x-mcp-header types (priority number->integer, float_val
-#    annotation dropped). The SDK's spec-faithful rejection of number-typed
-#    x-mcp-header now passes: http-custom-headers is 18/18 and LEFT this
-#    baseline (was flagged as a stale entry until removed).
+#    spec-permitted x-mcp-header types; the SDK's spec-faithful rejection of
+#    number-typed x-mcp-header now passes 18/18 and LEFT this baseline.
 #  * #372 (alpha.8) changed missing-prerequisite checks from SKIPPED to a
-#    hard "Not testable" FAILURE. This did NOT break any Tasks scenario (the
-#    fixtures are present), but it converted one previously-skipped
-#    server-stateless check into a failure — see the rewritten
-#    server-stateless entry below. It is the reason server-stateless remains
-#    a one-failure entry (a DIFFERENT failure than before the bump).
+#    hard "Not testable" FAILURE — the origin of the current server-stateless
+#    entry below.
 #
 # Prior pin history (0.2.0-alpha.2 -> 0.2.0-alpha.7, 2026-06-27):
 #  * alpha.5 (#353) adopted the SEP-2907 draft error-code renumber —
@@ -50,8 +66,8 @@
 #    unsupported-version); the SDK already satisfies these.
 #  * alpha.3 (#331) retired the RC-window DRAFT-2026-v1 wire identifier and
 #    alpha.5 (#347) made the hand-rolled client-direction mocks answer
-#    server/discover — the two changes behind the json-schema-ref-no-deref
-#    and request-metadata client entries below.
+#    server/discover — the changes behind the json-schema-ref-no-deref entry
+#    below (and the since-cleared request-metadata entry above).
 #
 # WS4 Tasks extension (SEP-2663) scenario gating note (re-verified
 # 2026-07-01 @ alpha.9 — #372's skip->fail change did NOT break any Tasks
@@ -74,47 +90,58 @@
 #  tests. Re-evaluate at WS7 convergence.
 
 server:
-  # --- One upstream tool bug (NEW root cause at alpha.9; see history below) ---
+  # --- Fixture-contract mismatch (root cause re-verified 2026-07-03) ---
   - server-stateless
-    # 27/28 checks pass at alpha.9 (up from 26/27 at alpha.7). The prior
-    # failing check — sep-2575-server-rejects-undeclared-capability, the
-    # requiredCapabilities string-array-vs-object tool bug — was FIXED
-    # upstream by #376 (alpha.9) and now SUCCEEDS: the tool asserts the
-    # ClientCapabilities OBJECT ({"sampling": {}}) the SDK has always emitted.
-    #
-    # The one remaining failing check is NOW a DIFFERENT one:
-    # sep-2575-http-server-no-independent-requests-on-stream (UPSTREAM TOOL
-    # BUG introduced by #372, alpha.8; not pursued in the SDK). Root cause,
-    # verified against the tool's vendored scenario source
-    # (node_modules/conformance-draft/dist/index.js, class server-stateless):
-    # the scenario builds ONE generic request _meta with
+    # 27/28 checks pass at alpha.9. The one failing check is
+    # sep-2575-http-server-no-independent-requests-on-stream: the scenario
+    # builds ONE generic request _meta with
     #   "io.modelcontextprotocol/clientCapabilities": {}   (empty)
-    # and reuses it for every probe. This check drives the streaming probe by
-    # calling tools/call name=test_streaming_elicitation with those EMPTY
-    # capabilities. That fixture legitimately requires the elicitation
-    # capability, so the SDK — per SEP-2575 — MUST reject the call with
-    # -32021 MissingRequiredClientCapability (the very behavior the sibling
-    # check sep-2575-server-rejects-undeclared-capability REWARDS two checks
-    # earlier, using test_missing_capability/sampling). Before #372 this
-    # unexercisable check reported SKIPPED; #372 removed that escape hatch and
-    # now scores it as a hard "Not testable" FAILURE:
-    #   "the 'test_streaming_elicitation' call was rejected (code -32021), so
-    #    the response stream could not be exercised".
-    # The probe never declares the elicitation capability its own fixture
-    # needs, so a spec-correct capability-enforcing server cannot pass it as
-    # written. The only ways to "pass" would be to (a) strip the capability
-    # requirement from the fixture — an engineered workaround that defeats the
-    # fixture's purpose (demonstrating SEP-2322 elicitation-as-InputRequiredResult,
-    # never a server-initiated stream request) and violates the no-shortcuts
-    # rule, or (b) stop enforcing capability declaration — a spec violation
-    # that would fail sep-2575-server-rejects-undeclared-capability. Official
-    # text wins: the SDK keeps the spec-mandated -32021 and this check stays
-    # an expected failure until fixed upstream. Strong SEP-2484 candidate:
-    # the stream probe should declare the elicitation capability (or the
-    # fixture contract should be a capability-free streaming diagnostic).
-    # Re-check at the next pin bump. The companion capability checks
-    # (sep-2575-server-rejects-undeclared-capability,
-    # sep-2575-missing-capability-http-400) both pass.
+    # and reuses it for every probe, including a tools/call against our
+    # test_streaming_elicitation fixture. Our fixture ELICITS
+    # (everything-server.php registers it with ElicitationContext), so the
+    # SDK — enforcing the spec's capability MUSTs ("A server MUST NOT rely
+    # on capabilities the client has not declared ... MUST return
+    # MissingRequiredClientCapabilityError (-32021)", draft
+    # basic/index.mdx §_meta) — rejects the empty-capabilities call, and
+    # since tool #372 (alpha.8) turned unexercisable checks from SKIPPED
+    # into hard failures, the stream probe scores "Not testable".
+    #
+    # Cross-checked 2026-07-03 against upstream sources: the scenario's
+    # documentation NEVER requires this fixture to elicit — only the tool's
+    # NAME suggests it. Three upstream sources agree the intended contract
+    # is a plain (non-eliciting) streaming diagnostic:
+    #  * The check's own logic fails any stream frame carrying a top-level
+    #    request, and an MRTR InputRequiredResult ends the call without
+    #    exercising the stream — an eliciting fixture cannot satisfy the
+    #    check under ANY capability declaration.
+    #  * The conformance repo's own reference server
+    #    (examples/servers/typescript/everything-server.ts) implements
+    #    test_streaming_elicitation as progress-notification + final result
+    #    ("Diagnostic tool validating response progress streams") — it does
+    #    not elicit.
+    #  * The TypeScript SDK's conformance fixture does the same, commenting
+    #    "It must not elicit (the scenario declares no `elicitation`
+    #    capability); the referee's own reference server does not elicit
+    #    here either" — and passes server-stateless 28/28 at alpha.9.
+    # The SDK's capability enforcement is spec-correct and unchanged (the
+    # sibling checks sep-2575-server-rejects-undeclared-capability and
+    # sep-2575-missing-capability-http-400 reward it and pass).
+    #
+    # NOT RESOLVED YET — held for upstream clarification (a judgment call,
+    # not a committed plan): the fixture contract is ambiguous upstream
+    # (documented only by the check code and the reference server's
+    # behavior, never in the scenario text), and our eliciting fixture
+    # demonstrates real spec behavior (SEP-2322 elicitation-as-
+    # InputRequiredResult under capability enforcement). Rewriting it as a
+    # non-eliciting streaming diagnostic would clear this entry with no SDK
+    # change and match the reference implementations, but other SDKs
+    # matching each other is not the same as the contract being settled —
+    # PR #383 + issue #382 (filed 2026-07-02, proposing the probe declare
+    # the elicitation capability) put exactly this question to the
+    # maintainers: declare the capability on the probe, or document the
+    # fixture as deliberately capability-free. Await their answer (they may
+    # well point at their reference server's non-eliciting implementation)
+    # before touching the fixture. Re-check at the next pin bump.
     #
     # The two SHOULD-level warnings (prompts/tools list_changed delivered
     # to an open subscriptions/listen stream) pass only where PHP's CLI
@@ -125,45 +152,95 @@ server:
 
   # --- SEP-2663 Tasks: synchronous-execution-model behavioral choice ---
   - tasks-mrtr-composition
-    # INTENTIONAL MODEL CHOICE, not a bug (both behaviors are spec-permitted):
-    # the scenario's one check, sep-2663-mrtr-synchronous-before-task-creation,
-    # mandates that a task-augmented tool gather client input via an MRTR loop
-    # on tools/call (round 1 = InputRequiredResult with NO taskId) and only
-    # CREATE the task on the final round (round 2 = CreateTaskResult). The SDK
-    # uses the complementary spec mechanism instead: a task-augmented tool
-    # creates the handle immediately and surfaces input requests IN-TASK via
-    # the tasks/get `inputRequests` map answered by tasks/update (SEP-2663's
-    # input-during-a-task path), which the sibling scenario tasks-mrtr-input
-    # exercises and the SDK passes 3/3. The two patterns are mutually
-    # exclusive for a single tool, and the shared-hosting synchronous
-    # execution model (the SDK runs the tool body within the creating request
-    # rather than as a background worker) makes "gather input, THEN start
-    # long-running task work" indistinguishable from in-task input — so the
-    # SDK implements the single coherent in-task model. Of the other nine
-    # SEP-2663 scenarios, eight pass and tasks-status-notifications is skipped
-    # by the tool (0 checks, pending its subscriptions/listen rewrite).
-    # Re-evaluate at WS7 convergence; candidate for an upstream note that both
-    # sequences are conformant (SEP-2484).
+    # INTENTIONAL MODEL CHOICE, not a bug — verified 2026-07-03 against the
+    # ext-tasks spec and SEP-2663 text that both behaviors are
+    # spec-permitted:
+    #  * The only normative sentence on the composition is a CONDITIONAL
+    #    SHOULD about ordering, not mechanism choice: "Server
+    #    implementations THAT USE multi round-trip requests in conjunction
+    #    with task creation ... SHOULD resolve all MRTR exchanges
+    #    synchronously before responding with a CreateTaskResult"
+    #    (ext-tasks specification/draft/tasks.md §Task Creation).
+    #  * SEP-2663's rationale is explicitly permissive: a tool "MAY use
+    #    them sequentially", and "prohibiting this would require imposing
+    #    an artificial constraint".
+    #  * The spec's before/during division ("a server that needs client
+    #    input BEFORE returning a CreateTaskResult uses the MRTR flow ...
+    #    input DURING task execution uses inputRequests/inputResponses")
+    #    is descriptive, not RFC-2119 — and it presumes an execution model
+    #    where task creation and work-start are separable moments.
+    # The scenario's one check, sep-2663-mrtr-synchronous-before-task-
+    # creation, operationalizes that descriptive sentence as mandatory:
+    # its fixture contract requires round 1 = InputRequiredResult with NO
+    # taskId and round 2 = CreateTaskResult. The SDK instead creates the
+    # handle immediately and surfaces input requests IN-TASK via the
+    # tasks/get `inputRequests` map answered by tasks/update — the sibling
+    # scenario tasks-mrtr-input exercises this path and the SDK passes
+    # 3/3. The two patterns are mutually exclusive for a single tool, and
+    # under the shared-hosting synchronous execution model (the tool body
+    # runs within the creating request) the task exists before the body
+    # runs, so pre-work input IS in-task input; handle-first is also
+    # strictly more durable here (an interrupted MRTR exchange loses its
+    # wire-held requestState; an interrupted in-task exchange survives via
+    # tasks/get). No reference-SDK comparison exists: TypeScript and
+    # Python both baseline ALL nine runnable SEP-2663 scenarios (extension
+    # not implemented) as of their 2026-07 v2 betas. Of the other nine
+    # scenarios, eight pass and tasks-status-notifications is skipped by
+    # the tool (0 checks, pending its subscriptions/listen rewrite).
+    # Upstream ask (SEP-2484 candidate): clarify that both spec-permitted
+    # sequences are conformant. Re-evaluate at WS7 convergence, and again
+    # if a reference SDK ships Tasks with the composition.
 
 client:
-  # --- Issuer-binding drift (re-checked at alpha.7: unchanged) ---
+  # --- Issuer-binding strictness (root cause re-verified 2026-07-03) ---
   - auth/pre-registration
-    # UPSTREAM SPEC/TOOL DRIFT, not pursued in the SDK: the 2026-07-28
-    # draft's Authorization Server Binding rule requires pre-registered
-    # credentials to be keyed by the issuer that registered them ("MUST
-    # associate those credentials with the specific authorization server
-    # that issued them, keyed by the authorization server's `issuer`
-    # identifier"), but the pinned 0.2.0-alpha.7 tool still supplies only
-    # {client_id, client_secret} as scenario context — no issuer — even
-    # though the AS URL is known when the context is built. The SDK's
-    # draft-default is mandatory issuer binding, so the draft-track
-    # everything-client (spawned with --track=draft) correctly refuses to
-    # send a token request with unbound credentials and the scenario's
-    # pre-registration-auth check fails ("Client did not make a token
-    # request"; 2/3 checks pass). The stable track still passes 14/14 —
-    # there the published 2025-11-25 spec has no binding rule and the
-    # everything-client opts into the SDK's explicit
-    # allowUnboundClientCredentials legacy compatibility.
+    # STRICT-READING DIVERGENCE, pending a deliberate decision: the
+    # 2026-07-28 draft's Authorization Server Binding rule says clients
+    # using pre-registered credentials "MUST associate those credentials
+    # with the specific authorization server that issued them, keyed by
+    # the authorization server's `issuer` identifier"
+    # (basic/authorization/client-registration.mdx). The scenario supplies
+    # only {client_id, client_secret} as context — no issuer
+    # (conformance src/scenarios/client/auth/pre-registration.ts). The
+    # SDK's draft-default is MANDATORY binding
+    # (OAuthConfiguration::$allowUnboundClientCredentials = false), so the
+    # draft-track everything-client refuses to send a token request with
+    # unbound credentials and the pre-registration-auth check fails
+    # ("Client did not make a token request"; 2/3 checks pass). The stable
+    # track still passes 14/14 — there the published 2025-11-25 spec has
+    # no binding rule and the everything-client opts into
+    # allowUnboundClientCredentials.
+    #
+    # Cross-checked 2026-07-03: the spec is SILENT on credentials with no
+    # recorded issuer (the MUSTs govern association, storage keying, and
+    # cross-AS reuse — verified absence of any acceptance/refusal rule for
+    # the unbound case), and both reference SDKs read the rule as "enforce
+    # a binding only when one is recorded":
+    #  * TypeScript: trust-on-first-use — an unstamped credential is USED
+    #    with a one-time console.warn, then back-stamped with the first
+    #    resolved issuer; the typed mismatch error fires only when a
+    #    recorded issuer names a DIFFERENT AS
+    #    (packages/client/src/client/auth.ts, discardIfIssuerMismatch()).
+    #  * Python: unbound credentials "carry no binding to enforce" — used
+    #    silently, never stamped (src/mcp/client/auth/utils.py,
+    #    credentials_match_issuer(): `if client_info.issuer is None:
+    #    return True`).
+    #  * Upstream position: conformance issue #285 (closed) deems the
+    #    key-by-issuer state requirements "not protocol-observable"; the
+    #    MUST is tested via the separate auth/authorization-server-
+    #    migration scenario (PR #286), whose enforcement path this SDK's
+    #    recorded-binding checks satisfy.
+    # The strict default remains DEFENSIBLE for this SDK (a fresh PHP-FPM
+    # process starts unpinned, so TS-style in-memory first-use pinning is
+    # weaker here — see the OAuthConfiguration docblock), but it is
+    # stricter than both reference SDKs and than the surface upstream
+    # tests. RESOLUTION OPTIONS (human decision, not changed silently):
+    # (a) adopt trust-on-first-use as the draft default, keeping strict
+    # refusal as an opt-in; or (b) keep the strict default and opt the
+    # draft-track everything-client into allowUnboundClientCredentials,
+    # mirroring the stable track. Optional upstream ask: the scenario
+    # could supply the issuer it already knows when building context so
+    # strict clients are testable (no existing issue covers this).
     #
     # NOTE: --suite draft selects only DRAFT-2026-v1-exclusive scenarios,
     # and auth/pre-registration is tagged [2025-11-25, DRAFT-2026-v1], so
@@ -172,11 +249,7 @@ client:
     # gate (see DRAFT_CLIENT_EXTRA_SCENARIOS) so this entry is actually
     # evaluated — otherwise a stale entry would pass CI silently. Keep
     # DRAFT_CLIENT_EXTRA_SCENARIOS in sync with any client entry here that
-    # falls outside the draft suite. Re-check at every draft-pin bump:
-    # expect upstream to either add issuer context to the scenario or
-    # assert the strict refusal. Candidate for an upstream issue per
-    # SEP-2484. See the upstream drift record in
-    # docs/v2-development-plan.md (WS3).
+    # falls outside the draft suite. Re-check at every draft-pin bump.
 
   # (CLEARED at 0.2.0-alpha.9) http-custom-headers — upstream PR #371
   # (alpha.8) fixed the fixture to use spec-permitted x-mcp-header types
@@ -186,56 +259,64 @@ client:
   # http-invalid-tool-headers (11/11) and http-custom-header-server-validation
   # (server track, 9/9) continue to pass.
 
-  # --- Two upstream-drift entries surfaced by the alpha.3/alpha.5 changes
-  #     (carried over the alpha.7 bump; unchanged at alpha.9) ---
+  # --- Upstream mock inconsistency (root cause re-verified 2026-07-03) ---
   - json-schema-ref-no-deref
-    # UPSTREAM TOOL INCONSISTENCY, not pursued in the SDK: alpha.5 (#347)
-    # made this scenario's hand-rolled mock answer server/discover, but the
-    # mock routes actual method calls through the TypeScript SDK's STATEFUL
-    # StreamableHTTPServerTransport, which only supports <=2025-11-25. Its
-    # discover therefore advertises supportedVersions:["2026-07-28"] while
-    # its transport rejects a 2026-07-28 request with
-    #   -32000 "Bad Request: Unsupported protocol version: 2026-07-28
-    #   (supported versions: 2025-11-25, 2025-06-18, ...)"
-    # The PHP client is spec-correct: in protocolMode 'auto' it probes
-    # server/discover, the probe SUCCEEDS, so it adopts the advertised
-    # 2026-07-28 and sends an enveloped tools/list — which the mock's own
-    # transport then 400s (verified: client log shows discover ->
-    # supportedVersions:["2026-07-28"] -> tools/list -> HTTP 400 -32000).
-    # At alpha.2 the same mock did NOT answer discover, so the auto client
-    # fell back to the legacy handshake and the scenario passed (it had
-    # left the WS1 baseline). The SEP-2106 behavior the scenario actually
-    # tests (no network $ref dereference, 2020-12 schema pass-through) is
-    # version-independent and unchanged in the SDK. Re-check at the next
-    # pin bump; candidate for an upstream scenario fix per SEP-2484 (a
-    # draft mock should serve a 2026-07-28-capable transport, or not
-    # advertise a version its transport rejects).
+    # UPSTREAM MOCK BUG, unreported as of 2026-07-03 (searched the
+    # conformance repo for issues/PRs; #347 introduced the discover shim
+    # without aligning the transport — WORTH FILING): the scenario's mock
+    # (src/scenarios/client/json-schema-ref-deref.ts) special-cases
+    # server/discover to advertise supportedVersions:["2026-07-28"], but
+    # routes every other request through the bundled TypeScript SDK v1
+    # (^1.29.0, SUPPORTED_PROTOCOL_VERSIONS topping out at 2025-11-25),
+    # whose STATEFUL transport 400s any request stamped
+    # MCP-Protocol-Version: 2026-07-28 with -32000. A client that obeys
+    # the discover response cannot then call tools/list. The PHP client in
+    # protocolMode 'auto' probes discover, the probe SUCCEEDS, so it
+    # adopts the advertised 2026-07-28 and sends an enveloped tools/list —
+    # which the mock's own transport rejects (verified: client log shows
+    # discover -> supportedVersions:["2026-07-28"] -> tools/list -> HTTP
+    # 400 -32000). The draft spec has no rule for "discover advertised X
+    # but the server rejects X", and its generic rules forbid the only
+    # escape: a recognized modern error identifies a modern server and the
+    # client retries with an advertised version "rather than falling back"
+    # (versioning.mdx §Backward Compatibility) — but the advertised
+    # version IS the rejected one, via a non--32022 error.
+    #
+    # Cross-checked 2026-07-03: NEITHER reference SDK survives this mock
+    # generically — both sidestep it per-scenario in their conformance
+    # harnesses, which is the sanctioned pattern:
+    #  * TypeScript: client negotiation defaults to 'legacy' (no discover
+    #    probe), and the scenario handler in
+    #    test/conformance/src/everythingClient.ts deliberately does not
+    #    opt into 'auto' — it never sees the misleading advertisement. TS
+    #    docs its probe classifier as never demoting an established
+    #    modern connection, so a TS 'auto' client would fail identically.
+    #  * Python: client defaults to 'auto', so its handler PINS
+    #    mode="legacy" with a docstring describing this exact flaw: "its
+    #    mock server only speaks the handshake-era lifecycle and 400s a
+    #    modern-stamped tools/list. The check is lifecycle-agnostic so
+    #    this is harmless" (.github/actions/conformance/client.py).
+    # The SEP-2106 behavior the scenario actually tests (no network $ref
+    # dereference, 2020-12 schema pass-through) is version-independent
+    # and unchanged in the SDK.
+    #
+    # NOT RESOLVED YET — held as a judgment call: pinning the
+    # json-schema-ref-no-deref handler in everything-client.php to the
+    # legacy handshake would clear this entry with no SDK change and match
+    # the reference harnesses, but it also means deliberately steering the
+    # client AROUND the mock's advertised modern path, and the reference
+    # SDKs having done so does not settle whether that is the sanctioned
+    # contract or two harnesses working around the same unreported bug.
+    # Preferred sequence: file the upstream issue for the
+    # discover-vs-transport inconsistency first (none exists as of
+    # 2026-07-03) and let the fix or the maintainers' guidance determine
+    # whether a harness-side legacy pin is appropriate in the interim. The
+    # SDK's 'auto' behavior stays as-is: it is the spec-faithful reading of
+    # a successful discover response. Re-check at the next pin bump (a
+    # future bundled-SDK bump adding 2026-07-28 support would also clear
+    # it upstream).
 
-  - request-metadata
-    # UPSTREAM SCENARIO DEGENERACY from the DRAFT-2026-v1 retirement, not
-    # pursued in the SDK: the mock simulates a one-time first-request
-    # rejection to exercise the SHOULD-level retry check
-    # (sep-2575-client-retry-supported-version) — it rejects the client's
-    # first probe with -32022 UnsupportedProtocolVersion and expects a
-    # retry using a version from data.supported. At alpha.2 the mock
-    # advertised supported:["DRAFT-2026-v1"], a DISTINCT identifier from
-    # the client's first attempt (2026-07-28), so the SDK adopted it and
-    # retried and the scenario passed (it had left the WS3 baseline).
-    # alpha.3 (#331) retired DRAFT-2026-v1; the alpha.7 mock now rejects
-    # the 2026-07-28 probe while advertising supported:["2026-07-28"] — the
-    # SAME version just attempted (verified: client log shows discover ->
-    # -32022 data.supported:["2026-07-28"] requested:"2026-07-28"). The
-    # SDK's negotiate() excludes already-attempted versions from the retry
-    # (an infinite-loop guard: a server that rejects version X cannot
-    # honestly advertise ONLY X), so pickAdvertisedModernVersion() returns
-    # null and negotiate() throws rather than re-sending the identical
-    # rejected version. The retry check stays WARNING (it never fails), but
-    # the thrown connection crashes the everything-client, so the tool
-    # flags the scenario. The SDK behavior is spec-defensible (do not loop
-    # on an identical rejected version; SEP-2575 forbids falling back to
-    # initialize from a modern server). Re-check at the next pin bump and at
-    # WS7 convergence: expect upstream to restore a distinct retry version
-    # or settle DRAFT-2026-v1's replacement. Whether the SDK should retry an
-    # already-attempted-but-advertised version exactly once is a
-    # spec-clarification question flagged for human/upstream review
-    # (SEP-2484), deliberately NOT changed silently here.
+  # (CLEARED at pin 0.2.0-alpha.9, 2026-07-03, via SDK FIX) request-metadata
+  # — see the clearance note in the header: negotiate() now performs the
+  # spec's select-and-continue corrective retry exactly once, same version
+  # permitted, matching the TypeScript and Python reference clients.

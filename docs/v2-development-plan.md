@@ -1362,6 +1362,38 @@ re-send it). `http-custom-headers` stays an expected failure until alpha.8
 (issuer binding) unchanged. Whether the SDK should retry an
 already-attempted-but-advertised version once (the `request-metadata`
 question) is flagged for human/upstream review, not changed silently.
+**Update (2026-07-03, draft baseline 5 → 4):** the `request-metadata`
+question above is RESOLVED — yes, retry once. Verified against three
+sources: the draft's retry rule is an unconditional select-and-continue
+SHOULD with no already-attempted exclusion anywhere in the text; the
+reference TypeScript client's corrective continuation "runs exactly once
+(even when the mutual version equals the just-rejected one)"
+(`versionNegotiation.ts`, one-shot guard) and the Python client matches
+(`_probe.py`, `attempt == 0`); and conformance issue #280 documents the
+same-version transient rejection as the scenario's intended design.
+`ClientSession::negotiate()` now performs exactly one corrective `-32022`
+retry (same version permitted) and throws on a second rejection;
+`pickAdvertisedModernVersion()` dropped its attempted-versions exclusion
+(`sendRequest()`'s adopt-and-retry was already structurally once-only).
+Covered by three new `ClientNegotiationTest` tests; `composer check`
+green; `request-metadata` now passes 4/4 and left the draft baseline;
+stable track re-verified regression-free (40 server + 325 client). The
+remaining four draft-baseline entries' root causes were re-verified the
+same day against the reference SDKs, the draft spec text, and the tool
+source, and their baseline comments rewritten to stand alone — including
+the new finding that the `server-stateless` fixture contract for
+`test_streaming_elicitation` appears to be non-eliciting upstream (the
+referee's own reference server and the TS SDK fixture both stream without
+eliciting). That finding identifies a possible fixture-alignment exit
+path for the entry, but whether to take it — versus the
+capability-declaration fix proposed in upstream PR #383 / issue #382
+(filed 2026-07-02) — is deliberately held for the maintainers' answer:
+the fixture contract is undocumented upstream, and reference SDKs
+matching each other does not settle it. The same posture applies to the
+`json-schema-ref-no-deref` harness accommodation used by the reference
+SDKs (a per-scenario legacy pin): candidate remedy, not adopted without
+upstream clarification. Only the `request-metadata` SDK fix — grounded
+in normative spec text — was applied.
 
 **Completion criteria**
 

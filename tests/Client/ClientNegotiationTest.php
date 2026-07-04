@@ -264,6 +264,77 @@ final class ClientNegotiationTest extends TestCase
     }
 
     /**
+     * -32022 advertising the SAME version just attempted: the spec's
+     * select-and-continue rule ("SHOULD select a mutually supported
+     * version from the `supported` list and retry") has no
+     * already-attempted exclusion, and a server may reject transiently —
+     * the reference TypeScript and Python clients both re-send the
+     * identical advertised version exactly once. The probe is retried
+     * with the same identifier and succeeds.
+     */
+    public function testUnsupportedVersionRetriesSameAdvertisedVersionOnce(): void
+    {
+        $readStream = new MemoryStream();
+        $writeStream = new MemoryStream();
+        $readStream->send($this->error(0, McpError::UNSUPPORTED_PROTOCOL_VERSION, 'Unsupported protocol version', [
+            'supported' => ['2026-07-28'],
+            'requested' => '2026-07-28',
+        ]));
+        $readStream->send($this->response(1, $this->discoverResultData(['2026-07-28'])));
+        $readStream->send($this->response(2, ['tools' => []]));
+
+        $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
+        $era = $session->negotiate();
+
+        $this->assertSame('modern', $era);
+        $this->assertSame('2026-07-28', $session->getModernWireVersion());
+
+        $session->listTools();
+
+        $wire = $this->sentWire($writeStream);
+        $this->assertCount(3, $wire, 'Probe, one same-version corrective retry, then the ready session');
+        $this->assertSame('server/discover', $wire[0]['method']);
+        $this->assertSame('server/discover', $wire[1]['method']);
+        $this->assertSame(
+            '2026-07-28',
+            $wire[1]['params']['_meta'][MetaKeys::PROTOCOL_VERSION],
+            'The corrective retry re-sends the advertised (identical) version'
+        );
+        $this->assertSame('tools/list', $wire[2]['method']);
+    }
+
+    /**
+     * The corrective continuation runs exactly once: a second -32022 —
+     * even one advertising a mutually supported version — propagates
+     * instead of looping, and initialize is never sent (a -32022 proved
+     * the server modern, so falling back is forbidden).
+     */
+    public function testSecondUnsupportedVersionStopsAfterOneCorrectiveRetry(): void
+    {
+        $readStream = new MemoryStream();
+        $writeStream = new MemoryStream();
+        $rejection = ['supported' => ['2026-07-28'], 'requested' => '2026-07-28'];
+        $readStream->send($this->error(0, McpError::UNSUPPORTED_PROTOCOL_VERSION, 'Unsupported protocol version', $rejection));
+        $readStream->send($this->error(1, McpError::UNSUPPORTED_PROTOCOL_VERSION, 'Unsupported protocol version', $rejection));
+
+        $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
+
+        try {
+            $session->negotiate();
+            $this->fail('Expected McpError');
+        } catch (McpError $e) {
+            $this->assertSame(McpError::UNSUPPORTED_PROTOCOL_VERSION, $e->error->code);
+        }
+
+        $wire = $this->sentWire($writeStream);
+        $this->assertCount(2, $wire, 'Probe plus exactly one corrective retry, then hard stop');
+        foreach ($wire as $sent) {
+            $this->assertNotSame('initialize', $sent['method'], 'Spec: never fall back after -32022');
+        }
+        $this->assertFalse($session->isModernMode());
+    }
+
+    /**
      * The other recognized modern errors (-32021 missing capability,
      * -32020 header mismatch) identify a modern server: they are
      * re-thrown, and the fallback is provably NOT triggered.
@@ -539,6 +610,41 @@ final class ClientNegotiationTest extends TestCase
         }
         $this->assertCount(1, $this->sentWire($writeStream), 'No retry without an advertised list');
         $this->assertSame(Version::LATEST_PROTOCOL_VERSION, $session->getModernWireVersion(), 'No adoption');
+    }
+
+    /**
+     * Forced-modern same-version recovery: a -32022 on the first real
+     * request whose data.supported names the CURRENT wire version is a
+     * transient-rejection shape — the request is retried exactly once
+     * with the identical version rather than propagating the error.
+     */
+    public function testForcedModernRetriesSameAdvertisedVersionOnce(): void
+    {
+        $readStream = new MemoryStream();
+        $writeStream = new SnapshotWriteStream();
+        $readStream->send($this->error(0, McpError::UNSUPPORTED_PROTOCOL_VERSION, 'Unsupported protocol version', [
+            'supported' => ['2026-07-28'],
+            'requested' => '2026-07-28',
+        ]));
+        $readStream->send($this->response(1, ['tools' => []]));
+
+        $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
+        $session->negotiate('modern');
+
+        $result = $session->listTools();
+        $this->assertSame([], $result->tools);
+        $this->assertSame('2026-07-28', $session->getModernWireVersion(), 'Same version kept');
+
+        $wire = $writeStream->wire;
+        $this->assertCount(2, $wire, 'Original request plus exactly one same-version retry');
+        $this->assertSame('tools/list', $wire[0]['method']);
+        $this->assertSame('tools/list', $wire[1]['method']);
+        $this->assertSame(
+            '2026-07-28',
+            $wire[1]['params']['_meta'][MetaKeys::PROTOCOL_VERSION],
+            'The retry envelope carries the same advertised version'
+        );
+        $this->assertNotSame($wire[0]['id'], $wire[1]['id'], 'Fresh JSON-RPC id on the retry');
     }
 
     /**

@@ -443,9 +443,13 @@ class ClientSession extends BaseSession {
      *    revision. Success → modern; the session is immediately ready and
      *    every subsequent request carries the per-request `_meta` envelope.
      * 2. On UnsupportedProtocolVersionError (-32022), the server is
-     *    modern: retry with a version from its advertised
-     *    `data.supported` list. Never fall back to `initialize` — when no
-     *    advertised version is mutually supported, fail.
+     *    modern: retry exactly once with a version from its advertised
+     *    `data.supported` list — the advertised version may equal the
+     *    one just rejected (a transient rejection; the spec's
+     *    select-and-continue rule has no already-attempted exclusion).
+     *    Never fall back to `initialize` — when no advertised version is
+     *    mutually supported, or a second -32022 arrives after the
+     *    corrective retry, fail.
      * 3. On the other recognized modern errors (-32020 HeaderMismatch,
      *    -32021 MissingRequiredClientCapability), the server is modern;
      *    the error is re-thrown rather than treated as an era signal.
@@ -505,11 +509,10 @@ class ClientSession extends BaseSession {
         }
 
         $fallbackReason = null;
-        $attempted = [];
+        $correctiveRetryUsed = false;
         $version = $preferredVersion ?? Version::LATEST_PROTOCOL_VERSION;
 
         while (true) {
-            $attempted[] = $version;
             try {
                 $discovery = $this->probeDiscover($version, $probeTimeout);
                 $this->enterModernMode($version, $discovery);
@@ -521,8 +524,16 @@ class ClientSession extends BaseSession {
             } catch (\Mcp\Shared\McpError $e) {
                 $code = $e->error->code;
                 if ($code === \Mcp\Shared\McpError::UNSUPPORTED_PROTOCOL_VERSION) {
-                    $retry = $this->pickAdvertisedModernVersion($e->error->data, $attempted);
+                    if ($correctiveRetryUsed) {
+                        // Second -32022: the single corrective retry is
+                        // spent — stop rather than loop on a server that
+                        // keeps rejecting versions it advertises. The
+                        // server proved itself modern, so never fall back.
+                        throw $e;
+                    }
+                    $retry = $this->pickAdvertisedModernVersion($e->error->data);
                     if ($retry !== null) {
+                        $correctiveRetryUsed = true;
                         $this->logger->info("Server rejected version {$version} (-32022); retrying with advertised version {$retry}");
                         $version = $retry;
                         continue;
@@ -591,13 +602,16 @@ class ClientSession extends BaseSession {
     }
 
     /**
-     * Pick the retry version after a -32022: the first identifier from
-     * this client's modern list (in preference order) that the server
-     * advertised in data.supported and that has not been attempted yet.
-     *
-     * @param string[] $attempted Wire identifiers already probed
+     * Pick the corrective retry version after a -32022: the first
+     * identifier from this client's modern list (in preference order)
+     * that the server advertised in data.supported. The advertised
+     * version may equal the one just rejected — the spec's
+     * select-and-continue rule has no already-attempted exclusion, and
+     * a server may reject transiently. Loop protection is the callers'
+     * responsibility: each retry path allows exactly one corrective
+     * retry, then propagates further rejections.
      */
-    private function pickAdvertisedModernVersion(mixed $errorData, array $attempted): ?string {
+    private function pickAdvertisedModernVersion(mixed $errorData): ?string {
         if ($errorData instanceof \stdClass) {
             $errorData = (array) $errorData;
         }
@@ -606,7 +620,7 @@ class ClientSession extends BaseSession {
             return null;
         }
         foreach (Version::MODERN_PROTOCOL_VERSIONS as $candidate) {
-            if (in_array($candidate, $supported, true) && !in_array($candidate, $attempted, true)) {
+            if (in_array($candidate, $supported, true)) {
                 return $candidate;
             }
         }
@@ -670,11 +684,12 @@ class ClientSession extends BaseSession {
      * request with UnsupportedProtocolVersionError (-32022) carrying a
      * `data.supported` list — most notably the FIRST real request of a
      * forced-modern session, which never probed. When the list contains a
-     * mutually supported version, the session adopts it (every subsequent
-     * envelope and mirrored MCP-Protocol-Version header switches) and the
-     * request is retried exactly once; a second -32022 propagates. Errors
-     * without a usable advertised list propagate unchanged, as does
-     * everything on the legacy path.
+     * mutually supported version — possibly the current one (a transient
+     * rejection) — the session adopts it (every subsequent envelope and
+     * mirrored MCP-Protocol-Version header switches) and the request is
+     * retried exactly once; a second -32022 propagates. Errors without a
+     * usable advertised list propagate unchanged, as does everything on
+     * the legacy path.
      *
      * @template T of Result
      * @param class-string<T> $resultType
@@ -689,7 +704,7 @@ class ClientSession extends BaseSession {
             ) {
                 throw $e;
             }
-            $retry = $this->pickAdvertisedModernVersion($e->error->data, [$this->modernWireVersion]);
+            $retry = $this->pickAdvertisedModernVersion($e->error->data);
             if ($retry === null) {
                 throw $e;
             }

@@ -486,6 +486,20 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 
 ### Fixed
 
+- `ClientSession::negotiate()` now performs the spec's select-and-continue
+  corrective retry after `-32022 UnsupportedProtocolVersion` exactly once,
+  with the advertised version permitted to equal the one just rejected (a
+  transient-rejection shape a server may legitimately produce); a second
+  `-32022` propagates instead of looping. Previously the retry guard
+  excluded every already-attempted version, which is stricter than the
+  draft spec's retry rule (no already-attempted exclusion exists in the
+  text) and stricter than the reference TypeScript and Python clients
+  (both re-send the identical advertised version once, then hard-stop).
+  `pickAdvertisedModernVersion()` dropped its attempted-versions
+  parameter; `sendRequest()`'s adopt-and-retry keeps its structural
+  retry-once semantics and now also recovers from a same-version transient
+  rejection. Clears the `request-metadata` scenario from the draft
+  conformance baseline.
 - The stdio server now detects EOF on stdin and shuts down cleanly instead
   of busy-waiting forever (issue #61). Per the MCP lifecycle, a client
   initiates stdio shutdown by closing the server's stdin and *waiting for
