@@ -4,7 +4,7 @@
 [![MCP Conformance](https://github.com/logiscape/mcp-sdk-php/actions/workflows/conformance.yml/badge.svg)](https://github.com/logiscape/mcp-sdk-php/actions/workflows/conformance.yml)
 
 > [!NOTE]
-> **This `main` branch contains the pre-alpha v2 of the logiscape/mcp-sdk-php SDK.**
+> **This `main` branch contains the v2 beta of the logiscape/mcp-sdk-php SDK.**
 >
 > For the stable v1 code and documentation, see the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x).
 

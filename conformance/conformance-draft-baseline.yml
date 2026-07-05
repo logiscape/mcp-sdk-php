@@ -251,14 +251,6 @@ client:
     # DRAFT_CLIENT_EXTRA_SCENARIOS in sync with any client entry here that
     # falls outside the draft suite. Re-check at every draft-pin bump.
 
-  # (CLEARED at 0.2.0-alpha.9) http-custom-headers — upstream PR #371
-  # (alpha.8) fixed the fixture to use spec-permitted x-mcp-header types
-  # (priority number->integer, float_val annotation dropped), so the SDK's
-  # spec-faithful rejection of number-typed x-mcp-header now passes 18/18.
-  # Removed from this baseline at the alpha.9 bump; the companion
-  # http-invalid-tool-headers (11/11) and http-custom-header-server-validation
-  # (server track, 9/9) continue to pass.
-
   # --- Upstream mock inconsistency (root cause re-verified 2026-07-03) ---
   - json-schema-ref-no-deref
     # UPSTREAM MOCK BUG, unreported as of 2026-07-03 (searched the
@@ -315,8 +307,3 @@ client:
     # a successful discover response. Re-check at the next pin bump (a
     # future bundled-SDK bump adding 2026-07-28 support would also clear
     # it upstream).
-
-  # (CLEARED at pin 0.2.0-alpha.9, 2026-07-03, via SDK FIX) request-metadata
-  # — see the clearance note in the header: negotiate() now performs the
-  # spec's select-and-continue corrective retry exactly once, same version
-  # permitted, matching the TypeScript and Python reference clients.

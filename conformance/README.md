@@ -105,7 +105,7 @@ authorization hardening.
 
 The draft track's baseline
 ([`conformance-draft-baseline.yml`](conformance-draft-baseline.yml))
-carries the remaining `2026-07-28` entries while v2 is pre-alpha, each
+carries the remaining `2026-07-28` entries while v2 is in pre-release, each
 annotated with its root cause: bugs/staleness in the pinned alpha tool
 itself are documented there (and re-checked at every draft-pin bump)
 rather than worked around in the SDK.

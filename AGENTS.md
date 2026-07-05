@@ -26,7 +26,7 @@ no-shortcuts-for-conformance rule).
 
 ## V2 Development Process
 
-The `main` branch carries the pre-alpha v2 of the SDK (stable v1 lives on the
+The `main` branch carries the v2 beta of the SDK (stable v1 lives on the
 `1.x` branch). **All v2 work follows
 [docs/v2-development-plan.md](docs/v2-development-plan.md)** — the main
 working plan, with ordered workstreams, dependencies, completion criteria,

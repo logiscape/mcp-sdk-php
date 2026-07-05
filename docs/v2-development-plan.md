@@ -4,7 +4,7 @@ This is the **main working plan** for v2 development of `logiscape/mcp-sdk-php`.
 [ROADMAP.md](../ROADMAP.md) describes direction and rationale; this document
 describes execution — the ordered workstreams, their dependencies and
 completion criteria, the milestone process each one follows, and the release
-gates that stand between today's pre-alpha `main` and a tagged `v2.0.0`.
+gates that stand between today's pre-release `main` and a tagged `v2.0.0`.
 
 **v2 has two defining goals** (see the roadmap for the full rationale):
 
@@ -37,7 +37,7 @@ wins** and this plan gets amended (see "Maintaining this plan").
   (stable and draft track versions both pinned in
   [`package.json`](../package.json) — see WS7 for the dual-track strategy)
 - Reference SDKs for behavioral comparison: the TypeScript SDK v2 (`main`,
-  pre-alpha) and Python SDK v2 (`main`) — useful as a second opinion on
+  pre-release) and Python SDK v2 (`main`) — useful as a second opinion on
   ambiguous spec text, never as a substitute for it
 
 ## The milestone process

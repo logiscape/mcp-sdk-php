@@ -46,7 +46,7 @@ Group assigns tiers.
 | New protocol features       | Before spec release      | `2025-11-25` supported; back-compat for `2024-11-05`, `2025-03-26`, `2025-06-18`. Day-one support for the `2026-07-28` revision is the focus of `v2` development on `main` (see below).        |
 | Issue triage                | 2 business days          | Best-effort; see response-time section below.                                                                         |
 | Critical bug resolution     | 7 days                   | Best-effort, typically weeks not days for non-trivial fixes.                                                          |
-| Stable release              | Required, clear versioning | Met. Latest stable is `v1.7.3` on the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x); `main` carries the pre-alpha `v2`. Semver-tagged since `v1.0.0`.       |
+| Stable release              | Required, clear versioning | Met. Latest stable is `v1.7.4` on the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x); `main` carries the pre-release `v2`. Semver-tagged since `v1.0.0`.       |
 | Documentation               | Comprehensive w/ examples | Largely met. Covered by [README](README.md), [server-dev](docs/server-dev.md), [testing](docs/testing.md), [compatibility](docs/compatibility.md), plus 10 example programs and an example web client. |
 | Dependency update policy    | Published                | Met ([`docs/dependency-policy.md`](docs/dependency-policy.md)).                                                                        |
 | Roadmap                     | Published                | Met — this document.                                                                                                                   |
@@ -66,7 +66,7 @@ will — the arithmetic changes.
 
 ## What we are working on
 
-**v2 development has begun.** The `main` branch now carries the pre-alpha `v2`
+**v2 development has begun.** The `main` branch now carries the pre-release `v2`
 of the SDK, and the stable `v1` line lives on the
 [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x), which
 continues to receive bug fixes and low-risk backports. v2 has two defining
@@ -85,7 +85,7 @@ describes direction and rationale; the development plan describes execution —
 the ordered workstreams (stateless foundation through documentation), their
 dependencies and completion criteria, the research → implement → human review
 → human commit milestone process, and the release gates between today's
-pre-alpha and a tagged `v2.0.0`. All commits in that process are
+pre-release and a tagged `v2.0.0`. All commits in that process are
 human-initiated.
 
 ### Near-term (next release cycle)
@@ -114,7 +114,7 @@ session. In line with guiding principle #1 and the SEP-1730 expectation that
 Tier 1 SDKs ship support within the ten-week RC-to-final validation window, our
 target is a clean conformance run inside that window. The official SDKs are on
 the same trajectory and the same timeline: the TypeScript SDK's `main` is a
-pre-alpha v2 whose documentation anticipates "a stable v2 release in Q3 2026
+pre-release v2 whose documentation anticipates "a stable v2 release in Q3 2026
 along with the updated MCP spec," and the Python SDK's `main` is likewise its
 v2 development branch (its latest stable release, `v1.27.2`, still targets
 `2025-11-25`). Neither has published `2026-07-28` support yet. This work is the
@@ -264,7 +264,7 @@ which will heavily change how the transport layer works," its `main` branch is
 now its v2 development line, and the TypeScript SDK's v2 documentation
 anticipates "a stable v2 release in Q3 2026 along with the updated MCP spec."
 The ecosystem `v2` and `2026-07-28` are arriving together, so we have aligned:
-this repository's `main` branch is the pre-alpha `v2`, and `2026-07-28`
+this repository's `main` branch is the pre-release `v2`, and `2026-07-28`
 day-one support ships as the headline feature of `v2.0` (with the MCP Apps
 extension as a release feature alongside it). The stable `v1` line continues
 on the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x) for
