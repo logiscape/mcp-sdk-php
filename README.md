@@ -59,7 +59,7 @@ the feature-lifecycle deprecation registry — is in the
 You can install the v2 beta via composer:
 
 ```bash
-composer require logiscape/mcp-sdk-php:^2.0@beta
+composer require logiscape/mcp-sdk-php:2.0.0-beta3
 ```
 
 (Plain `composer require logiscape/mcp-sdk-php` installs the stable v1
