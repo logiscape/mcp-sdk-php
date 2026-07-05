@@ -163,6 +163,12 @@ that will feed the migration guide.
   `Mcp\Server\Transport\TransportClosedException`, replacing
   exception-message string matching (messages unchanged for backward
   compatibility).
+- `Client::onSampling()` — a pre-connect registration wrapper mirroring
+  `onElicit()`/`onListRoots()`, so a sampling handler can be registered
+  through the public `Client::connect()` flow (session-level
+  `ClientSession::onSampling()` must run before initialization, which
+  `connect()` performs; without the wrapper the capability could not be
+  advertised). Applied on both `connect()` and `resumeHttpSession()`.
 - New examples, one per major v2 feature — `stateless_server.php`,
   `client_negotiation.php`, `tasks_server.php` / `tasks_client.php`,
   `elicitation_server.php` / `elicitation_client.php`, and
@@ -179,6 +185,26 @@ that will feed the migration guide.
   plan for v2 development — and
   [docs/api-audit-v2.md](docs/api-audit-v2.md) — the v1 → v2 API audit
   feeding the migration guide. v2 pre-release notice added to the README.
+- The v2 documentation set: a v1 → v2 **migration guide**
+  ([docs/migration-v2.md](docs/migration-v2.md)) covering every breaking
+  and behavioral change with executed before/after code and the
+  deprecated-features registry; **extension guides** for Tasks
+  ([docs/tasks.md](docs/tasks.md)) and MCP Apps
+  ([docs/apps.md](docs/apps.md)); a documentation **index**
+  ([docs/README.md](docs/README.md)) labeling every document's audience;
+  and a README rewritten as the v2 front door. The
+  [server](docs/server-dev.md) and [client](docs/client-dev.md)
+  development guides were overhauled to teach the `2026-07-28` model as
+  the default with legacy-only behavior explicitly marked — covering the
+  stateless lifecycle, `server/discover`, dual-era negotiation, caching
+  hints, `subscriptions/listen` publishing, SEP-2243 designated
+  parameters, multi-round-trip input, the Tasks client API, and the
+  OAuth additions. Every code snippet in the new and overhauled
+  documents was extracted verbatim and executed (or, for fragments,
+  syntax-checked) against the SDK. AGENTS.md, CONTRIBUTING.md,
+  docs/testing.md (now the canonical test-stack reference),
+  docs/compatibility.md, tests/README.md, ROADMAP.md, and SUPPORT.md
+  were swept for v1-era drift in the same change set.
 
 ### Changed
 

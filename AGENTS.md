@@ -8,7 +8,14 @@ This is a PHP implementation of the Model Context Protocol (MCP), allowing appli
 - Designed for native PHP with easy installation via Composer
 - Targets PHP 8.1+ with type safety (strict_types=1)
 - Supports both traditional CLI/stdio and web hosting environments
+- Speaks every MCP spec revision from `2024-11-05` through `2026-07-28` (the "stateless core"); servers detect each request's era and clients probe-then-fall-back, so one codebase serves modern and legacy peers concurrently
+- Implements the Tasks (SEP-2663) and MCP Apps (SEP-1865) extensions — see [docs/tasks.md](docs/tasks.md) and [docs/apps.md](docs/apps.md)
 - Includes McpServer convenience wrapper for building fully functional MCP servers with just a few lines of PHP code
+
+User-facing documentation is indexed in [docs/README.md](docs/README.md);
+the two deep guides are [docs/server-dev.md](docs/server-dev.md) and
+[docs/client-dev.md](docs/client-dev.md), and the v1 → v2 changes are in
+[docs/migration-v2.md](docs/migration-v2.md).
 
 ## Contributor-facing documentation
 
@@ -50,78 +57,28 @@ and release gates. Key rules for agents working on v2 milestones:
 
 ## Development Testing Commands
 
-### Testing Suite Installation & Dependencies
-```bash
-# Install dependencies
-composer install
-
-# Update dependencies
-composer update
-
-# Install pinned conformance tool version
-npm install
-
-# Install optional logging support (required for webclient and some examples)
-composer require monolog/monolog
-```
-
-### Unit Tests
-```bash
-# Run all tests
-./vendor/bin/phpunit
-# or via composer script
-composer test
-
-# Run specific test file
-./vendor/bin/phpunit tests/Server/ServerSessionTest.php
-
-# Run specific test method
-./vendor/bin/phpunit --filter testMethodName tests/Server/ServerSessionTest.php
-```
-
-### Static Analysis
-PHPStan is configured via `phpstan.neon` and available as a dev dependency.
-```bash
-# Run static analysis
-./vendor/bin/phpstan analyse
-# or via composer script
-composer analyse
-```
-
-### Regression Check
-The `check` composer script runs the full regression suite (PHPUnit tests followed by PHPStan analysis). Use this before committing changes.
-```bash
-composer check
-```
-
-### Conformance Testing
-The SDK integrates the official [MCP conformance test suite](https://github.com/modelcontextprotocol/conformance) which validates protocol compliance against the spec. During v2 development the suite runs on **two independently pinned tool versions** (both pinned in `package.json` so tests are reproducible — each baseline file is tied to its installed version):
-
-- **Stable track** (`composer conformance`): the pinned stable tool with the published-spec scenarios, gated by `conformance/conformance-baseline.yml`. This is the legacy regression gate.
-- **Draft track** (`composer conformance-draft`): the pinned `0.2.0-alpha` tool line — the upstream RC-validation track carrying the `2026-07-28` draft-spec scenarios — installed under the npm alias `conformance-draft`, run with `--suite draft`, gated by `conformance/conformance-draft-baseline.yml`. Draft baseline entries name the v2 workstream that will make them pass and only shrink as workstreams complete.
+The canonical, complete test-stack reference is
+**[docs/testing.md](docs/testing.md)** — installation, PHPUnit, PHPStan,
+both conformance tracks, single-scenario runs, and the interactive
+harnesses (MCP Inspector, Claude Code, OpenAI). The commands used on
+nearly every change:
 
 ```bash
-# Stable track (published-spec scenarios)
-composer conformance              # server + client
-composer conformance-server       # server only
-composer conformance-client       # client only
-
-# Draft track (2026-07-28 draft-spec scenarios)
-composer conformance-draft        # server + client
-composer conformance-draft-server # server only
-composer conformance-draft-client # client only
-
-# Run a single scenario
-php conformance/run-conformance.php server tools-list
-php conformance/run-conformance.php server-draft server-stateless
+composer install            # dependencies (plus `npm install` for the pinned conformance tools)
+composer check              # the regression gate: PHPUnit + PHPStan — run before considering any change done
+composer conformance        # stable conformance track (published-spec scenarios)
+composer conformance-draft  # draft track (2026-07-28 RC scenarios)
 ```
 
-**How it works:**
-- Server tests: The runner starts `conformance/everything-server.php` via PHP's built-in server, runs the conformance suite against it, then stops the server automatically via shutdown handler.
-- Client tests: The conformance framework spawns `conformance/everything-client.php` with test scenario env vars and a test server URL.
-- Known failures are tracked in the track's baseline file with root cause documentation. The conformance tool uses the baseline to distinguish regressions from known limitations — if a previously passing test starts failing, it's flagged as a regression (exit code 1).
-
-**When to run:** Run `composer conformance` after making changes to protocol handling, transport layers, session management, or McpServer — it must stay regression-free at every milestone. Run `composer conformance-draft` additionally for milestones touching `2026-07-28` behavior, updating the draft baseline to reflect honest progress. Neither is included in `composer check` because they require Node.js, but they should be run separately before merging significant SDK changes. See `conformance/README.md` for the dual-track rules and `docs/v2-development-plan.md` (WS7) for when the tracks converge.
+**When to run conformance:** `composer conformance` must stay
+regression-free for any change touching protocol handling, transports,
+session management, or `McpServer`; add `composer conformance-draft` for
+changes touching `2026-07-28` behavior, updating
+`conformance/conformance-draft-baseline.yml` to reflect honest progress.
+Neither is part of `composer check` (they need Node.js). Known failures
+live in each track's baseline file with a root cause — never engineer a
+workaround to make a scenario pass; see
+[conformance/README.md](conformance/README.md) for the dual-track rules.
 
 ## Building An MCP Server
 
@@ -198,20 +155,19 @@ $result = $session->callTool($toolName, $arguments);
 
 ### Protocol Version Negotiation
 
-The SDK implements MCP spec version negotiation in `BaseSession`:
-- Server advertises supported versions in initialization response
-- Client requests specific protocol version in initialization request
-- Session negotiates to highest mutually supported version
-- Falls back to older versions for backward compatibility
-- Current implementation targets 2025-11-25 spec revision
+The SDK speaks two protocol *eras* and negotiates per the spec's detection rules:
+- **Modern era (`2026-07-28`, the latest revision):** no `initialize` handshake — every request carries protocol version, client info, and client capabilities in its `_meta` envelope, and `server/discover` answers capability discovery statelessly. The server detects a modern request per-request (envelope or `MCP-Protocol-Version` header) and serves it on a fresh ephemeral context; no `Mcp-Session-Id` exists on this path.
+- **Legacy era (`2024-11-05` … `2025-11-25`):** the classic `initialize` handshake, negotiated to the highest mutually supported version, with the session header on HTTP. `Version::LATEST_LEGACY_PROTOCOL_VERSION` caps what the handshake can negotiate.
+- **Client side:** `Client::connect()` probes `server/discover` first and falls back to `initialize` (`protocolMode: 'auto' | 'modern' | 'legacy'`).
+- Version constants live in `src/Shared/Version.php`; feature gating in `ServerSession::clientSupportsFeature()` / `ClientSession::supportsFeature()`; response shaping for older clients in `ServerSession::adaptResponseForClient()`.
 
 ### Web Hosting Considerations
 
-The SDK includes special support for typical PHP web hosting:
-- **Stateless mode**: Web client reinitializes connection per request (limitation of web hosting)
-- HTTP transport designed to work without long-running processes
-- Uses session files or other persistence for maintaining state across requests
-- See `webclient/` directory for reference implementation
+The SDK is designed for typical PHP web hosting (cPanel/Apache/FPM):
+- **The `2026-07-28` stateless model is a natural fit**: every modern request is self-contained, so a fresh PHP process per request needs no persisted protocol state at all.
+- **Legacy sessions** persist to files (or another `SessionStoreInterface`) between requests; the HTTP transport works without long-running processes on both eras.
+- Cross-process event fan-out for `subscriptions/listen` uses `FileSubscriptionBus`; the Tasks extension's `TaskManager` store is file-based for the same reason.
+- See [docs/compatibility.md](docs/compatibility.md) for the compatibility rules and `webclient/` for the reference client implementation.
 
 ## Testing Patterns
 
@@ -251,11 +207,15 @@ Tests use PHPUnit 10+ and follow these conventions:
 
 Servers expose capabilities through handler registration:
 - **Prompts**: `prompts/list`, `prompts/get`
-- **Resources**: `resources/list`, `resources/read`, `resources/subscribe`
-- **Tools**: `tools/list`, `tools/call`
-- **Logging**: `logging/setLevel`
+- **Resources**: `resources/list`, `resources/read` (+ `resources/subscribe` on legacy revisions only)
+- **Tools**: `tools/call`, `tools/list`
+- **Completions**: `completion/complete`
+- **Logging**: `logging/setLevel` (legacy revisions; deprecated by SEP-2577)
+- **Subscriptions**: `subscriptions/listen` (modern-era change-notification channel, backed by a `SubscriptionBusInterface` on HTTP)
+- **Discovery**: `server/discover` (modern era; answered automatically with the same capabilities as the legacy `initialize` result)
+- **Extensions** (SEP-2133 `extensions` capability map): Tasks (`tasks/get`, `tasks/update`, `tasks/cancel` via `enableTasks()`) and MCP Apps (`McpServer::ui()`, capability + `_meta` only — no new RPC)
 
-Capabilities are automatically detected based on registered handlers and included in initialization response.
+Capabilities are automatically detected based on registered handlers and included in both the legacy initialization response and the modern `server/discover` result.
 
 ## Common Patterns
 

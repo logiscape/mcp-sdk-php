@@ -8,6 +8,7 @@ A comprehensive guide to developing Model Context Protocol servers using the `lo
 
 - [Introduction](#introduction)
 - [Getting Started](#getting-started)
+- [The 2026-07-28 Stateless Model](#the-2026-07-28-stateless-model)
 - [Part 1: Tools](#part-1-tools)
 - [Part 2: Prompts](#part-2-prompts)
 - [Part 3: Resources](#part-3-resources)
@@ -20,6 +21,7 @@ A comprehensive guide to developing Model Context Protocol servers using the `lo
 - [Part 10: Providing Completions](#part-10-providing-completions)
 - [Part 11: Emitting Notifications, Logging, and Progress](#part-11-emitting-notifications-logging-and-progress)
 - [Part 12: Multi-Capability Servers](#part-12-multi-capability-servers)
+- [Deprecated Protocol Features](#deprecated-protocol-features)
 - [Appendix A: Configuration Reference](#appendix-a-configuration-reference)
 - [Appendix B: Deployment Checklist](#appendix-b-deployment-checklist)
 
@@ -33,7 +35,9 @@ The [Model Context Protocol](https://modelcontextprotocol.io) (MCP) is an open s
 - **Prompts** -- Reusable message templates the user can select (user-controlled)
 - **Resources** -- Data that provides context to the model (application-controlled)
 
-The `logiscape/mcp-sdk-php` SDK implements the MCP specification (including the latest 2025-11-25 revision) for PHP 8.1+. It provides a `McpServer` convenience wrapper that lets you build a fully functional MCP server in just a few lines of code. The same server file can run locally via stdio or remotely over HTTP -- making it deployable to standard cPanel/Apache hosting with zero infrastructure changes. Servers can also request information back from the client: elicitation (form mode since `2025-06-18`, URL mode since `2025-11-25`) and server-initiated LLM sampling (in the base spec since `2024-11-05`, with tool-enabled sampling added in `2025-11-25`) work across both transports, and the HTTP transport auto-suspends and resumes long-running tool calls to make that possible on stateless PHP.
+The `logiscape/mcp-sdk-php` SDK implements the MCP specification -- including the latest `2026-07-28` "stateless core" revision -- for PHP 8.1+. It provides a `McpServer` convenience wrapper that lets you build a fully functional MCP server in just a few lines of code. The same server file can run locally via stdio or remotely over HTTP -- making it deployable to standard cPanel/Apache hosting with zero infrastructure changes -- and serves **both protocol eras at once**: modern (`2026-07-28`) clients are served statelessly, one self-contained request at a time, while legacy clients (`2024-11-05` … `2025-11-25`) get the classic `initialize` handshake. You register features and call `run()`; the SDK detects each request's era (see [The 2026-07-28 Stateless Model](#the-2026-07-28-stateless-model)).
+
+This guide teaches the `2026-07-28` model as the default and explicitly marks behavior that only exists on legacy revisions ("**legacy only**"). Servers can also request information back from the client mid-tool: elicitation (form mode since `2025-06-18`, URL mode since `2025-11-25`) and server-initiated LLM sampling work across both transports and both eras -- on the modern era via the spec's multi-round-trip input exchanges, on legacy HTTP via the SDK's suspend/resume plumbing; your tool code is identical either way (see [Part 8](#part-8-requesting-input-with-elicitation)). The `2026-07-28` extensions -- [Tasks](tasks.md) (long-running tool calls) and [MCP Apps](apps.md) (host-rendered tool UIs) -- each have their own guide.
 
 ### What You Can Build
 
@@ -106,6 +110,62 @@ Once deployed to a web server (covered in [Part 4](#part-4-deploying-remote-mcp-
 ```
 https://yoursite.com/mcp-server.php
 ```
+
+---
+
+## The 2026-07-28 Stateless Model
+
+The `2026-07-28` spec revision removes connection state from the protocol:
+there is no `initialize` handshake, no `Mcp-Session-Id` header, and no
+server-held session. Every request is **self-contained** -- it carries the
+protocol version, client info, and client capabilities in its `_meta`
+envelope -- and clients learn what a server offers from the cacheable
+`server/discover` method. This is exactly the model that fits typical PHP
+web hosting, where every HTTP request is served by a fresh process.
+
+**None of this requires anything special in your server code.** You
+register tools, prompts, and resources and call `run()`, exactly as in
+every example in this guide. What the SDK does per request:
+
+- **Era detection.** A request carrying the modern `_meta` envelope (or
+  the modern `MCP-Protocol-Version` header) is served statelessly with
+  `2026-07-28` semantics on a fresh, ephemeral context. A legacy
+  `initialize` gets the classic handshake and session. One server file,
+  both eras, concurrently.
+- **`server/discover`.** Answered on stdio and HTTP with the same
+  capabilities the legacy `initialize` result advertises -- without any
+  prior handshake, fully sessionless, as a plain cacheable JSON response.
+- **Removed methods.** Methods the stateless revision removed
+  (`initialize`, `ping`, `logging/setLevel`,
+  `resources/subscribe`/`unsubscribe`) answer `-32601` on the modern path
+  (HTTP 404); legacy clients keep using them unchanged.
+- **Caching hints (SEP-2549).** Modern list, read, and discover results
+  carry the required `ttlMs` / `cacheScope` fields plus the `resultType`
+  discriminator. The SDK stamps conservative defaults (`ttlMs: 0`,
+  `cacheScope: "private"` -- never cache) and strips the fields for legacy
+  clients. To advertise real cacheability, return a full result object
+  from a low-level handler and call `setCacheHints(ttlMs, cacheScope)` on
+  it (every cacheable result type implements
+  `Mcp\Types\CacheableResult`).
+- **Request-metadata headers (SEP-2243).** On HTTP, modern requests carry
+  `Mcp-Method` and (on name-bearing methods) `Mcp-Name` headers that must
+  match the body; the SDK validates them and rejects mismatches with
+  `-32020`. See [Designated parameters](#designated-parameters-x-mcp-header-sep-2243)
+  for the developer-visible piece.
+- **Trace context (SEP-414).** The reserved `traceparent` / `tracestate` /
+  `baggage` keys in `_meta` pass through untouched, with accessors on
+  `Mcp\Types\TraceContext`.
+
+**What is legacy-only** (kept fully working for `2024-11-05` …
+`2025-11-25` clients, absent on the modern path): the `initialize`
+handshake, the `Mcp-Session-Id` header and file-backed session state, the
+standalone GET SSE stream, and `Last-Event-ID` stream resumption. Where
+one of these appears later in this guide it is marked **legacy only**.
+
+Try it: run [`examples/stateless_server.php`](../examples/stateless_server.php)
+and connect with [`examples/client_negotiation.php`](../examples/client_negotiation.php)
+in `--mode=modern` and `--mode=legacy` to watch the same server serve both
+eras.
 
 ---
 
@@ -845,34 +905,26 @@ To suggest values for a template's variables as the user types, pair it with a c
 
 ### Interactive UI with MCP Apps
 
-The [MCP Apps extension](https://github.com/modelcontextprotocol/ext-apps) (SEP-1865) lets a tool ship an interactive HTML view that a capable host renders in a sandboxed iframe. The `ui()` helper bundles the whole convention into one call:
+The MCP Apps extension (SEP-1865) lets a tool ship an interactive HTML
+view that a capable host renders in a sandboxed iframe. The
+`McpServer::ui()` helper bundles the whole convention -- the `ui://`
+template resource, the tool's `_meta.ui` link, and the extension
+declaration -- into one call:
 
 ```php
-$server
-    ->tool('get_weather', 'Get the current weather', function (string $city): CallToolResult {
-        $data = ['city' => $city, 'temperatureC' => 21, 'condition' => 'Sunny'];
-        return new CallToolResult(
-            content: [new TextContent(text: "Weather in {$city}: {$data['condition']}")], // text fallback
-            structuredContent: $data,                                                      // data for the UI
-        );
-    })
-    ->ui(
-        tool: 'get_weather',
-        uri: 'ui://weather/dashboard',
-        name: 'Weather Dashboard',
-        html: file_get_contents(__DIR__ . '/dashboard.html'),
-    );
+$server->ui(
+    tool: 'get_weather',
+    uri: 'ui://weather/dashboard',
+    name: 'Weather Dashboard',
+    html: file_get_contents(__DIR__ . '/dashboard.html'),
+);
 ```
 
-That single `ui()` call:
-
-1. registers `ui://weather/dashboard` as a resource with MIME `text/html;profile=mcp-app` (so hosts can prefetch, cache, and security-review it),
-2. links the tool to it via `_meta.ui.resourceUri`, and
-3. declares the Apps extension in the server's capabilities, advertised in `server/discover`.
-
-The extension adds **no new server method** -- a UI-originated action arrives as an ordinary `tools/call`, and the host↔iframe message envelope never reaches the server. Optional arguments set host hints: `visibility` (`['model','app']`; use `['app']` to hide a tool from the agent and expose it only to the UI), `csp`, `permissions` (`camera`/`microphone`/`geolocation`/`clipboardWrite`), `domain`, and `prefersBorder`.
-
-**Graceful degradation is automatic:** a host that can't render the UI ignores `_meta.ui`, and the tool still returns its normal `content`. Always return a meaningful text `content` block so non-UI hosts and the model stay functional. A complete runnable example lives in [`examples/apps_server/`](../examples/apps_server/).
+The full story -- the view document's postMessage protocol, host hints
+(`visibility`, `csp`, `permissions`, `domain`, `prefersBorder`), the
+`structuredContent` pattern, and graceful degradation -- is in the
+[**Apps Extension Guide**](apps.md), with a complete runnable example in
+[`examples/apps_server/`](../examples/apps_server/).
 
 ---
 
@@ -886,8 +938,15 @@ The SDK's HTTP transport is designed for PHP's traditional request-response life
 
 1. The MCP client sends HTTP POST requests to your PHP file
 2. Apache/PHP processes each request independently
-3. Session state is persisted to files between requests
-4. The SDK handles all JSON-RPC protocol details
+3. The SDK handles all JSON-RPC protocol details
+
+For modern (`2026-07-28`) clients this is a perfect fit with **no state at
+all**: every request is self-contained, so nothing needs to be persisted
+between requests. For legacy clients (**legacy only**) the SDK persists
+the `initialize` handshake's session state to files between requests --
+that is what the session store and `mcp_sessions/` directory below are
+for. A server that only ever expects modern clients still works with the
+defaults; the session machinery simply never engages.
 
 ### Minimal Remote Server
 
@@ -983,6 +1042,18 @@ $server
 
 The HTTP transport can respond to a single POST in one of three wire formats: a plain JSON body, a buffered `text/event-stream` body (one HTTP response that happens to be SSE-framed), or a live-flushed SSE stream that emits frames as the tool runs. Two settings control which one a given request gets:
 
+> **Era note:** everything in this section applies to both protocol eras,
+> with one difference in shape. On the modern (`2026-07-28`) path a
+> response stream is **request-scoped**: notifications your handler emits
+> stream first, then the final response ends the stream, and there are no
+> event ids and no `Last-Event-ID` resumption. Error responses are always
+> plain JSON (the SEP-2575 error statuses cannot ride a committed SSE
+> stream), and `server/discover` responses are deliberately never
+> SSE-framed. The standalone GET SSE stream and resumable replay described
+> later are **legacy only**; the modern era's standing channel is
+> [`subscriptions/listen`](#publishing-change-notifications-subscriptionslisten)
+> instead.
+
 - `enable_sse` (default `false`) is the **master switch**. While it's off, every POST gets a plain JSON response regardless of what the client asked for -- this is the safe default for compatibility with arbitrary shared hosts. Set it to `true` to let the transport negotiate SSE with clients that advertise `text/event-stream` in their `Accept` header. The default is intentionally conservative because every spec-compliant MCP client lists both media types in `Accept`, so flipping to SSE silently would change the wire `Content-Type` on every deployment.
 - `sse_mode` (default `'auto'`) is a **secondary mode** that only kicks in once SSE has been enabled and the transport has chosen SSE for a given request. It decides between buffered and live-flushed framing. When `enable_sse => false` it has no effect.
 
@@ -1012,6 +1083,52 @@ The SDK implements the modern **Streamable HTTP** transport -- a single endpoint
 It does **not** implement the deprecated **HTTP+SSE dual-endpoint** transport from the `2024-11-05` revision -- the older design that used a separate long-lived `GET /sse` stream alongside a separate POST endpoint. The spec deprecated that transport in favor of Streamable HTTP, and this SDK targets only the modern form.
 
 The practical consequence is narrow: a client that speaks *only* the old dual-endpoint transport cannot connect to a server built with this SDK over HTTP. This is intentional and does not reduce Streamable HTTP coverage -- any client implementing the current transport connects normally, and protocol-version negotiation still lets the server speak older *protocol* revisions (including `2024-11-05` message shapes) over the modern transport.
+
+### Designated Parameters (`x-mcp-header`, SEP-2243)
+
+On the modern (`2026-07-28`) era, HTTP requests carry request-metadata
+headers (`Mcp-Method` on every request, `Mcp-Name` on name-bearing ones)
+that the SDK emits and validates for you -- a mismatch with the body is
+rejected `400` / `-32020` before your code runs. The one piece with a
+developer-visible surface is **designated parameters**: annotating a tool
+input-schema property with `x-mcp-header` asks conformant clients to
+mirror that argument into an `Mcp-Param-{name}` HTTP header, where
+gateways and proxies can route or rate-limit on it without parsing the
+JSON body:
+
+```php
+$server->tool(
+    name: 'query-tenant-data',
+    description: 'Query data scoped to a tenant',
+    callback: function (string $tenantId, string $query): string {
+        return "Results for {$tenantId}: …";
+    },
+    inputSchema: [
+        'properties' => [
+            // Mirrored to the `Mcp-Param-tenant-id` request header.
+            'tenantId' => ['type' => 'string', 'x-mcp-header' => 'tenant-id'],
+            'query'    => ['type' => 'string'],
+        ],
+        'required' => ['tenantId', 'query'],
+    ],
+);
+```
+
+The rules the SDK enforces (rejecting violations `-32020` server-side,
+and refusing to emit them client-side):
+
+- Only `string`, `integer`, and `boolean` properties may be designated
+  (`number` is prohibited); integers are bounded to ±(2⁵³−1).
+- The annotation value supplies the `{name}` part verbatim and must be an
+  RFC 9110 token; names must be unique case-insensitively across the
+  whole schema (annotations are honored at any nesting depth).
+- The header must match the body's value exactly: strings as-is, integers
+  as decimal, booleans as lowercase `true`/`false`; unsafe values ride a
+  lowercase `=?base64?…?=` sentinel.
+
+Designation is opt-in per property and only meaningful over HTTP (stdio
+has no headers). Tools without annotations need nothing -- `Mcp-Method` /
+`Mcp-Name` handling is fully automatic.
 
 ### DNS Rebinding Protection
 
@@ -1119,7 +1236,7 @@ A few things worth knowing:
 - **No mid-tool preemption.** Over stdio the message loop dispatches one message at a time, so a cancellation that arrives while your tool is running is only seen *after* the tool returns -- by which point its response has usually already been sent. Over HTTP on standard shared hosting each POST runs in its own process with its own memory, so an in-memory flag is neither shared across requests nor readable by an already-running handler. Either way the SDK cannot abort a tool from the outside; honoring a cancel is cooperative and only possible at points where your own code chooses to check.
 - **There is no acknowledgement.** Don't try to send a response from the notification handler; cancels are notifications, not requests, and writing back will produce an invalid JSON-RPC frame.
 
-For most servers no handler is needed at all -- the protocol still works correctly without it, the cancel is just ignored. That is explicitly allowed: the [spec](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/cancellation) says a receiver MAY ignore a cancellation whose request has already completed or cannot be cancelled. For work that must be genuinely abortable mid-flight, the spec's task-augmented requests (`tasks/cancel`, enabled via `enableTasks()`) are the intended mechanism -- still experimental and out of scope for this guide.
+For most servers no handler is needed at all -- the protocol still works correctly without it, the cancel is just ignored. That is explicitly allowed: the [spec](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/cancellation) says a receiver MAY ignore a cancellation whose request has already completed or cannot be cancelled. For long-running work with a real cancellation surface (`tasks/cancel`), use the Tasks extension (`enableTasks()`) -- see the [Tasks Extension Guide](tasks.md).
 
 ---
 
@@ -1682,7 +1799,7 @@ The SDK automatically injects an `ElicitationContext` into any tool callback tha
 
 The round-trip flow is appropriate when the client can collect everything inline. The error-based flow is the correct pattern whenever the interaction must not pass through the MCP client -- anything involving credentials, OAuth, or payment.
 
-> **Note:** MCP defines two elicitation modes -- **form** (inline structured data) and **url** (out-of-band flows). This guide covers both. The `2025-11-25` spec also introduces *task-augmented* elicitation, which is still experimental and intentionally not documented here.
+> **Note:** MCP defines two elicitation modes -- **form** (inline structured data) and **url** (out-of-band flows). This guide covers both. A tool running as a SEP-2663 *task* can also elicit -- the request then surfaces through `tasks/get` and is answered via `tasks/update`, with no change to the tool code. See the [Tasks Extension Guide](tasks.md#in-task-input).
 
 ### Form Mode: Collecting Structured Data
 
@@ -1922,18 +2039,58 @@ This is useful for tools that can check their own completion state -- for exampl
 
 > **Heads up (stateless HTTP hosting):** on typical cPanel-style PHP hosting the OAuth redirect handler runs in a **completely separate HTTP request** from the MCP endpoint. That handler has no live MCP session to write to, so it cannot send this notification directly -- doing so would require additional infrastructure (an SSE connection registry, a shared pub/sub queue, etc.) that is outside the scope of the convenience wrapper. That's fine: the client will let the user retry manually, and the retried tool call can detect the now-present credentials and complete normally. For long-running stdio servers the same process holds the session, so in-tool notifications from background work are trivial.
 
-### Elicitation and the HTTP Transport
+### Elicitation Across Transports and Eras
 
-Elicitation works identically whether you are running over stdio or HTTP, but the mechanics differ under the hood:
+Your tool code is identical everywhere -- write it as straight-line,
+synchronous code. Under the hood the SDK picks the mechanics per
+transport and per negotiated era:
 
 - **Stdio:** the call to `form()` blocks until the client responds, then returns normally.
-- **HTTP:** the SDK cannot block a PHP request waiting for a human, so it **suspends** the in-progress tool call, returns the elicitation request to the client, and transparently **resumes** the tool callback on the next HTTP round-trip. Your tool code is re-entered from the top -- but each completed `form()` / `url()` call returns its previously-collected result instead of firing a new request.
+- **HTTP, modern era (`2026-07-28`):** the spec replaces server-initiated
+  requests with **multi-round-trip input** (SEP-2322): the tool call
+  answers with an `input_required` result carrying the elicitation
+  request and a signed, tamper-proof `requestState`; the client collects
+  the input and retries the call with the answers attached; the SDK
+  re-executes your callback with each completed `form()` / `url()` call
+  returning its previously-collected result instead of firing a new
+  request. Several pending inputs can be batched into a single round.
+- **HTTP, legacy era (legacy only):** the SDK **suspends** the
+  in-progress tool call server-side, returns the elicitation request, and
+  transparently **resumes** the callback on the next HTTP round-trip --
+  same re-entry behavior, session-backed instead of state-token-backed.
 
-This means you should write elicitation code as if it were straight-line and synchronous, even under HTTP. The only rule is: **elicitation calls must happen in a deterministic order**. Don't make an elicitation call conditional on data that changes between resumes (e.g. `rand()`, the current timestamp, or external state that may have shifted), or the resume logic won't be able to match up the preloaded results.
+In both HTTP models your callback is re-entered from the top, so one rule
+applies: **elicitation calls must happen in a deterministic order**.
+Don't make an elicitation call conditional on data that changes between
+rounds (e.g. `rand()`, the current timestamp, or external state that may
+have shifted), or the SDK won't be able to match the stored results back
+to the calls. When the same logical question might be re-asked on a
+retried request, pass the optional `inputKey:` argument to `form()` to
+give the round a stable name.
 
-No extra wiring is required in your server file -- `McpServer::run()` / `runHttp()` handle the suspend/resume plumbing automatically.
+No extra wiring is required in your server file -- `McpServer::run()` /
+`runHttp()` handle all of it automatically.
 
-The same suspend/resume mechanism also powers server-initiated LLM sampling (covered in [Part 9](#part-9-server-initiated-llm-sampling)), and a single tool call can freely mix `$elicit->form()` and `$sampling->prompt()` calls. The SDK carries the previously-collected results of **both** features forward across every HTTP round, so on resume each completed call returns its stored result without re-prompting the user or the LLM.
+The same machinery also powers server-initiated LLM sampling (covered in
+[Part 9](#part-9-server-initiated-llm-sampling)), and a single tool call
+can freely mix `$elicit->form()` and `$sampling->prompt()` calls -- the
+SDK carries the collected results of **both** features forward across
+every round. To gather several inputs of *mixed* kinds in one round trip
+on the modern era, type-hint `Mcp\Server\InputRequired\InputContext` and
+batch them (`wantForm()` / `wantSample()` / `wantRoots()`, then
+`collect()`); see [`examples/elicitation_server.php`](../examples/elicitation_server.php)
+for the plain path.
+
+One modern-era behavior worth knowing: a `2026-07-28` request whose
+capability envelope did not declare `elicitation` makes `form()` fail the
+call with `-32021` (`MissingRequiredClientCapability`) instead of
+silently returning `null` (legacy behavior). Check `supportsForm()` first
+-- as in the example above -- when the tool can degrade gracefully.
+
+One legacy-era limit: prompt callbacks (`prompts/get`) can only gather
+input on the modern era -- a legacy HTTP `prompts/get` whose callback
+declares an `ElicitationContext` fails with `-32603` (the legacy
+suspend/resume store is tools-only). Tool callbacks are unaffected.
 
 ---
 
@@ -2133,14 +2290,18 @@ $server->run();
 
 Under HTTP this tool suspends twice -- once on the form, once on the sampling request -- so the callback ends up being invoked three times total: the initial invocation plus two resumes. On each resume the SDK re-enters the callback from the top, and every completed `form()` / `prompt()` call returns its stored result instead of firing a new request. You never have to think about that -- just write straight-line code and keep the call order deterministic so the stored results match up on every re-entry.
 
-### Sampling and the HTTP Transport
+### Sampling Across Transports and Eras
 
-Sampling works identically across stdio and HTTP, with the same mechanics as elicitation:
+Sampling works identically across stdio and HTTP, with the same
+per-era mechanics as elicitation ([Part 8](#elicitation-across-transports-and-eras)):
 
 - **Stdio:** the call to `prompt()` / `createMessage()` blocks until the client returns the completion.
-- **HTTP:** the SDK suspends the tool, emits the `sampling/createMessage` request to the client, and transparently resumes the tool on the next HTTP round with the preloaded result.
+- **HTTP, modern era:** the sampling request rides an `input_required`
+  (SEP-2322) exchange -- the client's LLM answers on the retried round and
+  the SDK re-executes the tool with the preloaded result.
+- **HTTP, legacy era (legacy only):** the SDK suspends the tool, emits the `sampling/createMessage` request to the client, and transparently resumes the tool on the next HTTP round with the preloaded result.
 
-The deterministic-ordering rule from [Part 8](#elicitation-and-the-http-transport) applies to sampling as well: don't make a sampling call conditional on non-deterministic data between resumes, or the SDK won't be able to match the stored result back to the call.
+The deterministic-ordering rule from [Part 8](#elicitation-across-transports-and-eras) applies to sampling as well: don't make a sampling call conditional on non-deterministic data between rounds, or the SDK won't be able to match the stored result back to the call.
 
 ### Feature Gating
 
@@ -2151,7 +2312,16 @@ Two capability checks to know about:
 
 If the client doesn't support sampling, `prompt()` and `createMessage()` both return `null` without sending any request. Handle `null` the same way you would handle any optional feature -- fall back, return a useful message, or mark the tool result as an error.
 
-> **Note:** The `2025-11-25` spec also introduces *task-augmented* sampling (linking a `sampling/createMessage` to an async `tasks/create` lifecycle). Like task-augmented elicitation, this is still experimental and intentionally not documented here.
+> **Deprecation note (SEP-2577):** the `2026-07-28` spec deprecates the
+> Sampling feature (migration path: integrate directly with LLM provider
+> APIs). Nothing stops working -- deprecated features keep functioning
+> through the spec's minimum twelve-month window -- but exercising
+> sampling on a `2026-07-28` session emits one PSR-3 warning per session,
+> and the sampling `Types/` classes carry `@deprecated` docblocks. On
+> `2025-11-25` and earlier sessions the feature is Active and no warning
+> is emitted. See [Deprecated Protocol Features](#deprecated-protocol-features).
+> A tool running as a SEP-2663 *task* can also sample -- see the
+> [Tasks Extension Guide](tasks.md).
 
 ---
 
@@ -2267,9 +2437,9 @@ Every example so far has returned a single result. MCP also lets a server push *
 > **Transport note (required reading for HTTP):** Server-to-client notifications travel on the open channel back to the client, and the two transports differ in a way that matters for compliance:
 >
 > - **Over stdio** the channel is always present -- emit freely.
-> - **Over HTTP** the Streamable HTTP spec requires that a plain `application/json` POST response contain exactly **one** JSON object: the result of the request. Notifications can only be delivered on a `text/event-stream` (SSE) response, interleaved *before* that result. So to emit notifications over HTTP you **must** enable SSE with `->httpOptions(['enable_sse' => true])`. With SSE left at its default (`false`), there is no spec-compliant way to attach a notification to the response, so a server that emits notifications must run over stdio or over an SSE-enabled HTTP endpoint. Every example in this section enables SSE for that reason.
+> - **Over HTTP** the Streamable HTTP spec requires that a plain `application/json` POST response contain exactly **one** JSON object: the result of the request. Notifications can only be delivered on a `text/event-stream` (SSE) response, interleaved *before* that result. So to emit notifications over HTTP you **must** enable SSE with `->httpOptions(['enable_sse' => true])`. With SSE left at its default (`false`), there is no spec-compliant way to attach a notification to the response, so a server that emits notifications must run over stdio or over an SSE-enabled HTTP endpoint. Every example in this section enables SSE for that reason. This applies to both protocol eras -- on the modern (`2026-07-28`) era the SSE response is *request-scoped* (notifications first, then the final response ends the stream), and notifications preceding an error response are dropped (error statuses cannot ride a committed stream).
 >
-> One more HTTP caveat even with SSE on: a stateless shared-hosting request that has already returned cannot push a notification after the fact. Always emit from *inside* a tool callback, while the request is still being processed.
+> One more HTTP caveat even with SSE on: a stateless shared-hosting request that has already returned cannot push a notification after the fact. Always emit from *inside* a tool callback, while the request is still being processed. For change notifications that must reach clients *between* requests on the modern era, use [`subscriptions/listen`](#publishing-change-notifications-subscriptionslisten) below.
 
 ### Reporting Progress from a Long Tool
 
@@ -2379,9 +2549,78 @@ $server->run();
 
 The `data` argument can be any JSON-serializable value -- a string, or a structured array like `['stage' => 'merge', 'docs' => 1200]` -- and the optional third argument is a logger name the client can display or filter on.
 
-### Signaling That a List Changed
+> **Deprecation note (SEP-2577):** the `2026-07-28` spec deprecates the
+> Logging feature (migration path: log to stderr for stdio transports;
+> use OpenTelemetry for observability), and the stateless revision
+> removes `logging/setLevel` from the modern path (a `2026-07-28` client
+> sets its minimum level per-request via the deprecated
+> `io.modelcontextprotocol/logLevel` `_meta` key instead). Legacy
+> sessions are unaffected; exercising logging on a `2026-07-28` session
+> works but emits one PSR-3 warning per session. See
+> [Deprecated Protocol Features](#deprecated-protocol-features).
 
-If your server adds or removes tools, prompts, or resources at runtime, tell the client its cached catalog is stale so it refetches. This is a two-step feature:
+### Publishing Change Notifications (`subscriptions/listen`)
+
+On the modern (`2026-07-28`) era there are no server-initiated
+notifications outside a request -- the standing channel is
+**`subscriptions/listen`** (SEP-2575): a client opens one long-lived
+request naming the change events it wants (`toolsListChanged`,
+`promptsListChanged`, `resourcesListChanged`, and per-resource
+`resourceSubscriptions`, which replaces the removed `resources/subscribe`
+RPC), the server acknowledges, and matching events stream until either
+side ends the subscription.
+
+The SDK implements the whole channel; your server's job is two calls --
+configure an event bus, and publish when something changes:
+
+```php
+<?php
+// listen_server.php
+require __DIR__ . '/vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+use Mcp\Server\Subscriptions\FileSubscriptionBus;
+
+$server = new McpServer('dynamic-server');
+
+// The bus carries events across PHP processes (shared hosting: the process
+// serving the listen stream is not the one whose tool changed the catalog).
+// Use InMemorySubscriptionBus for single-process runtimes and tests.
+$server->subscriptionBus(new FileSubscriptionBus(__DIR__ . '/mcp_events'));
+
+$server->tool('enable-beta-tools', 'Turn on the beta tool set', function () use ($server): string {
+    // ... change the catalog, then publish:
+    $server->publishToolsListChanged();
+    return 'Beta tools enabled.';
+});
+
+$server->run();
+```
+
+The publish helpers are `publishToolsListChanged()`,
+`publishPromptsListChanged()`, `publishResourcesListChanged()`, and
+`publishResourceUpdated(string $uri)`. They can be called from anywhere
+that can construct the bus -- including a cron job or queue worker
+outside the MCP request cycle entirely.
+
+Wire details the SDK handles: the acknowledgement is always the stream's
+first message, every frame carries the
+`io.modelcontextprotocol/subscriptionId` `_meta` key, only opted-in event
+types are delivered (strict filter containment), a server-initiated
+graceful end sends a closing `SubscriptionsListenResult`, and a server
+that cannot deliver events (no bus configured on HTTP) answers `-32601`
+rather than acknowledging a subscription it would silently drop. On
+stdio, subscriptions live in-session and need no bus. Long-lived HTTP
+streams are subject to host timeouts on shared hosting -- clients are
+expected to reconnect; see [docs/compatibility.md](compatibility.md).
+
+### Signaling That a List Changed (legacy sessions)
+
+For **legacy-era** clients (`2024-11-05` … `2025-11-25`), list-change
+signaling instead uses the classic capability + notification pair. If
+your server adds or removes tools, prompts, or resources at runtime, tell
+the client its cached catalog is stale so it refetches. This is a
+two-step feature:
 
 1. **Advertise the capability** with `notifyOnChanges()` before `run()`. This sets the `listChanged` flags in the initialization handshake so the client knows to listen.
 2. **Emit the notification** when the list actually changes, via `sendToolListChanged()`, `sendResourceListChanged()`, or `sendPromptListChanged()` on the session.
@@ -2594,19 +2833,42 @@ $server->run();
 
 ---
 
+## Deprecated Protocol Features
+
+The `2026-07-28` spec deprecates several protocol features (SEP-2596 /
+SEP-2577). **Nothing stops working** -- there is no wire-level deprecation
+signal, and deprecated features keep functioning through the spec's
+minimum twelve-month window. The SDK mirrors the spec's registry as
+`Mcp\Shared\FeatureLifecycle`, marks the affected classes and APIs with
+`@deprecated` docblocks, and emits **one PSR-3 warning per feature per
+session** (through the logger you supply; the default `NullLogger`
+discards them) when a deprecated feature is exercised on a session whose
+negotiated revision deprecates it.
+
+Server-relevant entries: **Sampling** and **Logging** (both deprecated at
+`2026-07-28` -- see the notes in [Part 9](#part-9-server-initiated-llm-sampling)
+and [Part 11](#part-11-emitting-notifications-logging-and-progress)) and
+the `includeContext: "thisServer"|"allServers"` sampling values
+(deprecated at `2025-11-25` -- omit the field or use `"none"`). The full
+registry, including the client-side entries, is in the
+[Migration Guide](migration-v2.md#11-deprecated-mcp-features-and-runtime-warnings-m8).
+
+---
+
 ## Appendix A: Configuration Reference
 
 ### HTTP Transport Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `session_timeout` | int | 3600 | Session expiry in seconds |
+| `session_timeout` | int | 3600 | Session expiry in seconds (**legacy only** -- modern requests are sessionless) |
 | `max_queue_size` | int | 1000 | Maximum messages in queue per session |
 | `enable_sse` | bool | false | Master switch for Server-Sent Events. While `false` every POST gets a plain JSON response. Set to `true` to let the transport negotiate SSE via the client's `Accept` header |
 | `sse_mode` | string | `'auto'` | Secondary setting that applies only when `enable_sse` is `true` and the transport picks SSE for a request. `'auto'` (stream only when the request carries a `progressToken`), `'streaming'` (always stream when the runtime permits), or `'buffered'` (single-response SSE -- never mid-response flushing) |
 | `sse_retry_ms` | int | 1500 | Reconnect hint emitted on SSE streams via the WHATWG `retry` field |
-| `sse_event_log_capacity` | int | 64 | Max events retained per session for resumable replay via `Last-Event-ID` |
-| `sse_standalone_get_idle_ms` | int | 0 | How long an idle standalone-GET SSE stream stays open; default 0 closes immediately (correct for PHP-FPM, where no background worker exists to push messages) |
+| `sse_event_log_capacity` | int | 64 | Max events retained per session for resumable replay via `Last-Event-ID` (**legacy only** -- no resumption exists on the modern path) |
+| `sse_standalone_get_idle_ms` | int | 0 | How long an idle standalone-GET SSE stream stays open; default 0 closes immediately (correct for PHP-FPM, where no background worker exists to push messages) (**legacy only**) |
+| `subscription_bus` | SubscriptionBusInterface/null | null | Event bus backing `subscriptions/listen` on HTTP; normally set via `subscriptionBus()` (see [Part 11](#publishing-change-notifications-subscriptionslisten)) |
 | `shared_hosting` | bool/null | null (auto-detect) | Force shared hosting optimizations |
 | `server_header` | string | `MCP-PHP-Server/1.0` | Server identification header |
 | `allowed_origins` | array/null | null | Allowed hostnames for Origin validation (auto-set for `cli-server` SAPI) |
@@ -2630,7 +2892,7 @@ $server->run();
 
 | Method | Description |
 |--------|-------------|
-| `tool(name, description, callback, title?, icons?, outputSchema?, inputSchema?)` | Register a tool |
+| `tool(name, description, callback, title?, icons?, outputSchema?, inputSchema?, taskSupport?)` | Register a tool; `taskSupport` (a `TaskSupport` constant) opts it into SEP-2663 task augmentation -- see the [Tasks guide](tasks.md) |
 | `prompt(name, description, callback, title?, icons?)` | Register a prompt |
 | `resource(uri, name, callback, description?, mimeType?, title?, icons?, size?)` | Register a resource |
 | `resourceTemplate(uriTemplate, name, callback, description?, mimeType?, title?, icons?)` | Register a resource template (variables passed to the callback by name) |
@@ -2640,14 +2902,16 @@ $server->run();
 | `httpOptions(array)` | Set HTTP transport configuration |
 | `sessionStore(SessionStoreInterface)` | Set the session persistence backend |
 | `withAuth(tokenValidator, authorizationServers, resourceId)` | Enable OAuth authentication |
-| `notifyOnChanges(resourcesChanged?, toolsChanged?, promptsChanged?)` | Configure change notifications |
-| `enableTasks(storagePath?)` | Enable experimental task support |
+| `notifyOnChanges(resourcesChanged?, toolsChanged?, promptsChanged?)` | Configure legacy list-changed notifications (**legacy only**; modern clients use `subscriptions/listen`) |
+| `enableTasks(storagePath?, defaultTtlMs?, defaultPollIntervalMs?)` | Enable the SEP-2663 Tasks extension: declares it and registers `tasks/get`/`tasks/update`/`tasks/cancel` -- see the [Tasks guide](tasks.md) |
+| `subscriptionBus(SubscriptionBusInterface)` | Configure the event bus backing `subscriptions/listen` on HTTP |
+| `publishToolsListChanged()` / `publishPromptsListChanged()` / `publishResourcesListChanged()` / `publishResourceUpdated(uri)` | Publish a change event to active `subscriptions/listen` subscribers |
 | `run()` | Auto-detect transport and start |
 | `runStdio()` | Force stdio transport |
 | `runHttp()` | Force HTTP transport |
-| *Context injection* | A tool callback that type-hints `ElicitationContext`, `SamplingContext`, or `ProgressContext` automatically receives that context at call time. The parameter is stripped from the tool's input schema. |
+| *Context injection* | A tool callback that type-hints `ElicitationContext`, `SamplingContext`, `InputContext`, or `ProgressContext` automatically receives that context at call time. The parameter is stripped from the tool's input schema. |
 | `getServer()` | Access the underlying Server instance |
-| `getTaskManager()` | Access the TaskManager instance |
+| `getTaskManager()` | Access the TaskManager instance (application-driven async tasks -- see the [Tasks guide](tasks.md)) |
 
 ### Callback Return Types
 
@@ -2655,7 +2919,7 @@ $server->run();
 |-----------|-------------|--------------|
 | **Tool** | `string` | Wrapped in `TextContent` inside `CallToolResult` |
 | **Tool** | `CallToolResult` | Returned as-is |
-| **Tool** | `array` (with `outputSchema`) | Wrapped with `content` + `structuredContent` |
+| **Tool** | any JSON value (with `outputSchema`) | Wrapped with `content` (JSON-encoded text) + `structuredContent` -- with an `outputSchema` declared, the return value **is** the structured output, so a returned string arrives JSON-encoded (`"hello"` with quotes) |
 | **Prompt** | `string` | Wrapped as single user-role `PromptMessage` |
 | **Prompt** | `array` of strings | Each string becomes a user-role `PromptMessage` |
 | **Prompt** | `GetPromptResult` | Returned as-is |
@@ -2714,4 +2978,4 @@ The reflection-based schema builder produces [JSON Schema draft 2020-12](https:/
 
 ---
 
-*This guide covers the `logiscape/mcp-sdk-php` SDK implementing the [MCP specification 2025-11-25](https://modelcontextprotocol.io/specification/2025-11-25). For SDK source code and updates, visit [github.com/logiscape/mcp-sdk-php](https://github.com/logiscape/mcp-sdk-php).*
+*This guide covers v2 of the `logiscape/mcp-sdk-php` SDK, implementing the [MCP specification](https://modelcontextprotocol.io/specification/) through the `2026-07-28` revision with negotiated support back to `2024-11-05`. For SDK source code and updates, visit [github.com/logiscape/mcp-sdk-php](https://github.com/logiscape/mcp-sdk-php).*

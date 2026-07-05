@@ -74,6 +74,10 @@ development plan.
   `RequestStateCodec`.
 - **Transport/headers:** `Mcp\Shared\McpHeaders` (SEP-2243),
   `JsonRpcMessage::$httpHeaderHints`, `x-mcp-header` mirroring.
+- **Session resume:** modern-era (`2026-07-28`) HTTP detach/resume — a new
+  optional `$modernWireVersion` parameter on `Client::resumeHttpSession()`
+  and `ClientSession::createRestored()` (auto-detected from the persisted
+  negotiated version when omitted); legacy resumes are unchanged.
 - **Lifecycle:** `Mcp\Shared\FeatureLifecycle`, session
   `warnDeprecatedFeature()`.
 - **Auth:** `client_credentials` grant (private_key_jwt ES256/RS256, basic),

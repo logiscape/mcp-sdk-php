@@ -42,12 +42,12 @@ Group assigns tiers.
 
 | SEP-1730 criterion          | Target (Tier 1)          | Current state                                                                                                                          |
 | --------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Conformance pass rate       | 100%                     | **100%** of applicable required tests on suite `v0.1.16`. Three known failures, all in optional MCP Extensions (documented in baseline). |
-| New protocol features       | Before spec release      | `2025-11-25` supported; back-compat for `2024-11-05`, `2025-03-26`, `2025-06-18`. Day-one support for the `2026-07-28` revision is the focus of `v2` development on `main` (see below).        |
+| Conformance pass rate       | 100%                     | **100%** of stable-track scenarios — both baseline lists are empty on suite `v0.1.16`. The `2026-07-28` draft track additionally runs in CI with a small, documented upstream-issue baseline. |
+| New protocol features       | Before spec release      | `2026-07-28` (the release candidate) supported on `main` ahead of the final spec, alongside `2024-11-05` … `2025-11-25` via built-in negotiation — the `v2` beta (see below).        |
 | Issue triage                | 2 business days          | Best-effort; see response-time section below.                                                                         |
 | Critical bug resolution     | 7 days                   | Best-effort, typically weeks not days for non-trivial fixes.                                                          |
 | Stable release              | Required, clear versioning | Met. Latest stable is `v1.7.4` on the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x); `main` carries the pre-release `v2`. Semver-tagged since `v1.0.0`.       |
-| Documentation               | Comprehensive w/ examples | Largely met. Covered by [README](README.md), [server-dev](docs/server-dev.md), [testing](docs/testing.md), [compatibility](docs/compatibility.md), plus 10 example programs and an example web client. |
+| Documentation               | Comprehensive w/ examples | Met. Two-audience documentation set indexed in [docs/README.md](docs/README.md): [server-dev](docs/server-dev.md) and [client-dev](docs/client-dev.md) guides, a [v1 → v2 migration guide](docs/migration-v2.md), [Tasks](docs/tasks.md) and [Apps](docs/apps.md) extension guides, [testing](docs/testing.md) and [compatibility](docs/compatibility.md), plus a runnable [example per major feature](examples/README.md) and an example web client. |
 | Dependency update policy    | Published                | Met ([`docs/dependency-policy.md`](docs/dependency-policy.md)).                                                                        |
 | Roadmap                     | Published                | Met — this document.                                                                                                                   |
 
@@ -286,34 +286,17 @@ the SEP is stable.
   [SUPPORT.md](SUPPORT.md) once enough trusted contributors are on board to
   sustain them. See [GOVERNANCE.md](GOVERNANCE.md) for the path to becoming
   one.
-- **Graduate the Tasks primitive.** An experimental implementation is already
-  in the tree — `Mcp\Server\TaskManager` with file-based storage (chosen for
-  cPanel/Apache compatibility), the `McpServer::enableTasks()` wiring for
-  `tasks/get` / `tasks/list` / `tasks/cancel` / `tasks/result`, client-side
-  `getTask()` / `listTasks()` / `cancelTask()` methods, and a full
-  state-transition validator. As of the `2026-07-28` RC, Tasks has moved from a
-  core primitive (formerly tracked here as SEP-1686) to the **SEP-2663
-  extension** with a stateless redesign — notably dropping `tasks/list`. That
-  redesign is now tracked in the day-one subsection above; this bullet remains
-  only for the still-moving pieces (richer retry semantics, configurable
-  result-expiry beyond the current TTL, and the task-augmented-request gap
-  marked in `Server/Elicitation/ElicitationContext::url()` and the equivalent
-  sampling path).
-- **Finish task-augmented elicitation and sampling.** Form-mode and URL-mode
-  elicitation are already wired on both sides of the wire, and
-  `sampling/createMessage` already accepts `tools` / `toolChoice` under the
-  `sampling.tools` sub-capability check. What is missing is carrying a
-  `task` parameter through to the server-facing ergonomic layer. On the
-  elicitation side, `ElicitationContext::form()` and `ElicitationContext::url()`
-  accept a `?TaskRequestParams $task` argument but explicitly reassign it
-  to `null` before building the request, with an in-code comment stating
-  that task-augmented elicitation is not yet implemented. On the sampling
-  side, `CreateMessageRequest` already takes a `task` constructor
-  argument, but `SamplingContext::createMessage()` does not expose one —
-  callers using the ergonomic wrapper have no way to attach task metadata.
-  The gap is deliberate: the surrounding wire format is not fully settled,
-  and closing it is a prerequisite for calling Tasks "done" rather than an
-  independent item.
+- **Round out the Tasks extension.** The SEP-2663 stateless redesign
+  shipped with `v2` (WS4 in the
+  [v2 development plan](docs/v2-development-plan.md)): `tasks/get` /
+  `tasks/update` / `tasks/cancel` on the file-based `TaskManager`,
+  server-directed task creation via `tool(..., taskSupport:)`, in-task
+  input through `inputRequests` / `inputResponses`, and the client-side
+  `getTask()` / `updateTask()` / `cancelTask()` API — see
+  [docs/tasks.md](docs/tasks.md). Remaining post-v2 candidates as the
+  extension's own draft line moves: the optional `notifications/tasks`
+  status push (this SDK is poll-based today) and richer
+  application-driven retry/expiry policies on the store.
 - **Shared session store for clustered HTTP deployments.** The
   `SessionStoreInterface` seam already accepts pluggable implementations;
   file-based and in-memory stores ship in-box. The stateless transport work
@@ -325,26 +308,24 @@ the SEP is stable.
   shared-store implementation (likely a PSR-6 or PSR-16 adapter, so users can
   pick Redis/Memcached/APCu without the SDK taking a hard dependency) and keeping
   the seam stable so the additive stateless paths above do not force API churn.
-- **Pre-connection discovery: Server Cards (SEP-2127) vs. `server/discover`
-  (SEP-2575).** OAuth `.well-known` endpoints are already served by the HTTP
-  runner; a discovery surface for capabilities is not. Two mechanisms now
-  overlap here: the SEP-2127 Server Card `.well-known` document (a static,
-  pre-connection descriptor) and the `2026-07-28` `server/discover` RPC method
-  (an on-demand, cacheable capability fetch that replaces what the handshake
-  used to provide). `server/discover` is the priority because it is part of
-  day-one revision support (tracked above); a Server Card endpoint remains a
-  complementary, lower-priority addition. Both are thin endpoints on
-  `HttpServerRunner` and natural fits for shared hosting, shipped behind a config
-  flag once the paths and schemas stop moving.
-- **Close remaining OAuth-spec alignment gaps.** The client-side already
-  has `ClientIdMetadataDocument` (CIMD / SEP-991), a PKCE implementation,
-  Protected-Resource and Authorization-Server metadata discovery, and
-  dynamic client registration. The remaining alignment work tracks items
-  still landing on the spec side: baseline default scopes (SEP-835), the
-  `client_credentials` grant (also tracked in the near-term conformance
-  bullet), and follow-through on any smaller auth extensions that reach
-  Accepted status. These drop into the existing `Client/Auth/` and
-  `Server/Auth/` framework rather than requiring a new abstraction.
+- **Pre-connection discovery: Server Cards (SEP-2127).** The `2026-07-28`
+  `server/discover` RPC method (an on-demand, cacheable capability fetch
+  that replaces what the handshake used to provide) shipped with `v2` as
+  part of day-one revision support. The complementary SEP-2127 Server Card
+  — a static `.well-known` pre-connection descriptor — remains a
+  lower-priority addition: a thin endpoint on `HttpServerRunner` and a
+  natural fit for shared hosting, shipped behind a config flag once its
+  path and schema stop moving.
+- **Close remaining OAuth-spec alignment gaps.** `v2` shipped the
+  `client_credentials` grant (private_key_jwt and client_secret_basic),
+  SEP-990 cross-app access, issuer-bound pre-registered credentials, and
+  the SEP-2468/837/2352/2207/2350/2351 hardening set, alongside the
+  existing CIMD (SEP-991), PKCE, and metadata-discovery support. The
+  remaining alignment work tracks items still landing on the spec side:
+  baseline default scopes (SEP-835) and follow-through on any smaller
+  auth extensions that reach Accepted status. These drop into the
+  existing `Client/Auth/` and `Server/Auth/` framework rather than
+  requiring a new abstraction.
 
 ### Long-term / conditional
 

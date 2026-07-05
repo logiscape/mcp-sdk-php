@@ -1466,8 +1466,8 @@ demonstrate v2.
 - Examples referenced from documentation actually exist at the referenced
   paths.
 
-**Status (2026-07-04):** implemented and verified (steps 1–2); code review
-(step 3) pending. Research found zero upstream drift since the 2026-07-01
+**Status (2026-07-04):** implemented and verified (steps 1–2); code reviewed
+(step 3) and committed. Research found zero upstream drift since the 2026-07-01
 assessment (no normative spec/ext-tasks/ext-apps merges after 2026-07-01;
 spec PR #2972 was already absorbed by WS3's drift round). Delivered: an
 `examples/README.md` index organizing the directory (existing paths kept
@@ -1691,6 +1691,73 @@ executed against the SDK over the transport they target).
 - `docs/README.md` labels every document's audience; the README
   documentation index lists every user-facing document.
 - README v2 notice replaced with real v2 documentation at release.
+
+**Status (2026-07-05):** all three milestones implemented and verified
+(steps 1–2); code reviewed and committed. Research found no upstream
+drift: zero commits in the spec, ext-tasks, and ext-apps repositories
+since 2026-07-03 (WS9's research had verified through 2026-07-04), and
+the M1 completeness re-check of the api-audit against the shipped
+surface found one gap — the modern-era session-resume support
+(2026-07-03 fix) missing from the audit's additive section — which was
+amended in place. Delivered: **M1** — `docs/migration-v2.md`
+(symptom→section table, B1–B8 and M1–M9 restated with before/after code,
+the five-row deprecation registry, the wire-automatic section) and the
+README rewritten as the v2 front door (dual-era Project Status,
+dual-track conformance with the beta install command, "New in v2"
+summary, complete documentation index; the quick-start snippets kept
+byte-identical to the WS9-verified originals and re-executed). **M2** —
+`docs/server-dev.md` overhauled v2-first/legacy-noted (new stateless-
+model section; era-split elicitation/sampling mechanics replacing the
+"intentionally not documented" placeholders, with the `-32021` and
+legacy-prompts caveats; new `subscriptions/listen` publishing and
+SEP-2243 designated-parameters sections; SEP-2577 deprecation notes; the
+Apps section reduced to a pointer; Appendix A re-audited including the
+SEP-2663 `enableTasks()`/`taskSupport` rows), plus the self-contained
+`docs/tasks.md` (both sides, execution model, in-task input, the
+elicitation-capability gotcha) and `docs/apps.md` (moved + expanded from
+server-dev). **M3** — `docs/client-dev.md` overhauled (negotiation
+section with `protocolMode`/`probeTimeout`/`protocolVersion` and
+`discover()`; task-augmented `callTool()`; legacy-noting of
+`resources/subscribe`, the standalone GET stream, SSE resumption,
+`setLoggingLevel()`, and `ping`; a new sampling-servicing section;
+dual-era session resume; Appendix A re-audited including the OAuth
+additions), the AGENTS.md refresh (dual-era architecture notes,
+capabilities inventory with discover/listen/extensions, test commands
+reduced to a pointer at the now-canonical docs/testing.md),
+`docs/README.md` (audience-labeled index), the drift sweep
+(CONTRIBUTING.md test-stack pointer + dual-baseline ground rule;
+testing.md dual-track section; compatibility.md stateless framing and
+era-correct SSE/resumption notes; tests/README.md era reframing;
+ROADMAP.md tier-table rows, the stale Tasks/task-augmented bullets
+collapsed into a shipped-in-v2 summary, and the discover/OAuth
+medium-term bullets refreshed; SUPPORT.md documentation pointers), and
+CHANGELOG `[Unreleased]` entries for the documentation set. One SDK gap
+was found and closed during M3 (documentation-driven): `ClientSession::
+onSampling()` must run before initialization, but `Client` had no
+pre-connect wrapper (unlike `onElicit()`/`onListRoots()`), so the
+public `connect()` flow could not register a sampling handler at all —
+`Client::onSampling()` was added (wired on connect and resume) with an
+end-to-end regression test (`tests/Client/ClientOnSamplingTest.php`)
+proving a spawned server's `SamplingContext` tool receives the
+handler's completion through modern MRTR. Honest notes: (a) the scope
+item "`subscriptions/listen` consumption" is documented as a current
+client-side limitation — the SDK ships no high-level listen consumer
+(the server side is complete; client guidance is poll/re-read honoring
+`ttlMs`) — rather than documented as existing; (b) snippet verification
+was WS9-style — every fenced PHP block extracted verbatim; all 41
+complete server-dev servers executed over stdio (connect + list), the
+migration guide's six complete scripts, both extension guides' servers
+and clients, and the new client-dev snippets executed end-to-end
+(placeholder `https://example.com` URLs substituted with local fixtures
+at run time), with fragments syntax-checked; client-dev's pre-existing
+placeholder-URL scripts were lint-verified only; (c) per CONTRIBUTING's
+release flow, splitting `[Unreleased]` into per-pre-release CHANGELOG
+sections and replacing the README beta notice remain release-cut
+(G4) steps for the maintainer. Verification: `composer check` green
+(1239 tests; PHPStan clean); stable conformance 40 server + 325 client,
+zero failures, baselines empty; draft track regression-free (aggregate
+exit 0, all failures baselined); every relative link in the touched
+documents resolves.
 
 ---
 

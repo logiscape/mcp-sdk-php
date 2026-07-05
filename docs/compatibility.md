@@ -10,8 +10,12 @@ up during development.
 ## The principle
 
 1. **Core MCP features must work under cPanel/Apache/PHP-FPM.** Tools,
-   prompts, resources, initialization, capability negotiation, stdio transport
-   (where the host permits), and the baseline HTTP transport are all "core."
+   prompts, resources, initialization and capability negotiation (both the
+   legacy handshake and the `2026-07-28` stateless model with
+   `server/discover`), stdio transport (where the host permits), and the
+   baseline HTTP transport are all "core." The `2026-07-28` revision is a
+   particularly natural fit here: every modern request is self-contained,
+   so a fresh PHP process per request needs no persisted protocol state.
 2. **Features that are genuinely incompatible with shared hosting still ship.**
    Leaving them out would put the SDK out of spec alignment, which we don't
    accept. Examples include long-lived SSE streams on hosts with aggressive
@@ -66,8 +70,13 @@ certain signal-handling niceties. HTTP servers are unaffected.
   - `output_buffering` being on — the SDK flushes explicitly, but some hosts
     re-wrap output. Check `php.ini` or `.htaccess` overrides.
   - FPM's `request_terminate_timeout` being too low — long-lived streams can
-    be killed. The SDK recovers (the client reconnects with `Last-Event-Id`),
-    but throughput suffers on hosts with aggressive timeouts.
+    be killed. On legacy sessions the SDK recovers (the client reconnects
+    with `Last-Event-Id`); on the `2026-07-28` path there is no stream
+    resumption by design — response streams are request-scoped, and a
+    `subscriptions/listen` stream cut by a host timeout is simply
+    re-opened by the client (the SDK sends a graceful
+    `SubscriptionsListenResult` when it ends a stream itself). Throughput
+    suffers on hosts with aggressive timeouts either way.
   - Aggressive CDNs and proxies that buffer responses — add
     `X-Accel-Buffering: no` or configure the proxy to stream.
 - When SSE is not viable on a particular host, the SDK's fallback path is to
@@ -92,7 +101,14 @@ strip by default). The second exposes the protected-resource metadata
 endpoint. The full walk-through is in
 [`examples/server_auth/README.md`](../examples/server_auth/README.md).
 
-### Session persistence
+### Session persistence (legacy sessions)
+
+Protocol sessions only exist for legacy-era clients (`2024-11-05` …
+`2025-11-25`) — `2026-07-28` requests are sessionless and skip this
+machinery entirely. The same file-backed approach also carries the
+cross-process state of v2 features that need it (`FileSubscriptionBus`
+for `subscriptions/listen` events, the Tasks extension's `TaskManager`
+store), with the same hosting characteristics.
 
 - The web client and the HTTP server transport persist session state on disk
   via `Mcp\Server\Transport\Http\FileSessionStore`. Writes go to a directory

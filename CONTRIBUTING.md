@@ -25,9 +25,11 @@ A handful of principles apply to every change:
 1. **Spec-faithful, no shortcuts.** Implementations must match the intent of
    the MCP specification. We do not bypass SDK code paths or hand-craft
    responses purely to green a conformance test. A test we cannot honestly
-   pass goes in
-   [`conformance/conformance-baseline.yml`](conformance/conformance-baseline.yml)
-   with a documented root cause. See
+   pass goes in the relevant track's baseline file
+   ([`conformance/conformance-baseline.yml`](conformance/conformance-baseline.yml)
+   for the stable track,
+   [`conformance/conformance-draft-baseline.yml`](conformance/conformance-draft-baseline.yml)
+   for the `2026-07-28` draft track) with a documented root cause. See
    [`conformance/README.md`](conformance/README.md) for the longer version.
 2. **cPanel / Apache compatibility is mandatory for core MCP features.** If a
    change breaks a core feature under shared hosting, it's not ready. Features
@@ -61,50 +63,26 @@ npm install           # for the conformance tests
 
 ## Test stack
 
-We take protocol behaviour seriously and maintain several overlapping checks.
-All of them should pass before a pull request is ready for review.
+We take protocol behaviour seriously and maintain several overlapping
+checks. The canonical, complete reference for every layer — commands,
+conventions, and interpretation — is
+[`docs/testing.md`](docs/testing.md). In brief:
 
-- **Unit tests (PHPUnit 10+)**
-
-  ```bash
-  composer test
-  # or narrower:
-  ./vendor/bin/phpunit tests/Server/ServerSessionTest.php
-  ```
-
-- **Static analysis (PHPStan)**
-
-  ```bash
-  composer analyse
-  ```
-
-- **Combined regression check** — run this before every PR:
-
-  ```bash
-  composer check
-  ```
-
-- **MCP Conformance suite** — not part of `composer check` because it needs
-  Node.js. Run it when your change touches protocol handling, transports,
-  session management, `McpServer`, or anything under `src/Shared/`:
-
-  ```bash
-  composer conformance
-  ```
-
-  See [`conformance/README.md`](conformance/README.md) for how to interpret
-  the baseline and when it is — and is not — acceptable to update it.
-
-- **Official MCP Inspector** — for anything the user sees at the protocol
-  level, a quick spot-check with the
-  [official Inspector](https://github.com/modelcontextprotocol/inspector)
-  against one of the example servers catches surprises no automated suite
-  will. Instructions in [`docs/testing.md`](docs/testing.md).
-
-- **Real-world AI applications** — contributors are *encouraged*, not required,
-  to smoke-test user-visible changes against a real MCP client such as Claude
-  Code or the OpenAI API playground. This is often where rough edges surface.
-  Recipes in [`docs/testing.md`](docs/testing.md).
+- **`composer check`** (PHPUnit + PHPStan) — run before every PR; it must
+  pass.
+- **MCP Conformance suite** — not part of `composer check` because it
+  needs Node.js. Two tracks run during v2 development: `composer
+  conformance` (stable, published-spec scenarios — the regression gate)
+  and `composer conformance-draft` (the `2026-07-28` RC scenarios). Run
+  the stable track when your change touches protocol handling,
+  transports, session management, `McpServer`, or anything under
+  `src/Shared/`; add the draft track when it touches `2026-07-28`
+  behavior. See [`conformance/README.md`](conformance/README.md) for how
+  to interpret the baselines and when it is — and is not — acceptable to
+  update them.
+- **Official MCP Inspector** and **real-world AI applications** —
+  encouraged spot-checks for user-visible changes; recipes in
+  [`docs/testing.md`](docs/testing.md).
 
 ## Coding standards
 
@@ -136,8 +114,9 @@ All of them should pass before a pull request is ready for review.
 3. **Run `composer check`** and, if your change touches protocol or transport
    code, `composer conformance` as well.
 4. **Update documentation** alongside code changes, not in a follow-up PR.
-   That includes `docs/server-dev.md` when public API changes, `CHANGELOG.md`
-   under `[Unreleased]`, and any relevant file under `docs/`.
+   That includes `docs/server-dev.md` / `docs/client-dev.md` when public
+   API changes, `CHANGELOG.md` under `[Unreleased]`, and any relevant file
+   under `docs/` (see the [documentation index](docs/README.md)).
 5. **Open the PR** using the pull-request template. Fill in every section
    that applies — skipping sections often means a second round of review.
 6. **Respond to review.** Force-pushing to a PR branch is fine and sometimes

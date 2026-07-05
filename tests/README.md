@@ -53,16 +53,26 @@ All test classes must be suffixed with `Test` to be automatically discovered by 
 
 ## Core Test Suite
 
-The SDK includes four critical test files that validate the protocol's core functionality:
+The suite covers both protocol eras the SDK speaks: the legacy
+handshake-based revisions (`2024-11-05` … `2025-11-25`) and the
+`2026-07-28` stateless model. The dual-era surface has its own dedicated
+suites — see `tests/Server/ServerEraDetectionTest.php`,
+`tests/Client/ClientNegotiationTest.php` (the four-way modern/legacy
+pairing matrix), `tests/Server/CrossRevisionMatrixTest.php` (era-correct
+behavior per revision, run in CI), `tests/Client/ClientMrtrTest.php`
+(multi-round-trip input), and `tests/Server/TasksExtensionTest.php` /
+`tests/Server/AppsExtensionTest.php` (the v2 extensions).
+
+Four foundational test files validate the protocol's core plumbing:
 
 ### 1. ClientSessionInitializeTest.php
 
 **Location**: `tests/Client/ClientSessionInitializeTest.php`
-**Source Code**: `src/Client/ClientSession.php:130-170`
+**Source Code**: `src/Client/ClientSession.php` — `initialize()`
 
-**Purpose**: Validates the client-side initialization handshake sequence.
+**Purpose**: Validates the client-side initialization handshake sequence (the legacy-era connection path; the `2026-07-28` era needs no handshake, and its probe/fallback negotiation is covered by `ClientNegotiationTest.php`).
 
-This test is critical because if the handshake is broken, clients cannot connect to ANY MCP server. It validates:
+This test is critical because if the handshake is broken, clients cannot connect to any legacy MCP server. It validates:
 
 - **Correct request sequence**: initialize request → wait for response → initialized notification
 - **Protocol version validation**: Ensures clients reject unsupported protocol versions
@@ -86,7 +96,7 @@ This test is critical because if the handshake is broken, clients cannot connect
 ### 2. ServerSessionTest.php
 
 **Location**: `tests/Server/ServerSessionTest.php`
-**Source Code**: `src/Server/ServerSession.php:231-269`
+**Source Code**: `src/Server/ServerSession.php` — `handleInitialize()` / `negotiateProtocolVersion()`
 
 **Purpose**: Validates server-side protocol version negotiation.
 
@@ -114,7 +124,7 @@ This test ensures servers can negotiate with clients using different protocol ve
 ### 3. BaseSessionTest.php
 
 **Location**: `tests/Shared/BaseSessionTest.php`
-**Source Code**: `src/Shared/BaseSession.php:109-320`
+**Source Code**: `src/Shared/BaseSession.php` — `sendRequest()` / `sendNotification()` / `handleIncomingMessage()`
 
 **Purpose**: Validates JSON-RPC error propagation, response handler cleanup, and server-side message dispatch.
 
@@ -148,7 +158,7 @@ Error handling and message dispatch are fundamental to robust communication. Thi
 ### 4. ServerMessageHandlingTest.php
 
 **Location**: `tests/Server/ServerMessageHandlingTest.php`
-**Source Code**: `src/Server/Server.php:176-252`
+**Source Code**: `src/Server/Server.php` — `handleMessage()` / `processRequest()` / `processNotification()`
 
 **Purpose**: Validates handler dispatch and error conversion (developer-facing API).
 
@@ -258,4 +268,4 @@ When contributing tests:
 
 - [PHPUnit Documentation](https://phpunit.de/documentation.html)
 - [MCP Specification](https://spec.modelcontextprotocol.io/)
-- [Project README](../README.md)
+- [Project README](../README.md)

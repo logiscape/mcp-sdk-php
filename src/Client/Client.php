@@ -78,6 +78,9 @@ class Client {
     /** @var bool Whether the pending roots handler advertises listChanged. */
     private bool $pendingRootsListChanged = true;
 
+    /** @var callable|null Pending sampling handler to register before initialize(). */
+    private $pendingSamplingHandler = null;
+
     /**
      * Client constructor.
      *
@@ -138,6 +141,32 @@ class Client {
         }
         $this->pendingRootsHandler = $handler;
         $this->pendingRootsListChanged = $listChanged;
+    }
+
+    /**
+     * Register a handler for server-initiated `sampling/createMessage`
+     * requests.
+     *
+     * Must be called before {@see connect()} so the `sampling` capability is
+     * advertised in the initialization handshake (per the MCP spec a client
+     * that supports sampling MUST declare the capability). The handler is
+     * applied to the session that connect() creates, and also services
+     * `sampling/createMessage` entries in SEP-2322 `input_required` results
+     * on the modern (`2026-07-28`) path.
+     *
+     * @param callable(\Mcp\Types\CreateMessageRequest): \Mcp\Types\CreateMessageResult $handler
+     *
+     * @deprecated The Sampling feature is deprecated as of protocol revision
+     *             2026-07-28 (SEP-2577); it keeps working for at least the
+     *             twelve-month deprecation window. Migration: integrate
+     *             directly with LLM provider APIs. See the deprecated
+     *             features registry.
+     */
+    public function onSampling(callable $handler): void {
+        if ($this->session !== null) {
+            throw new RuntimeException('onSampling() must be called before connect()');
+        }
+        $this->pendingSamplingHandler = $handler;
     }
 
     /**
@@ -286,6 +315,13 @@ class Client {
                     $this->pendingRootsHandler,
                     $this->pendingRootsListChanged
                 );
+            }
+
+            // Apply any sampling handler registered via onSampling() before
+            // connect(). Must happen before initialize() so the sampling
+            // capability is advertised in the handshake.
+            if ($this->pendingSamplingHandler !== null) {
+                $this->session->onSampling($this->pendingSamplingHandler);
             }
 
             // Negotiate the protocol era (SEP-2575): probe server/discover
@@ -514,6 +550,13 @@ class Client {
                     $this->pendingRootsHandler,
                     $this->pendingRootsListChanged
                 );
+            }
+
+            // Apply any sampling handler registered via onSampling() before
+            // resumeHttpSession(), for the same reason as the elicitation
+            // and roots handlers above.
+            if ($this->pendingSamplingHandler !== null) {
+                $this->session->onSampling($this->pendingSamplingHandler);
             }
 
             // Re-open the standalone GET SSE stream for the resumed session.

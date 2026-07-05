@@ -6,6 +6,8 @@
 > [!NOTE]
 > **This `main` branch contains the v2 beta of the logiscape/mcp-sdk-php SDK.**
 >
+> v2 adds day-one support for the MCP `2026-07-28` spec revision; upgrading
+> from v1 is covered by the [Migration Guide](docs/migration-v2.md).
 > For the stable v1 code and documentation, see the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x).
 
 This package provides a PHP implementation of the [Model Context Protocol](https://modelcontextprotocol.io). The primary goal of this project is to provide both an MCP server and an MCP client using pure PHP, making it easy to use in PHP/Apache/cPanel hosting environments with typical server configurations.
@@ -16,20 +18,52 @@ This PHP SDK implements the full MCP specification, making it easy to:
 * Build MCP clients that can connect to any MCP server
 * Create MCP servers that expose resources, prompts and tools
 * Use standard transports like stdio and HTTP
+* Interoperate with peers on any spec revision from `2024-11-05` through `2026-07-28` — version negotiation is built in
 
 This SDK offers two major advantages for the MCP and PHP developer communities:
 
-* This SDK features a 100% pass rate on the applicable required [MCP Conformance Tests](https://github.com/modelcontextprotocol/conformance) as of testing suite v0.1.16 and aims to maintain full conformance as the spec and tests evolve, not including tests still marked as experimental or optional extensions.
+* This SDK features a 100% pass rate on the applicable required [MCP Conformance Tests](https://github.com/modelcontextprotocol/conformance) — the stable-track baseline is empty — and additionally runs the draft-track suite validating the `2026-07-28` release candidate. See [Conformance Testing](conformance/README.md).
 
 * The SDK can demonstrate both a functional MCP client and MCP server with a single Composer command. See the [Webclient Example](webclient/README.md).
 
+## New in v2
+
+v2 is built around two headline features — day-one support for the MCP
+`2026-07-28` "stateless core" spec revision, and full support for the MCP
+Apps extension — delivered without giving up compatibility with any
+earlier revision:
+
+* **`2026-07-28` stateless core** — no `initialize` handshake, no session
+  ids: every request is self-contained, which is exactly the model that
+  fits typical PHP web hosting (a fresh process per request). Includes
+  `server/discover`, caching hints, request-metadata headers,
+  `subscriptions/listen` streams, and multi-round-trip input gathering.
+* **Dual-era negotiation** — servers detect each request's era and clients
+  probe-then-fall-back automatically, so one codebase serves both modern
+  (`2026-07-28`) and legacy (`2024-11-05` … `2025-11-25`) peers
+  concurrently.
+* **Tasks extension (SEP-2663)** — long-running tool calls return a task
+  handle that clients poll, cancel, and feed input to; backed by a
+  file-based store that works on shared hosting. See the
+  [Tasks guide](docs/tasks.md).
+* **MCP Apps extension (SEP-1865)** — attach a host-rendered HTML UI to a
+  tool with one `->ui(...)` call. See the [Apps guide](docs/apps.md).
+
+The complete inventory — including OAuth 2.1 hardening, typed errors, and
+the feature-lifecycle deprecation registry — is in the
+[CHANGELOG](CHANGELOG.md); API differences from v1 are covered in the
+[Migration Guide](docs/migration-v2.md).
+
 ## Installation
 
-You can install the package via composer:
+You can install the v2 beta via composer:
 
 ```bash
-composer require logiscape/mcp-sdk-php
+composer require logiscape/mcp-sdk-php:^2.0@beta
 ```
+
+(Plain `composer require logiscape/mcp-sdk-php` installs the stable v1
+line until v2.0.0 is released.)
 
 ### Requirements
 * PHP 8.1 or higher
@@ -109,9 +143,13 @@ Save this as `example_client.php` and run it:
 php example_client.php
 ```
 
-## Advanced Examples
+## Examples
 
-The "examples" directory includes additional clients and servers for both the STDIO and HTTP transports. All examples are designed to run in the same directory where you installed the SDK.
+The [`examples/` directory](examples/README.md) contains a runnable example
+for every major SDK feature — stateless servers, dual-era client
+negotiation, Tasks, Apps, elicitation, HTTP clients, and OAuth — each
+designed to run from the directory where you installed the SDK. Its README
+doubles as a feature map of the SDK.
 
 Some examples use monolog for logging, which can be installed via composer:
 
@@ -143,16 +181,22 @@ The HTTP server transport includes optional OAuth 2.1 support. For more details 
 
 For detailed information about the Model Context Protocol itself, visit the [official documentation](https://modelcontextprotocol.io).
 
-Project-specific documentation lives in this repository:
+Project-specific documentation lives in this repository (see the
+[documentation index](docs/README.md) for the full annotated list):
 
 | Document | Purpose |
 | --- | --- |
 | [Server Development Guide](docs/server-dev.md) | Building MCP servers with `McpServer`. |
+| [Client Development Guide](docs/client-dev.md) | Building MCP clients with `Client` / `ClientSession`. |
+| [Migration Guide](docs/migration-v2.md) | Upgrading a project from v1 to v2. |
+| [Tasks Extension Guide](docs/tasks.md) | Long-running tool calls (SEP-2663), server and client side. |
+| [Apps Extension Guide](docs/apps.md) | Host-rendered tool UIs (SEP-1865). |
+| [Examples Index](examples/README.md) | A runnable example per major feature. |
 | [Testing Guide](docs/testing.md) | Unit tests, PHPStan, conformance, MCP Inspector, Claude Code, OpenAI. |
 | [Compatibility Guide](docs/compatibility.md) | cPanel / Apache / PHP-FPM notes and graceful-degradation rules. |
 | [Dependency Policy](docs/dependency-policy.md) | How dependencies are declared, bumped, and retired. |
 | [Label Scheme](docs/labels.md) | Issue labels aligned with the MCP SDK Working Group conventions. |
-| [Conformance Testing](conformance/README.md) | How the conformance harness works and the no-shortcut rule. |
+| [Conformance Testing](conformance/README.md) | How the dual-track conformance harness works and the no-shortcut rule. |
 
 Project governance and process:
 
@@ -168,7 +212,24 @@ Project governance and process:
 
 ## Project Status
 
-This SDK tracks the latest MCP specification revision (currently `2025-11-25`) and runs the full [official conformance suite](https://github.com/modelcontextprotocol/conformance) in CI. At the time of writing, 100% of the applicable required tests pass against suite `v0.1.16`; known failures are limited to optional MCP Extensions and are documented in [`conformance/conformance-baseline.yml`](conformance/conformance-baseline.yml).
+This SDK supports the latest MCP specification revision (`2026-07-28`, the
+"stateless core") from day one, alongside every earlier revision back to
+`2024-11-05` — version negotiation and per-request era detection let one
+server or client interoperate across all of them.
+
+Conformance runs on two tracks in CI: the stable track passes 100% of the
+applicable required tests with an **empty baseline**
+([`conformance/conformance-baseline.yml`](conformance/conformance-baseline.yml)),
+and the draft track validates the `2026-07-28` release candidate against
+the upstream RC-validation suite, with the few remaining entries in
+[`conformance/conformance-draft-baseline.yml`](conformance/conformance-draft-baseline.yml)
+documented as upstream-tool issues. See
+[conformance/README.md](conformance/README.md) for the dual-track rules.
+
+v2 is in **beta** (latest pre-release: `v2.0.0-beta2`); the final `v2.0.0`
+is gated on the `2026-07-28` spec's publication and a clean conformance
+run against the suite current at that date, per the
+[v2 development plan](docs/v2-development-plan.md).
 
 This is a community-maintained SDK. See [ROADMAP.md](ROADMAP.md) for a candid self-assessment against the [SDK tier criteria](https://modelcontextprotocol.io/community/sdk-tiers) and [GOVERNANCE.md](GOVERNANCE.md) for how the project is maintained.
 

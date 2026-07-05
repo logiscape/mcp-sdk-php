@@ -36,10 +36,13 @@ A little homework usually gets you a faster and better answer:
 
 1. **Check the documentation.** The main entry points are the
    [README](README.md), the
-   [server development guide](docs/server-dev.md),
+   [server development guide](docs/server-dev.md), the
+   [client development guide](docs/client-dev.md), the
+   [v1 → v2 migration guide](docs/migration-v2.md),
    [`docs/testing.md`](docs/testing.md),
    [`docs/compatibility.md`](docs/compatibility.md), and
-   [`examples/`](examples/).
+   [`examples/`](examples/README.md) — the full annotated list is in the
+   [documentation index](docs/README.md).
 2. **Search existing issues**, including closed ones. Many common questions
    already have answers.
 3. **Try to narrow the problem.** If your application is complex, reducing

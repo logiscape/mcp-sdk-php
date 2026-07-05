@@ -47,9 +47,22 @@ Runs PHPUnit followed by PHPStan. This should pass on every PR.
 
 ## 4. MCP Conformance suite
 
-Not part of `composer check` because it requires Node.js (the official
-conformance tool version is pinned in [`package.json`](../package.json)).
-Install once:
+Not part of `composer check` because it requires Node.js. During v2
+development the suite runs on **two independently pinned tool versions**
+(both pinned in [`package.json`](../package.json) so results are
+reproducible — each baseline file is tied to its installed version):
+
+- **Stable track** (`composer conformance`): the pinned stable tool with
+  the published-spec scenarios, gated by
+  `conformance/conformance-baseline.yml`. This is the legacy regression
+  gate; both of its baseline lists are currently empty (100% pass).
+- **Draft track** (`composer conformance-draft`): the pinned `0.2.0-alpha`
+  tool line — the upstream RC-validation track carrying the `2026-07-28`
+  draft-spec scenarios — installed under the npm alias `conformance-draft`
+  and gated by `conformance/conformance-draft-baseline.yml`. Draft
+  baseline entries carry a documented root cause and only shrink.
+
+Install both pinned tools once:
 
 ```bash
 npm install
@@ -58,19 +71,31 @@ npm install
 Then:
 
 ```bash
-composer conformance            # both server and client suites
+# Stable track (published-spec scenarios)
+composer conformance              # server + client
 composer conformance-server
 composer conformance-client
+
+# Draft track (2026-07-28 draft-spec scenarios)
+composer conformance-draft        # server + client
+composer conformance-draft-server
+composer conformance-draft-client
+
 # single scenario:
 php conformance/run-conformance.php server tools-list
+php conformance/run-conformance.php server-draft server-stateless
 ```
 
-How it works and how to interpret results is in
+How it works: the runner starts `conformance/everything-server.php` via
+PHP's built-in server for server scenarios, and the conformance framework
+spawns `conformance/everything-client.php` for client scenarios. The full
+mechanics, baseline-curation rules, and result interpretation are in
 [`conformance/README.md`](../conformance/README.md). **Do not** edit
-`conformance/conformance-baseline.yml` to paper over a regression — that is
-explicitly against the project's no-shortcut rule.
+either baseline file to paper over a regression — that is explicitly
+against the project's no-shortcut rule.
 
-Run this when your change touches:
+Run the stable track when your change touches (add the draft track when
+the change touches `2026-07-28` behavior):
 
 - `src/Shared/BaseSession.php` or anything in `src/Shared/`
 - `src/Server/` session, handler, or transport code
