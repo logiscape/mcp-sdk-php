@@ -52,7 +52,27 @@ $server
         tool: 'get_weather',
         uri: 'ui://weather/dashboard',
         name: 'Weather Dashboard',
-        html: '<!DOCTYPE html><html><body><h1 id="w">Loading…</h1></body></html>',
+        html: <<<'HTML'
+            <!DOCTYPE html>
+            <html><body>
+            <h1 id="w">Loading…</h1>
+            <script>
+            // Handshake with the host, then render the tool result.
+            const post = (msg) => window.parent.postMessage({jsonrpc: '2.0', ...msg}, '*');
+            window.addEventListener('message', (event) => {
+                const msg = event.data;
+                if (msg?.id === 1) {                       // ui/initialize response
+                    post({method: 'ui/notifications/initialized', params: {}});
+                } else if (msg?.method === 'ui/notifications/tool-result') {
+                    const d = msg.params?.structuredContent;
+                    if (d) document.getElementById('w').textContent =
+                        `${d.city}: ${d.condition}, ${d.temperatureC}°C`;
+                }
+            });
+            post({id: 1, method: 'ui/initialize', params: {appCapabilities: {}}});
+            </script>
+            </body></html>
+            HTML,
     )
 
     ->run();
@@ -73,6 +93,13 @@ That single `ui()` call does three things:
    `extensions["io.modelcontextprotocol/ui"] = {mimeTypes: [...]}` —
    advertised in both the legacy `initialize` result and the modern
    `server/discover`.
+
+The `<script>` block is the view's half of the contract, and it is not
+optional: a host delivers the tool result only after the view completes
+the `ui/initialize` → `ui/notifications/initialized` handshake, so a
+script-less document just renders its static HTML forever (you would see
+"Loading…" and nothing else). The full protocol is described in
+[The view document](#the-view-document) below.
 
 Rules: the URI must begin with `ui://`, and the tool must already be
 registered (call `tool()` before `ui()`). The `html` argument accepts a
@@ -97,9 +124,12 @@ The HTML document is a self-contained page that speaks JSON-RPC over
 `ui/notifications/initialized` handshake, receives the tool result via
 `ui/notifications/tool-result`, and may call back through the host (e.g.
 sending `tools/call` to re-run the tool with new arguments). None of that
-traffic touches your PHP server — the host mediates everything. See
+traffic touches your PHP server — the host mediates everything. The
+`<script>` in the snippet above is the minimal implementation of this
+contract; see
 [`examples/apps_server/dashboard.html`](../examples/apps_server/dashboard.html)
-for a working implementation of the handshake and rendering.
+for a full-featured one (styling, `tool-input` prefill, and calling the
+tool back through the host).
 
 ## Host hints
 
