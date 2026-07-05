@@ -1529,28 +1529,167 @@ verified by serving it from the checkout with no vendor junction present.
 
 ## WS10 — Documentation
 
-The last gate: the docs describe what v2 actually is.
+The last gate: the docs describe what v2 actually is. v1 shipped with
+minimal documentation that grew organically; v2 takes an organized,
+two-audience approach from the first `v2.0.0` release — human developers
+building projects with the SDK, and AI coding agents driving agentic
+development workflows. The SDK's documentation does not aim to be
+authoritative for the MCP protocol itself; that role stays with the
+official protocol documentation, which these docs link rather than restate.
+
+**Research findings (2026-07-05, step 1).** Three threads were researched
+to scope this workstream: the current state of this repository's
+documentation, the documentation architecture of the flagship TypeScript
+and Python SDKs (both shipped v2 betas in late June 2026), and current
+best practice for documentation serving humans and AI agents together.
+
+- *The current docs are split across tiers.* The process tier is fully
+  v2-current ([CHANGELOG.md](../CHANGELOG.md)'s `[Unreleased]` block — the
+  most complete v2 feature inventory in the repo — plus
+  [docs/api-audit-v2.md](api-audit-v2.md),
+  [examples/README.md](../examples/README.md), and
+  [conformance/README.md](../conformance/README.md)), while the
+  user-facing tier still teaches v1: [docs/server-dev.md](server-dev.md)
+  and [docs/client-dev.md](client-dev.md) both self-describe as
+  `2025-11-25` (intro and footer), server-dev describes `enableTasks()`
+  with its v1 signature and "experimental" framing (the method survives
+  in v2 as the SEP-2663 entry point; what was removed is the old
+  experimental v1 Tasks RPC surface — `tasks/list`, `tasks/result`,
+  `TaskCapability`), client-dev presents `resources/subscribe`
+  and the legacy standalone GET SSE stream as current, and the README is
+  the v1 README plus a beta notice (its Project Status names `2025-11-25`
+  as the tracked revision; its documentation table omits client-dev
+  entirely). `docs/migration-v2.md` does not exist despite being
+  referenced by api-audit-v2.md. Known cross-file drift:
+  [docs/testing.md](testing.md) and [CONTRIBUTING.md](../CONTRIBUTING.md)
+  still describe single-track conformance; ROADMAP's medium-term Tasks
+  bullet still describes the removed v1 Tasks surface as in-tree; the
+  test-stack commands are triplicated (and have drifted) across
+  AGENTS.md, CONTRIBUTING.md, and docs/testing.md.
+- *Flagship template, adopted selectively.* Both flagship SDKs converged
+  on: a short README funneling to a versioned docs subdomain built from
+  in-repo markdown, a generated API reference, CI-tested snippets, a very
+  large subsystem-organized v1→v2 migration guide with before/after code
+  (Python's adds symptom→section navigation — the pattern this plan
+  adopts), first-class agent context files, and `llms.txt` on the site.
+  Deliberate divergences for this project: the medium stays in-repo
+  GitHub markdown for `v2.0.0` — raw GitHub markdown is already the
+  format agents consume, and a docs site remains a possible post-v2
+  enhancement, out of scope for WS10;
+  `CHANGELOG.md` stays on the Keep a Changelog convention rather
+  than the flagships' releases-only practice; no migration codemod (the
+  audited breaking surface — eight items — does not justify one); no
+  `llms.txt` (a website convention with no production consumer at any
+  model provider, not applicable to a repo-only project); no generated
+  HTML API reference (for a strictly-typed, docblocked SDK, the source is
+  the reference — docblock quality outranks generated output).
+- *Agentic-documentation practice adopted:* a lean root agent file
+  (AGENTS.md stays within the empirically supported ~100–300 line range,
+  favoring pointers over embedded detail); one fact in one place, with
+  links instead of duplication; runnable verbatim snippets over prose;
+  smaller well-linked topic files where content is genuinely separable
+  (the two dev guides deliberately stay whole — only the two extensions
+  split out). All documentation is curated and human-reviewed, never
+  bulk-generated.
+- *Out of scope by decision (2026-07-05):* third-party documentation
+  indexing (e.g. Context7 submission — a possible human follow-up); a
+  separate
+  whats-new document (the v2 pitch folds into the README feature summary;
+  the CHANGELOG carries the technical inventory); a snippet-extraction
+  test harness (snippets are instead verified WS9-style — extracted
+  verbatim and executed).
 
 **Scope**
 
-- Update [README](../README.md), [docs/server-dev.md](server-dev.md),
-  [docs/client-dev.md](client-dev.md), [docs/testing.md](testing.md), and
-  [AGENTS.md](../AGENTS.md) (architecture notes, negotiation description,
-  capability tables) for the v2 surface.
-- Write a v1→v2 **migration guide** (`docs/migration-v2.md`): wire-level
-  changes (handled automatically by negotiation) versus PHP API changes
-  (requiring user action), with before/after snippets that are functional,
-  not illustrative.
+- Write the v1→v2 **migration guide** (`docs/migration-v2.md`) from
+  [docs/api-audit-v2.md](api-audit-v2.md): a "changes almost every
+  project hits" symptom→section table up front; subsystem sections with
+  before/after snippets that are functional, not illustrative; a
+  "wire-level changes handled automatically by negotiation" section (the
+  dual-era design means most v1 code needs less hand-migration than the
+  flagship SDKs' users face — say so); a deprecations section aligned
+  with WS6's registry. Covers every breaking change (B1–B8) and
+  behavioral change (M1–M9).
+- Rewrite the [README](../README.md) as the v2 front door: Project Status
+  rewritten around `2026-07-28` day-one support, dual-era compatibility,
+  and dual-track conformance; a brief "new in v2" feature summary
+  (stateless core, negotiation, Tasks, Apps); the quick-start kept
+  verbatim-runnable (WS9 executes it); a complete documentation index
+  adding client-dev, the migration guide, and
+  [examples/README.md](../examples/README.md) as the feature map; the v2
+  pre-release notice replaced at release.
+- Overhaul [docs/server-dev.md](server-dev.md) **v2-first,
+  legacy-noted**: the `2026-07-28` model is the default teaching, with
+  legacy-only behavior (session ids, the standalone GET SSE stream,
+  `Last-Event-ID` resumption) explicitly marked as such. New or rewritten
+  sections: the stateless lifecycle and `server/discover`;
+  `subscriptions/listen` publishing; MRTR elicitation/sampling (replacing
+  the two "intentionally not documented" placeholders); caching hints
+  (`ttlMs`/`cacheScope`); the developer-visible SEP-2243 surface
+  (`x-mcp-header`); the deprecation lifecycle. Appendix A re-audited
+  against the v2 surface (the stale v1-era `enableTasks()` entry is
+  rewritten for the SEP-2663 method — current signature, no longer
+  experimental — pointing to the Tasks extension guide). The
+  MCP Apps section moves to the Apps extension guide, leaving a pointer.
+- Overhaul [docs/client-dev.md](client-dev.md) the same way: dual-era
+  negotiation and the `protocolMode`/`protocolVersion` connect options;
+  `discover()`; feature detection under `2026-07-28`; `onSampling` and
+  MRTR servicing; the client Tasks API; `subscriptions/listen`
+  consumption; legacy-noting of `resources/subscribe`, the standalone GET
+  SSE stream, and session resume; the OAuth additions (issuer binding);
+  Appendix A re-audited.
+- Extract **extension guides**: `docs/tasks.md` (SEP-2663, both sides —
+  server task support through client polling and in-task input) and
+  `docs/apps.md` (SEP-1865), each self-contained and pointed to from both
+  dev guides, the README, and the examples index.
+- Add **`docs/README.md`**: a short audience-labeled index of every
+  document (user guide / contributor / process). No files move — existing
+  paths stay stable.
+- Refresh [AGENTS.md](../AGENTS.md): the stale architecture sections
+  (protocol negotiation, the web-hosting/stateless framing, and the
+  capabilities inventory — adding `server/discover` and
+  `subscriptions/listen`), keeping the file lean with pointers over
+  duplicated detail.
+- **Drift sweep** across the remaining files: dual-track conformance in
+  [docs/testing.md](testing.md) and [CONTRIBUTING.md](../CONTRIBUTING.md)
+  (testing.md becomes the canonical home of the test-stack commands;
+  AGENTS.md and CONTRIBUTING.md point rather than duplicate); ROADMAP's
+  stale medium-term Tasks bullet, documentation-inventory row, and
+  tier-table version framing;
+  [docs/compatibility.md](compatibility.md)'s pre-stateless
+  SSE/resumption framing; [tests/README.md](../tests/README.md)'s
+  legacy-handshake framing; SUPPORT.md's missing client-dev link.
 - [CHANGELOG.md](../CHANGELOG.md) entries for each released pre-release and
   the final `v2.0.0`; roadmap refresh moving shipped items out of the
   "working on" section.
 
+**Milestones.** Each follows the standard four-step process; each
+milestone's snippets are verified WS9-style (extracted verbatim and
+executed against the SDK over the transport they target).
+
+1. **M1 — Migration guide and front door:** `docs/migration-v2.md` and
+   the README rewrite. The research step re-verifies the api-audit's
+   completeness against the shipped surface before writing.
+2. **M2 — Server guide and extension guides:** the server-dev overhaul
+   plus `docs/tasks.md` and `docs/apps.md`.
+3. **M3 — Client guide and coherence sweep:** the client-dev overhaul,
+   the AGENTS.md refresh, `docs/README.md`, the drift sweep, and the
+   CHANGELOG/ROADMAP release documentation.
+
 **Completion criteria**
 
 - No documentation references a removed or renamed API; code snippets are
-  runnable as written.
+  runnable as written — verified by extraction and execution, not by
+  inspection.
 - The migration guide covers every breaking change identified in WS6's API
-  audit.
+  audit (B1–B8), every behavioral change (M1–M9), and the deprecation
+  registry.
+- Both dev guides teach `2026-07-28` as the default era and explicitly
+  mark all legacy-only behavior.
+- The test-stack commands live canonically in docs/testing.md (dual-track
+  included); AGENTS.md and CONTRIBUTING.md link rather than restate.
+- `docs/README.md` labels every document's audience; the README
+  documentation index lists every user-facing document.
 - README v2 notice replaced with real v2 documentation at release.
 
 ---
