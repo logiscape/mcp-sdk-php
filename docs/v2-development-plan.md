@@ -1442,6 +1442,31 @@ WS4 useful but its file-based store is already hosting-proven.
 - No core feature (tools, prompts, resources, `server/discover`) requires
   anything beyond a stock cPanel/Apache/PHP account.
 
+**Status (2026-07-05):** complete (steps 1–2) — live-host validation
+performed on a real cPanel account (Apache + PHP-FPM, PHP 8.3.31, SDK
+v2.0.0-beta3 installed via Composer): every example server exercised
+through the webclient and the MCP Inspector; dual-era negotiation verified
+end-to-end with `client_negotiation.php` against the hosted
+`stateless_server.php`; the Apps example verified via Inspector; the full
+`server_auth` walk-through verified three ways, with both documented
+`.htaccess` rules required exactly as written. Follow-up probe checks run
+remotely against the live host the same day closed the remaining rows:
+request-metadata header survival (all `Mcp-*` families arrive intact
+through `.htaccess`), the full Tasks lifecycle including in-task input via
+`tasks_client.php`, and the `subscriptions/listen` sequence end-to-end
+(acknowledged frame → cross-process `FileSubscriptionBus` fan-out from a
+different FPM process → graceful `SubscriptionsListenResult` close at the
+`listen_max_ms` budget; requires `enable_sse => true`, which defaults to
+false). The `-32020` header-mismatch enforcement and the SSE-disabled
+`-32601` listen refusal were also observed in production. All three
+completion criteria are met: the validation report
+([shared-hosting-validation.md](shared-hosting-validation.md), linked from
+compatibility.md) records a works / works-with-config verdict and evidence
+per feature; every degradation claim is mapped to an existing automated
+test (`HttpModernStreamingTest`, `BufferedIoTest`); no core feature needed
+anything beyond a stock account. Awaiting step 3 (human-initiated code
+review).
+
 ## WS9 — Examples and webclient
 
 Working code is the SDK's primary documentation surface; all of it must

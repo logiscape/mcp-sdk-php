@@ -13,6 +13,7 @@ link to them freely.
 | [tasks.md](tasks.md) | The Tasks extension (SEP-2663): long-running tool calls, polling, in-task input, cancellation — server and client side. |
 | [apps.md](apps.md) | The MCP Apps extension (SEP-1865): host-rendered tool UIs via `McpServer::ui()`. |
 | [compatibility.md](compatibility.md) | The cPanel/Apache/PHP-FPM compatibility rules: what works everywhere, what degrades gracefully, and required `.htaccess` configuration. |
+| [shared-hosting-validation.md](shared-hosting-validation.md) | The live cPanel/Apache/FPM validation record for v2: what was run, the per-feature verdicts, and the degradation tests backing each claim. |
 | [../examples/README.md](../examples/README.md) | Index of runnable examples — one per major SDK feature. |
 | [../webclient/README.md](../webclient/README.md) | The bundled web-based MCP test client (reference implementation for web hosting). |
 

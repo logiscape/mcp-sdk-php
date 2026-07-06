@@ -5,7 +5,10 @@ environments — cPanel, shared Apache, PHP-FPM — in addition to CLI and
 long-running process managers such as FrankenPHP or RoadRunner. This document
 describes the principle, enumerates what "works" and "fails gracefully" mean
 in practice, and lists the environment-specific considerations that have come
-up during development.
+up during development. The rules here have been validated on a live cPanel
+account — see the
+[shared-hosting validation report](shared-hosting-validation.md) for what
+was run and the results.
 
 ## The principle
 
@@ -163,6 +166,7 @@ an issue with the transport, SAPI, PHP version, and `var_dump` of
 
 ## See also
 
+- [Shared-hosting validation report](shared-hosting-validation.md)
 - [README](../README.md)
 - [CONTRIBUTING.md](../CONTRIBUTING.md)
 - [`docs/testing.md`](testing.md)
