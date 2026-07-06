@@ -1464,8 +1464,7 @@ completion criteria are met: the validation report
 compatibility.md) records a works / works-with-config verdict and evidence
 per feature; every degradation claim is mapped to an existing automated
 test (`HttpModernStreamingTest`, `BufferedIoTest`); no core feature needed
-anything beyond a stock account. Awaiting step 3 (human-initiated code
-review).
+anything beyond a stock account. Human reviewed and committed.
 
 ## WS9 — Examples and webclient
 
