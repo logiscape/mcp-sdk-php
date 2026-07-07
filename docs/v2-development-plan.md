@@ -1273,6 +1273,25 @@ TypeError instead of being answered per era; it now converts via the same
 (continuous duties): the standing no-legacy-regression watch (measured at
 every milestone) and any future deprecation-registry additions.
 
+**Added by tool-annotations change (2026-07-06):** a small post-review
+addition prompted by the php-mcp-apps skill work (host directories check
+`readOnlyHint`/`destructiveHint` on every tool, and `McpServer` had no way
+to set them): `tool()` gained a trailing `annotations:` parameter (array
+or `ToolAnnotations`, normalized by the new `ToolAnnotations::parse()`;
+recorded in the api-audit additive section) — `ToolAnnotations` re-verified
+unchanged and non-deprecated in the `2026-07-28` RC schema before shipping.
+Two latent adaptation defects that became reachable with the parameter were
+fixed in the same change set: `adaptTool()`'s pre-`2025-03-26` strip path
+rebuilt the tool with only name/inputSchema/description (silently dropping
+`title`, `icons`, `outputSchema`, `execution`, and extra fields incl. the
+Apps `_meta.ui` link) — it now clones and nulls only `annotations`; and
+`adaptResponseForClient()` matched only a bare `Tool` result, never walking
+`ListToolsResult.tools`, so the strip never fired on the real `tools/list`
+path — a `ListToolsResult` branch now adapts per-tool. The cross-revision
+matrix gained a per-revision annotations assertion (absent at `2024-11-05`
+with `title` surviving; present verbatim from `2025-03-26` through the
+modern column).
+
 **Completion criteria**
 
 - The cross-revision matrix runs in CI as part of `composer test` and is

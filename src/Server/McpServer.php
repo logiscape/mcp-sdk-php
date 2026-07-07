@@ -69,6 +69,7 @@ use Mcp\Types\TextResourceContents;
 use Mcp\Types\Meta;
 use Mcp\Types\ProgressToken;
 use Mcp\Types\Tool;
+use Mcp\Types\ToolAnnotations;
 use Mcp\Types\ToolInputProperties;
 use Mcp\Types\ToolInputSchema;
 use Mcp\Shared\ErrorData;
@@ -262,6 +263,8 @@ class McpServer
      * @param array<int, array<string, mixed>>|null $icons Icons for the tool
      * @param array<string, mixed>|null $outputSchema JSON Schema for structured output
      * @param array<string, mixed>|null $inputSchema Custom JSON Schema for input (overrides reflection-generated schema)
+     * @param array<string, mixed>|ToolAnnotations|null $annotations Spec ToolAnnotations behavioral hints
+     *        (readOnlyHint/destructiveHint/idempotentHint/openWorldHint/title) — advisory only
      * @return self For method chaining
      */
     public function tool(
@@ -273,6 +276,7 @@ class McpServer
         ?array $outputSchema = null,
         ?array $inputSchema = null,
         string $taskSupport = TaskSupport::FORBIDDEN,
+        array|ToolAnnotations|null $annotations = null,
     ): self {
         if (!TaskSupport::isValid($taskSupport)) {
             throw new \InvalidArgumentException(
@@ -290,6 +294,7 @@ class McpServer
             name: $name,
             inputSchema: $schema,
             description: $description,
+            annotations: ToolAnnotations::parse($annotations),
             title: $title,
             icons: \Mcp\Types\Icon::parseArray($icons),
             outputSchema: $outputSchema,

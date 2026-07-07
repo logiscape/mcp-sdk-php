@@ -154,6 +154,85 @@ final class NewTypesTest extends TestCase
     }
 
     // -----------------------------------------------------------------------
+    // ToolAnnotations
+    // -----------------------------------------------------------------------
+
+    /**
+     * fromArray() casts hint values to bool, preserves unknown keys as extra
+     * fields, and jsonSerialize() emits only the fields that were set. An
+     * empty instance must serialize as a JSON object ({}), never as PHP's
+     * default [] for an empty array — the spec types annotations as an object.
+     */
+    public function testToolAnnotationsFromArrayAndSerialization(): void {
+        $annotations = ToolAnnotations::fromArray([
+            'readOnlyHint' => 1,
+            'openWorldHint' => false,
+            'custom' => 'x',
+        ]);
+        $this->assertTrue($annotations->readOnlyHint);
+        $this->assertFalse($annotations->openWorldHint);
+        $this->assertNull($annotations->destructiveHint);
+
+        $json = $annotations->jsonSerialize();
+        $this->assertSame(
+            ['readOnlyHint' => true, 'openWorldHint' => false, 'custom' => 'x'],
+            $json
+        );
+
+        $this->assertSame('{}', json_encode(new ToolAnnotations()));
+        $this->assertSame('{}', json_encode(ToolAnnotations::fromArray([])));
+
+        // A wire round-trip of "annotations": {} keeps the object shape.
+        $tool = Tool::fromArray([
+            'name' => 'empty-annotated',
+            'inputSchema' => ['type' => 'object', 'properties' => []],
+            'annotations' => [],
+        ]);
+        $this->assertStringContainsString('"annotations":{}', json_encode($tool));
+    }
+
+    /**
+     * parse() normalizes the three accepted shapes: null passes through,
+     * an instance passes through unchanged (no re-wrapping), and an array
+     * is converted via fromArray().
+     */
+    public function testToolAnnotationsParse(): void {
+        $this->assertNull(ToolAnnotations::parse(null));
+
+        $instance = new ToolAnnotations(idempotentHint: true);
+        $this->assertSame($instance, ToolAnnotations::parse($instance));
+
+        $parsed = ToolAnnotations::parse(['destructiveHint' => true, 'title' => 'Danger']);
+        $this->assertInstanceOf(ToolAnnotations::class, $parsed);
+        $this->assertTrue($parsed->destructiveHint);
+        $this->assertEquals('Danger', $parsed->title);
+    }
+
+    /**
+     * A Tool carrying annotations round-trips through JSON: fromArray()
+     * hydrates the nested ToolAnnotations and jsonSerialize() re-emits it.
+     */
+    public function testToolCarriesAnnotations(): void {
+        $tool = Tool::fromArray([
+            'name' => 'annotated-tool',
+            'inputSchema' => ['type' => 'object', 'properties' => []],
+            'annotations' => ['readOnlyHint' => true, 'idempotentHint' => false],
+        ]);
+        $this->assertInstanceOf(ToolAnnotations::class, $tool->annotations);
+        $this->assertTrue($tool->annotations->readOnlyHint);
+
+        $decoded = json_decode(json_encode($tool), true);
+        $this->assertSame(
+            ['readOnlyHint' => true, 'idempotentHint' => false],
+            $decoded['annotations']
+        );
+
+        $roundTripped = Tool::fromArray($decoded);
+        $this->assertTrue($roundTripped->annotations->readOnlyHint);
+        $this->assertFalse($roundTripped->annotations->idempotentHint);
+    }
+
+    // -----------------------------------------------------------------------
     // Prompt with Rich Metadata
     // -----------------------------------------------------------------------
 

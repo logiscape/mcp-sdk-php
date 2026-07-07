@@ -51,6 +51,7 @@ use Mcp\Types\JSONRPCError;
 use Mcp\Types\JSONRPCNotification;
 use Mcp\Types\JSONRPCResponse;
 use Mcp\Types\JsonRpcMessage;
+use Mcp\Types\ListToolsResult;
 use Mcp\Types\LoggingLevel;
 use Mcp\Types\Notification;
 use Mcp\Types\NotificationParams;
@@ -1790,6 +1791,8 @@ class ServerSession extends BaseSession {
             return $this->adaptPromptMessage($response);
         } else if ($response instanceof Tool) {
             return $this->adaptTool($response);
+        } else if ($response instanceof ListToolsResult) {
+            return $this->adaptListToolsResult($response);
         }
 
         return $response;
@@ -1929,18 +1932,48 @@ class ServerSession extends BaseSession {
 
     /**
      * Adapts a Tool to be compatible with older protocol versions.
+     *
+     * Tool annotations entered the spec in 2025-03-26; strip them for
+     * clients that negotiated an earlier revision. Only `annotations` is
+     * removed — every other field (title, icons, outputSchema, execution)
+     * and the extra fields (e.g. the Apps `_meta.ui` link) must survive,
+     * so adapt a shallow clone rather than rebuilding from a field list.
      */
     private function adaptTool(Tool $tool): Tool {
         if (version_compare($this->negotiatedProtocolVersion, '2025-03-26', '<') && $tool->annotations !== null) {
-            // Create a new tool without annotations
-            return new Tool(
-                name: $tool->name,
-                inputSchema: $tool->inputSchema,
-                description: $tool->description
-            );
+            $adapted = clone $tool;
+            $adapted->annotations = null;
+            return $adapted;
         }
-        
+
         return $tool;
+    }
+
+    /**
+     * Adapts every tool inside a ListToolsResult (the shape tools actually
+     * ride the wire in — a bare Tool result never occurs on tools/list).
+     * `$tools` is readonly, so a result is rebuilt only when at least one
+     * tool changed; otherwise the input passes through untouched. The
+     * legacy path has already cleared resultType and cache hints on the
+     * incoming clone, so a freshly constructed result needs no re-stamping.
+     */
+    private function adaptListToolsResult(ListToolsResult $result): ListToolsResult {
+        $changed = false;
+        $tools = [];
+        foreach ($result->tools as $tool) {
+            $adapted = $this->adaptTool($tool);
+            $changed = $changed || $adapted !== $tool;
+            $tools[] = $adapted;
+        }
+        if (!$changed) {
+            return $result;
+        }
+
+        $rebuilt = new ListToolsResult($tools, $result->nextCursor, $result->_meta);
+        foreach ($result->getExtraFields() as $key => $value) {
+            $rebuilt->setExtraField($key, $value);
+        }
+        return $rebuilt;
     }
 
     /**

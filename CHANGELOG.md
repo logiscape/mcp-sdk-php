@@ -134,6 +134,13 @@ that will feed the migration guide.
     advertised in both `initialize` and `server/discover`. Graceful
     degradation is automatic: a host that cannot render the UI ignores
     `_meta.ui` and the tool still returns its ordinary `content`.
+- Added a MCP Apps for PHP skill for AI coding agents.
+- **Tool annotations on `McpServer::tool()`.** New trailing `annotations:`
+  parameter (an array or a `Mcp\Types\ToolAnnotations`, normalized via the
+  new `ToolAnnotations::parse()`) emitting the spec's `ToolAnnotations`
+  behavioral hints (`readOnlyHint`/`destructiveHint`/`idempotentHint`/
+  `openWorldHint`/`title`, spec revision `2025-03-26`) on listed tools;
+  stripped automatically for clients that negotiated `2024-11-05`.
 - **Feature-lifecycle deprecations (SEP-2596/SEP-2577).** The spec's
   deprecated-features registry is mirrored as
   `Mcp\Shared\FeatureLifecycle` (Roots, Sampling, Logging, and Dynamic
@@ -261,6 +268,18 @@ that will feed the migration guide.
 
 ### Fixed
 
+- Tool-annotation stripping for pre-`2025-03-26` clients now removes only
+  `annotations` and preserves every other tool field — `title`, `icons`,
+  `outputSchema`, `execution`, and extra fields such as the Apps
+  `_meta.ui` link (the strip path previously rebuilt the tool with only
+  name/inputSchema/description) — and `tools/list` results are now walked
+  per-tool (the adaptation previously matched only a bare `Tool` result
+  and never fired on the list path).
+- An empty `ToolAnnotations` now serializes as the spec's object shape
+  (`{}`) instead of PHP's default `[]` for an empty array, matching the
+  SDK's established empty-object handling (`Meta`,
+  `ExperimentalCapabilities`, …) — previously a parsed
+  `"annotations": {}` re-emitted as a JSON array on round-trip.
 - The stdio server now detects EOF on stdin and shuts down cleanly instead
   of busy-waiting forever
   ([#61](https://github.com/logiscape/mcp-sdk-php/issues/61)):

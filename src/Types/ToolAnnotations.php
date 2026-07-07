@@ -72,6 +72,18 @@ class ToolAnnotations implements McpModel {
         return $obj;
     }
 
+    /**
+     * Normalize a user-supplied annotations value (array form or instance).
+     *
+     * @param array<string, mixed>|ToolAnnotations|null $annotations
+     */
+    public static function parse(array|ToolAnnotations|null $annotations): ?self {
+        if (is_array($annotations)) {
+            return self::fromArray($annotations);
+        }
+        return $annotations;
+    }
+
     public function validate(): void {
         // No mandatory fields to validate.
     }
@@ -93,6 +105,9 @@ class ToolAnnotations implements McpModel {
         if ($this->openWorldHint !== null) {
             $data['openWorldHint'] = $this->openWorldHint;
         }
-        return array_merge($data, $this->extraFields);
+        $data = array_merge($data, $this->extraFields);
+        // The spec defines annotations as an object; an empty instance must
+        // serialize as {} rather than PHP's default [] for an empty array.
+        return empty($data) ? new \stdClass() : $data;
     }
 }

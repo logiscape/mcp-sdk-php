@@ -355,6 +355,43 @@ A few rules worth knowing:
 - **`$schema` is optional but recommended for hand-written schemas.** MCP defaults to JSON Schema draft 2020-12 for tool input, so omitting `$schema` works -- but declaring it explicitly removes any ambiguity for spec-strict clients and signals intent to readers.
 - **Reflection is bypassed entirely when `$inputSchema` is set.** Optional and required parameters in the PHP signature are ignored; the schema's `required` array is the source of truth.
 
+### Tool Annotations
+
+Tool annotations (spec revision `2025-03-26`) are optional behavioral hints describing how a tool interacts with its environment: is it read-only, destructive when it writes, idempotent on repeat calls, open-world in what it touches? Hosts use them to shape confirmation prompts, and connector directories (Claude, ChatGPT) check them against actual tool behavior during review. They are **hints, not guarantees** -- clients must never make security or trust decisions based on them, and your handler must still validate and authorize every call. (Not to be confused with two other "annotations" in MCP: the `x-mcp-header` *designated-parameter* annotations inside `inputSchema` -- see [Designated Parameters](#designated-parameters-x-mcp-header-sep-2243) -- and the content-block `Annotations` (audience/priority) on results.)
+
+Pass an `annotations` array (or a prebuilt `Mcp\Types\ToolAnnotations`) to `tool()`:
+
+```php
+<?php
+// tools_annotations.php
+require 'vendor/autoload.php';
+
+use Mcp\Server\McpServer;
+
+$server = new McpServer('annotated-tools');
+
+$server->tool(
+    name: 'delete-record',
+    description: 'Permanently delete a record by ID',
+    callback: fn(string $id): string => "Deleted record {$id}",
+    title: 'Delete Record',
+    annotations: [
+        'readOnlyHint'    => false,
+        'destructiveHint' => true,  // may perform irreversible changes
+        'idempotentHint'  => true,  // repeating the same call adds no effect
+        'openWorldHint'   => false, // closed domain -- no external entities
+    ],
+);
+
+$server->run();
+```
+
+A few notes:
+
+- **All five fields are optional** (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, `title`); only the ones you set are emitted on the wire.
+- **Prefer the top-level `title` parameter** for display names. `annotations['title']` also exists, but clients resolve display names as `title` → `annotations.title` → `name`, so the dedicated parameter always wins.
+- **Version adaptation is automatic.** Annotations entered the spec in `2025-03-26`; for a client that negotiated `2024-11-05` the SDK strips them from `tools/list` while leaving every other tool field (title, icons, schemas, `_meta`) intact. No gating code needed on your side.
+
 ### Multiple Tools
 
 Chain as many tools as you need. Each `->tool()` call returns the server instance for fluent chaining.
@@ -2892,7 +2929,7 @@ registry, including the client-side entries, is in the
 
 | Method | Description |
 |--------|-------------|
-| `tool(name, description, callback, title?, icons?, outputSchema?, inputSchema?, taskSupport?)` | Register a tool; `taskSupport` (a `TaskSupport` constant) opts it into SEP-2663 task augmentation -- see the [Tasks guide](tasks.md) |
+| `tool(name, description, callback, title?, icons?, outputSchema?, inputSchema?, taskSupport?, annotations?)` | Register a tool; `taskSupport` (a `TaskSupport` constant) opts it into SEP-2663 task augmentation -- see the [Tasks guide](tasks.md); `annotations` sets spec `ToolAnnotations` behavioral hints (array or `ToolAnnotations`) -- see [Tool Annotations](#tool-annotations) |
 | `prompt(name, description, callback, title?, icons?)` | Register a prompt |
 | `resource(uri, name, callback, description?, mimeType?, title?, icons?, size?)` | Register a resource |
 | `resourceTemplate(uriTemplate, name, callback, description?, mimeType?, title?, icons?)` | Register a resource template (variables passed to the callback by name) |

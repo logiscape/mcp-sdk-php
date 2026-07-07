@@ -24,6 +24,7 @@ use Mcp\Types\ProgressToken;
 use Mcp\Types\RequestId;
 use Mcp\Types\ExtensionIds;
 use Mcp\Types\TextContent;
+use Mcp\Types\ToolAnnotations;
 use Mcp\Server\Transport\Transport;
 use Psr\Log\NullLogger;
 use PHPUnit\Framework\TestCase;
@@ -82,6 +83,64 @@ final class McpServerNewFeaturesTest extends TestCase
         $this->assertEquals(['key' => 'value'], $result->structuredContent);
         $this->assertCount(1, $result->content);
         $this->assertInstanceOf(TextContent::class, $result->content[0]);
+    }
+
+    /**
+     * Test that tool() accepts annotations in array form: the listed tool
+     * carries a hydrated ToolAnnotations with exactly the supplied hints,
+     * the wire JSON emits only the keys that were set, and tools registered
+     * without annotations stay annotation-free.
+     */
+    public function testToolWithAnnotationsArray(): void {
+        $server = new McpServer('test');
+        $server
+            ->tool(
+                name: 'read_report',
+                description: 'Read a report',
+                callback: fn(string $id) => "Report {$id}",
+                annotations: ['readOnlyHint' => true, 'destructiveHint' => false, 'title' => 'Safe Reader'],
+            )
+            ->tool(
+                name: 'plain',
+                description: 'No annotations',
+                callback: fn() => 'ok',
+            );
+
+        $listResult = $server->getServer()->getHandlers()['tools/list'](null);
+        $tools = $listResult->tools;
+
+        $this->assertInstanceOf(ToolAnnotations::class, $tools[0]->annotations);
+        $this->assertTrue($tools[0]->annotations->readOnlyHint);
+        $this->assertFalse($tools[0]->annotations->destructiveHint);
+        $this->assertEquals('Safe Reader', $tools[0]->annotations->title);
+
+        $wire = json_decode(json_encode($tools[0]), true);
+        $this->assertSame(
+            ['title' => 'Safe Reader', 'readOnlyHint' => true, 'destructiveHint' => false],
+            $wire['annotations']
+        );
+
+        $this->assertNull($tools[1]->annotations);
+        $this->assertArrayNotHasKey('annotations', json_decode(json_encode($tools[1]), true));
+    }
+
+    /**
+     * Test that a prebuilt ToolAnnotations instance passes through tool()
+     * unchanged (no re-wrapping or copying).
+     */
+    public function testToolWithAnnotationsInstance(): void {
+        $annotations = new ToolAnnotations(idempotentHint: true);
+
+        $server = new McpServer('test');
+        $server->tool(
+            name: 'retry_safe',
+            description: 'Idempotent operation',
+            callback: fn() => 'done',
+            annotations: $annotations,
+        );
+
+        $listResult = $server->getServer()->getHandlers()['tools/list'](null);
+        $this->assertSame($annotations, $listResult->tools[0]->annotations);
     }
 
     /**

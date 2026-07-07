@@ -16,9 +16,15 @@ use Mcp\Types\JSONRPCRequest;
 use Mcp\Types\JSONRPCResponse;
 use Mcp\Types\RequestId;
 use Mcp\Types\RequestParams;
+use Mcp\Types\Icon;
+use Mcp\Types\ListToolsResult;
 use Mcp\Types\ResourceLinkContent;
 use Mcp\Types\ServerCapabilities;
 use Mcp\Types\TextContent;
+use Mcp\Types\Tool;
+use Mcp\Types\ToolAnnotations;
+use Mcp\Types\ToolInputProperties;
+use Mcp\Types\ToolInputSchema;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -95,6 +101,66 @@ final class AdaptResponseTest extends TestCase
         $this->assertCount(2, $adapted->content);
         $this->assertNull($adapted->content[0]->annotations);
         $this->assertNull($adapted->content[1]->annotations);
+    }
+
+    /**
+     * Tool annotations entered the spec in 2025-03-26, so a 2024-11-05
+     * client must not see them on tools/list — but stripping them must not
+     * take any other tool field with it: title, icons, outputSchema,
+     * execution, and extra fields (the Apps `_meta.ui` link) all survive,
+     * and the handler's own Tool instance is never mutated.
+     */
+    public function testStripsToolAnnotationsForPre20250326ClientsPreservingOtherFields(): void {
+        $session = $this->createInitializedSession('2024-11-05');
+
+        $tool = new Tool(
+            name: 'loaded',
+            inputSchema: new ToolInputSchema(properties: ToolInputProperties::fromArray([])),
+            description: 'Fully loaded tool',
+            annotations: new ToolAnnotations(readOnlyHint: true),
+            title: 'Loaded Tool',
+            icons: [new Icon('https://example.com/icon.png')],
+            outputSchema: ['type' => 'object'],
+            execution: ['taskSupport' => 'optional'],
+        );
+        $tool->setExtraField('_meta', ['ui' => ['resourceUri' => 'ui://app/main']]);
+
+        $adapted = $session->adaptResponseForClient(new ListToolsResult([$tool]));
+        $this->assertInstanceOf(ListToolsResult::class, $adapted);
+        $adaptedTool = $adapted->tools[0];
+
+        $this->assertNull($adaptedTool->annotations, 'Annotations stripped for 2024-11-05');
+        $this->assertEquals('Loaded Tool', $adaptedTool->title, 'title preserved');
+        $this->assertCount(1, $adaptedTool->icons, 'icons preserved');
+        $this->assertEquals(['type' => 'object'], $adaptedTool->outputSchema, 'outputSchema preserved');
+        $this->assertEquals(['taskSupport' => 'optional'], $adaptedTool->execution, 'execution preserved');
+        $this->assertEquals(
+            ['ui' => ['resourceUri' => 'ui://app/main']],
+            $adaptedTool->getExtraField('_meta'),
+            'Extra fields (Apps _meta.ui link) preserved'
+        );
+
+        $this->assertNotSame($tool, $adaptedTool, 'Adaptation works on a copy');
+        $this->assertNotNull($tool->annotations, 'Handler-owned instance never mutated');
+    }
+
+    /**
+     * Clients on 2025-03-26 and later keep tool annotations; the tool
+     * instance passes through the list adaptation untouched.
+     */
+    public function testKeepsToolAnnotationsFor20250326Clients(): void {
+        $session = $this->createInitializedSession('2025-03-26');
+
+        $tool = new Tool(
+            name: 'annotated',
+            inputSchema: new ToolInputSchema(properties: ToolInputProperties::fromArray([])),
+            annotations: new ToolAnnotations(readOnlyHint: true),
+        );
+
+        $adapted = $session->adaptResponseForClient(new ListToolsResult([$tool]));
+        $this->assertInstanceOf(ListToolsResult::class, $adapted);
+        $this->assertSame($tool, $adapted->tools[0], 'Tool rides through unchanged');
+        $this->assertTrue($adapted->tools[0]->annotations->readOnlyHint);
     }
 
     /**

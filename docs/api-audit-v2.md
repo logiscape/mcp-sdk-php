@@ -65,6 +65,9 @@ development plan.
   client `getTask()`/`updateTask()`/`cancelTask()`, `CreateTaskResult`.
 - **Apps (SEP-1865):** `McpServer::ui(...)`, `ExtensionIds::UI`,
   `Server::declareExtension()`.
+- **Tool metadata:** `tool(..., annotations:)` — spec `ToolAnnotations`
+  behavioral hints as an array or typed instance, normalized via the new
+  `ToolAnnotations::parse()`; auto-stripped for `2024-11-05` clients.
 - **Subscriptions (SEP-2575):** server-side `subscriptions/listen` (HTTP
   streaming + stdio in-session), `SubscriptionBusInterface` /
   `FileSubscriptionBus`, `McpServer::subscriptionBus()` and publish helpers,

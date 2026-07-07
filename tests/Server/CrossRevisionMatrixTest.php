@@ -53,7 +53,13 @@ final class CrossRevisionMatrixTest extends TestCase
     private function makeRunner(): HttpServerRunner
     {
         $mcp = new McpServer('matrix-test');
-        $mcp->tool('echo', 'Echoes a value', fn (string $value = 'x'): string => "echo:{$value}");
+        $mcp->tool(
+            'echo',
+            'Echoes a value',
+            fn (string $value = 'x'): string => "echo:{$value}",
+            title: 'Echo',
+            annotations: ['readOnlyHint' => true],
+        );
         $mcp->resource(uri: 'test://known', name: 'Known', callback: fn (): string => 'known-data');
 
         $server = $mcp->getServer();
@@ -182,6 +188,50 @@ final class CrossRevisionMatrixTest extends TestCase
             $noSession = $runner->handleRequest($this->post('tools/list', id: 3));
             $this->assertSame(400, $noSession->getStatusCode(), "[$revision] session-less legacy request rejected");
         }
+    }
+
+    /**
+     * Tool annotations (spec 2025-03-26) are shaped per revision on the
+     * wire: absent for a 2024-11-05 client — with every OTHER tool field
+     * (here: title) surviving the strip — and present verbatim on
+     * 2025-03-26 through 2025-11-25 and on the modern 2026-07-28 column.
+     */
+    public function testToolAnnotationsShapedPerRevision(): void
+    {
+        foreach (self::LEGACY_REVISIONS as $revision) {
+            $runner = $this->makeRunner();
+            $sessionId = $this->initializeLegacySession($runner, $revision);
+
+            $listResponse = $runner->handleRequest($this->post('tools/list', id: 2, sessionId: $sessionId));
+            $this->assertSame(200, $listResponse->getStatusCode(), "[$revision] tools/list succeeds");
+            $tool = json_decode((string) $listResponse->getBody(), true)['result']['tools'][0];
+
+            if ($revision === '2024-11-05') {
+                $this->assertArrayNotHasKey(
+                    'annotations',
+                    $tool,
+                    "[$revision] annotations predate this revision and must be stripped"
+                );
+                $this->assertSame('Echo', $tool['title'] ?? null, "[$revision] stripping annotations must not drop title");
+            } else {
+                $this->assertTrue(
+                    $tool['annotations']['readOnlyHint'] ?? null,
+                    "[$revision] annotations ride the wire from 2025-03-26 on"
+                );
+            }
+        }
+
+        // Modern column: annotations pass through unmodified.
+        $runner = $this->makeRunner();
+        $listResponse = $runner->handleRequest($this->post(
+            'tools/list',
+            ['_meta' => $this->envelope()],
+            id: 2,
+            modern: true
+        ));
+        $this->assertSame(200, $listResponse->getStatusCode(), '[modern] tools/list succeeds');
+        $tool = json_decode((string) $listResponse->getBody(), true)['result']['tools'][0];
+        $this->assertTrue($tool['annotations']['readOnlyHint'] ?? null, '[modern] annotations present under 2026-07-28');
     }
 
     public function testResourceNotFoundIsLegacyCodeOnEveryLegacyRevision(): void
