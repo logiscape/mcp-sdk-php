@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MCP App View</title>
+  <style>
+    /* ------------------------------------------------------------------
+       Theme via host CSS variables with fallbacks. Hosts (Claude, VS Code)
+       inject --color-*, --font-*, --border-radius-* variables; the fallback
+       after the comma is what a plain browser or minimal host shows.
+       Never hardcode a color without a var() wrapper.
+       ------------------------------------------------------------------ */
+    :root {
+      color-scheme: light dark;
+      --bg: var(--color-background-primary, Canvas);
+      --bg-soft: var(--color-background-secondary, color-mix(in srgb, Canvas 96%, CanvasText));
+      --text: var(--color-text-primary, CanvasText);
+      --text-muted: var(--color-text-secondary, color-mix(in srgb, CanvasText 62%, Canvas));
+      --border: var(--color-border-primary, color-mix(in srgb, CanvasText 18%, Canvas));
+      --radius: var(--border-radius-md, 10px);
+      --font: var(--font-sans, system-ui, -apple-system, "Segoe UI", sans-serif);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 12px;
+      font-family: var(--font);
+      color: var(--text); background: transparent;
+    }
+    .card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .muted { color: var(--text-muted); font-size: .875rem; }
+    button {
+      font: inherit; cursor: pointer;
+      padding: 8px 14px; min-height: 44px;       /* 44px touch target */
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--bg-soft); color: var(--text);
+    }
+    /* Skeleton shown between tool-input and tool-result */
+    .skeleton { animation: pulse 1.2s ease-in-out infinite; }
+    .skeleton-bar {
+      height: 14px; border-radius: 4px; margin: 8px 0;
+      background: var(--bg-soft);
+    }
+    @keyframes pulse { 50% { opacity: .45; } }
+    [hidden] { display: none !important; }
+    #error { color: #b91c1c; }
+    @media (prefers-color-scheme: dark) { #error { color: #f87171; } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <!-- Three mutually exclusive states: loading skeleton, error, content. -->
+    <div id="loading" class="skeleton">
+      <div class="skeleton-bar" style="width: 40%"></div>
+      <div class="skeleton-bar" style="width: 90%"></div>
+      <div class="skeleton-bar" style="width: 75%"></div>
+    </div>
+    <div id="error" hidden></div>
+    <div id="content" hidden>
+      <!-- ===== Your app UI goes here; render from structuredContent ===== -->
+    </div>
+  </div>
+
+  <script>
+    'use strict';
+    /* =====================================================================
+       MCP Apps (SEP-1865) host bridge — JSON-RPC 2.0 over postMessage.
+       Wire protocol: modelcontextprotocol/ext-apps, revision 2026-01-26.
+       The host proxies non-ui/* methods (tools/call, resources/read, ping)
+       to the MCP server; ui/* methods are answered by the host itself.
+       ===================================================================== */
+    const bridge = (() => {
+      const pending = new Map();
+      let nextId = 1;
+      // Opaque-origin sandbox iframes make '*' the conventional target;
+      // the host validates the source window on its side.
+      const post = (msg) => window.parent.postMessage({ jsonrpc: '2.0', ...msg }, '*');
+      const request = (method, params = {}) => new Promise((resolve, reject) => {
+        const id = nextId++;
+        pending.set(id, { resolve, reject });
+        post({ id, method, params });
+      });
+      const notify = (method, params = {}) => post({ method, params });
+      const handlers = new Map();   // notification method -> fn(params)
+      const requestHandlers = new Map(); // host->view requests (e.g. ui/resource-teardown)
+
+      window.addEventListener('message', (event) => {
+        const msg = event.data;
+        if (!msg || msg.jsonrpc !== '2.0') return;
+        // Response to one of our requests
+        if (msg.id !== undefined && (msg.result !== undefined || msg.error !== undefined)) {
+          const entry = pending.get(msg.id);
+          if (!entry) return;
+          pending.delete(msg.id);
+          msg.error ? entry.reject(msg.error) : entry.resolve(msg.result);
+          return;
+        }
+        // Host -> view request (must be answered)
+        if (msg.id !== undefined && msg.method) {
+          const fn = requestHandlers.get(msg.method);
+          Promise.resolve(fn ? fn(msg.params) : {}).then(
+            (result) => post({ id: msg.id, result: result ?? {} }),
+            (e) => post({ id: msg.id, error: { code: -32000, message: String(e) } }),
+          );
+          return;
+        }
+        // Host -> view notification
+        const fn = handlers.get(msg.method);
+        if (fn) fn(msg.params);
+      });
+
+      return { request, notify,
+        on: (m, fn) => handlers.set(m, fn),
+        onRequest: (m, fn) => requestHandlers.set(m, fn) };
+    })();
+
+    /* ---------------- App state ---------------- */
+    // Display modes this view actually implements. Declared to the host during
+    // ui/initialize; hosts MUST NOT switch the view to an undeclared mode. Add
+    // 'fullscreen' / 'pip' here only once your layout genuinely handles them.
+    const APP_DISPLAY_MODES = ['inline'];
+    let hostContext = {};      // theme, locale, displayMode, containerDimensions, ...
+    let lastInput = null;      // arguments of the originating tools/call
+
+    const $ = (id) => document.getElementById(id);
+    function show(state) {     // 'loading' | 'error' | 'content'
+      for (const id of ['loading', 'error', 'content']) $(id).hidden = (id !== state);
+      reportSize();
+    }
+
+    /* ---------------- Theming ---------------- */
+    function applyHostContext(ctx) {
+      hostContext = { ...hostContext, ...ctx };
+      // Expose theme as an attribute so CSS can target [data-theme="dark"].
+      if (hostContext.theme) {
+        document.documentElement.dataset.theme = hostContext.theme;
+        document.documentElement.style.colorScheme = hostContext.theme;
+      }
+      // Hosts may push CSS variables directly (Claude sends ~60 of them).
+      const vars = hostContext.styles && hostContext.styles.variables;
+      if (vars) for (const [k, v] of Object.entries(vars)) {
+        document.documentElement.style.setProperty(k, v);
+      }
+      const maxH = hostContext.containerDimensions && hostContext.containerDimensions.maxHeight;
+      if (maxH) document.body.style.maxHeight = maxH + 'px';
+    }
+
+    /* ---------------- Sizing ---------------- */
+    function reportSize() {
+      bridge.notify('ui/notifications/size-changed', {
+        width: document.documentElement.scrollWidth,
+        height: document.documentElement.scrollHeight,
+      });
+    }
+    new ResizeObserver(reportSize).observe(document.body);
+
+    /* ---------------- Rendering ---------------- */
+    function renderSkeleton(args) {
+      // tool-input arrives before tool-result: show intent, not a blank frame.
+      // Optionally use `args` to make the skeleton specific ("Loading NYC…").
+      show('loading');
+    }
+
+    function render(result) {
+      // result is the CallToolResult: { content, structuredContent?, isError?, _meta? }
+      if (!result) return;
+      if (result.isError) {
+        const text = (result.content || []).map((c) => c.text || '').join(' ');
+        $('error').textContent = text || 'The tool reported an error.';
+        show('error');
+        return;
+      }
+      const data = result.structuredContent;
+      if (!data) { show('content'); return; }
+
+      /* ===== Replace from here: render `data` into #content ===== */
+      $('content').textContent = JSON.stringify(data, null, 2);
+      /* ===== Replace to here ===== */
+
+      show('content');
+    }
+
+    /* ---------------- Host events ---------------- */
+    bridge.on('ui/notifications/tool-input', (p) => {
+      lastInput = p && p.arguments;
+      renderSkeleton(lastInput);
+    });
+    bridge.on('ui/notifications/tool-input-partial', (p) => {
+      // Streaming hosts send partial arguments while the model is still typing.
+      renderSkeleton(p && p.arguments);
+    });
+    bridge.on('ui/notifications/tool-result', (p) => render(p));
+    bridge.on('ui/notifications/tool-cancelled', () => {
+      $('error').textContent = 'The call was cancelled.';
+      show('error');
+    });
+    bridge.on('ui/notifications/host-context-changed', (p) => applyHostContext(p || {}));
+    bridge.onRequest('ui/resource-teardown', () => {
+      // Persist anything worth keeping, then acknowledge (return value is the reply).
+      return {};
+    });
+
+    /* ---------------- Helpers your UI code calls ---------------- */
+    // Call a server tool through the host (arrives at PHP as ordinary tools/call).
+    async function callTool(name, args) {
+      return bridge.request('tools/call', { name, arguments: args });
+    }
+    // Post a message into the conversation (the model sees and reacts to it).
+    // A REQUEST, not a notification: the host may ask the user for consent and
+    // may deny (rejected promise) — await it and handle failure. Content is a
+    // single block, not an array (per spec 2026-01-26).
+    async function sendMessage(text) {
+      return bridge.request('ui/message', { role: 'user', content: { type: 'text', text } });
+    }
+    // Silently update what the model knows (no chat message, no model turn).
+    // Also a request — hosts may deny context updates.
+    async function updateModelContext(text) {
+      return bridge.request('ui/update-model-context', { content: [{ type: 'text', text }] });
+    }
+    // Open an external link (direct navigation is sandbox-blocked).
+    function openLink(url) {
+      bridge.request('ui/open-link', { url });
+    }
+    // Ask for a different display mode. Preconditions per spec: the mode must be
+    // one this view declared in APP_DISPLAY_MODES, and offered by the host in
+    // hostContext.availableDisplayModes (absent on some hosts — treat as no-op).
+    // The host returns the RESULTING mode, which may differ — always apply it.
+    async function requestDisplayMode(mode /* 'inline'|'fullscreen'|'pip' */) {
+      const hostModes = hostContext.availableDisplayModes;
+      if (!APP_DISPLAY_MODES.includes(mode) ||
+          !Array.isArray(hostModes) || !hostModes.includes(mode)) {
+        return { mode: hostContext.displayMode };
+      }
+      const res = await bridge.request('ui/request-display-mode', { mode });
+      if (res && res.mode) hostContext.displayMode = res.mode;
+      return res;
+    }
+
+    /* ---------------- Handshake (required — nothing renders without it) ---- */
+    bridge.request('ui/initialize', {
+      appCapabilities: { availableDisplayModes: APP_DISPLAY_MODES },
+    })
+      .then((res) => {
+        applyHostContext((res && res.hostContext) || {});
+        bridge.notify('ui/notifications/initialized', {});
+      })
+      .catch(() => {
+        // Handshake failed or was rejected: stay in skeleton state so the
+        // file is previewable, or swap in demo data here while developing.
+        // (Opened directly in a browser there is no host, no tool-result ever
+        // arrives, and the view likewise just sits in its skeleton state.)
+      });
+  </script>
+</body>
+</html>
