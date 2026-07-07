@@ -40,12 +40,14 @@ lives purely in the HTML view and the host — it never reaches PHP.
 
 ## The ui:// resource
 
-- URI scheme: MUST be `ui://...`. Treat the URI as a **cache key** — hosts prefetch
-  and cache the template by URI; version it (`ui://app/view-v2`) when the HTML changes.
+- URI scheme: MUST be `ui://...`. Treat the URI as a **cache key** — hosts MAY
+  prefetch and cache the template by URI (design as if they always do);
+  version it (`ui://app/view-v2`) when the HTML changes.
 - MIME type: **`text/html;profile=mcp-app`** (exact string; lowercase, no space —
   `McpServer::UI_MIME_TYPE`). This replaced the pre-standard community strings
   (`text/html+skybridge` is OpenAI's legacy marker; plain `text/html` is wrong).
-- Served by ordinary `resources/read`; content in `text` (or `blob`, base64).
+- Served by ordinary `resources/read`; content in `text` (or `blob`, base64 —
+  note this SDK's `ui()` emits `text` only; a callable returning a non-string throws).
 - Servers MAY omit UI-only resources from `resources/list` (discovery via tool
   `_meta` is the primary path). This SDK *does* list them — also fine.
 
@@ -109,8 +111,8 @@ and `ping`; hosts MAY forward other non-`ui/*` methods) to the server through it
 normal consent/audit pipeline.
 
 ```
-1. Host prefetches template (resources/read of _meta.ui.resourceUri), builds iframe
-2. view → host   ui/initialize {appCapabilities}          [request]
+1. Host fetches template (resources/read of _meta.ui.resourceUri; typically prefetched/cached), builds iframe
+2. view → host   ui/initialize {appInfo, appCapabilities, protocolVersion}   [request]
    host → view   result: { protocolVersion: "2026-01-26",
                            hostInfo: {name, version},
                            hostCapabilities: {...},
@@ -122,13 +124,18 @@ normal consent/audit pipeline.
                  { content: [...], structuredContent?: {...}, isError?: bool, _meta?: {...} }
 6. ongoing       view calls tools/call, ui/message, etc.; host pushes
                  host-context-changed on theme/size changes
-7. host → view   ui/resource-teardown                     [request — MUST be answered]
+7. host → view   ui/resource-teardown        [request — answer it; the host SHOULD wait for the response]
 ```
 
 The host delivers tool data **only after the view's `ui/initialize` request
-completes** (the normative MUST is keyed to initialize completing; the sequence
-diagram places it after `initialized`) — a view that skips the handshake renders
-its static HTML forever.
+completes** (one normative MUST is keyed to initialize completing; the
+sandbox-proxy rules add that the host MUST NOT send the view anything before
+receiving `initialized`) — a view that skips the handshake renders its static
+HTML forever.
+
+The request's `protocolVersion` is the **Apps extension revision**
+(`"2026-01-26"`) — do not send an MCP protocol version (`2026-07-28`,
+`2025-06-18`, …) there; they are different version lines.
 
 ## Host ↔ view bridge: method registry
 
@@ -136,7 +143,7 @@ View → host requests:
 
 | Method | Params | Purpose |
 |---|---|---|
-| `ui/initialize` | `{ appCapabilities }` — declare `availableDisplayModes` here (e.g. `{availableDisplayModes:["inline","fullscreen"]}`); hosts MUST NOT switch the view to an undeclared mode | Handshake; returns host info/context |
+| `ui/initialize` | `{ appInfo: {name, version}, appCapabilities, protocolVersion: "2026-01-26" }` — ALL THREE required (`McpUiInitializeRequest` in the spec types; strict hosts like the official MCP Inspector reject the request when one is missing, and the view then never receives its tool result). Declare `availableDisplayModes` inside `appCapabilities` (e.g. `{availableDisplayModes:["inline","fullscreen"]}`); hosts MUST NOT switch the view to an undeclared mode | Handshake; returns host info/context |
 | `ui/open-link` | `{ url }` | Open external link (navigation is sandbox-blocked) |
 | `ui/request-display-mode` | `{ mode: "inline"\|"fullscreen"\|"pip" }` → result `{ mode }` | Ask for a mode you declared AND the host offers (`hostContext.availableDisplayModes`); the result carries the RESULTING mode, which may differ — always apply it |
 | `ui/message` | `{ role: "user", content: {type:"text", text} }` — single block, not an array | Post into the conversation — model sees it and reacts. Host MAY require user consent and MAY deny (error response) |
@@ -182,7 +189,8 @@ css: {fonts}}`), `displayMode`, `availableDisplayModes`, `containerDimensions`
 maxHeight}` is the common combination, but don't assume fixed keys),
 `locale` (BCP 47), `timeZone` (IANA), `userAgent`, `platform`
 (`"web"|"desktop"|"mobile"`), `deviceCapabilities` (`{touch?, hover?}`),
-`safeAreaInsets` (`{top,right,bottom,left}` — respect on mobile).
+`safeAreaInsets` (`{top,right,bottom,left}` — respect on mobile),
+`toolInfo` (`{id?, tool}` — metadata of the tool call that instantiated the view).
 
 ## Sandboxing and CSP
 
@@ -219,16 +227,30 @@ Rule: never hardcode colors; brand color only as accent on logos/primary buttons
 ## Draft (post-stable) additions
 
 In `specification/draft/apps.mdx`, not yet stable — do not rely on cross-host:
-`ui/download-file`; app-registered tools (view declares `tools` in
-`appCapabilities`, host can call them, `notifications/tools/list_changed` from the
-view); `ui/notifications/request-teardown` (view-initiated shutdown).
+`ui/download-file` (+ `HostCapabilities.downloadFile`); app-registered tools
+(the host *calls* tools the view declared — the `appCapabilities.tools` field
+itself already exists in the stable types, only the calling mechanism is
+draft); `ui/notifications/request-teardown` (view-initiated shutdown; the host
+still MUST send `ui/resource-teardown` afterwards); a "Metadata Location" rule
+formalizing that `_meta.ui` may sit on both the `resources/list` entry and the
+read content item, hosts MUST check both, content item wins (this SDK already
+emits both, content-authoritative).
 
 ## Debugging checklist
 
 View stays on its skeleton / "Loading…":
 1. Handshake missing or broken — is `ui/initialize` sent and `initialized` notified
    after the response? (Most common failure.)
-2. Check the host's iframe console (MCPJam surfaces it; browsers: inspect the iframe).
+1b. Handshake **rejected** — `ui/initialize` params must carry `appInfo`,
+   `appCapabilities` AND `protocolVersion`; validating hosts (the official MCP
+   Inspector's Apps tab) answer with a -32603 error when one is missing, the
+   `.then()` never runs, `initialized` is never sent, and the skeleton pulses
+   forever. Log the rejection in `.catch()` so this is visible.
+2. Check the host's iframe console (MCPJam surfaces it; browsers: inspect the
+   iframe). To see the raw bridge traffic, temporarily add
+   `window.addEventListener('message', e => console.log('bridge', e.data))`
+   at the top of the view — a `-32603` error reply to `ui/initialize` is this
+   checklist's item 1b.
 3. CSP kill — an external `<script src>`/font/CSS failed to load and took your
    bridge code down with it. Inline everything or declare `csp:` domains.
 

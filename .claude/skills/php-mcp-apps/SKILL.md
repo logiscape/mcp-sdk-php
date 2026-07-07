@@ -198,7 +198,7 @@ The view is a **self-contained HTML document** that speaks JSON-RPC 2.0 with the
 over `postMessage`. The non-negotiable part is the handshake:
 
 ```
-view  → host   ui/initialize            (request; host replies with theme, locale, sizing)
+view  → host   ui/initialize {appInfo, appCapabilities, protocolVersion}   (all three required; host replies with theme, locale, sizing)
 view  → host   ui/notifications/initialized
 host  → view   ui/notifications/tool-input    (the original arguments)
 host  → view   ui/notifications/tool-result   (the CallToolResult — render structuredContent)
@@ -242,14 +242,21 @@ and load the built artifact from disk.
 2. **View in a plain browser**: the template downgrades gracefully — open the .html
    file directly; with no host to answer, the view should settle in its
    empty/skeleton state with no JS errors.
-3. **MCPJam inspector** (`npx @mcpjam/inspector`) — the de-facto Apps dev harness:
-   renders the iframe, shows the `ui/*` traffic both ways, light/dark toggle.
+3. **Apps-capable inspector** — the official MCP Inspector
+   (`npx @modelcontextprotocol/inspector`) has an **Apps** tab: connect,
+   select the app, fill the tool params, "Open App". It strictly validates the
+   bridge (e.g. rejects a `ui/initialize` missing `appInfo`/`protocolVersion`),
+   which makes it the best conformance check. MCPJam
+   (`npx @mcpjam/inspector`) is a good alternative with richer host emulation
+   (theme toggle, device/locale, both-ways `ui/*` traffic log).
 4. **Real hosts**: Claude (Settings → Connectors → add your HTTP URL; works before
    any directory submission) and/or ChatGPT developer mode. Verify: result renders,
    UI-initiated tool calls round-trip, dark mode, graceful text for non-UI hosts.
 5. If it doesn't render, debug with the checklist in
    [reference/apps_protocol.md](reference/apps_protocol.md) — nine times out of ten
-   it's a missing handshake, a non-`ui://` URI, or a CSP-blocked external asset.
+   it's a missing **or rejected** handshake (a skeleton that pulses forever
+   usually means the host refused `ui/initialize` — check the iframe console),
+   a non-`ui://` URI, or a CSP-blocked external asset.
 
 ## Phase 5: Deploy and distribute
 
@@ -294,5 +301,5 @@ View (HTML/JS)
 
 Cross-host
 - [ ] Built to the open standard first; host-specific extras feature-detected, never UA-sniffed
-- [ ] Tested in MCPJam + at least one real host, both themes
-- [ ] Tool annotations (`readOnlyHint`/`destructiveHint`/`openWorldHint`) accurate — directory reviews check them
+- [ ] Tested in the official MCP Inspector + at least one real host, both themes
+- [ ] Tool annotations (`readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`) accurate, set via `tool(annotations: [...])` — directory reviews check them

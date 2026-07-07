@@ -21,7 +21,9 @@ then layer host extras behind **feature detection**, never user-agent branching:
 
 ```js
 const res = await bridge.request('ui/initialize', {
+  appInfo: { name: 'my-app-view', version: '1.0.0' },      // required
   appCapabilities: { availableDisplayModes: ['inline'] },  // declare what you implement
+  protocolVersion: '2026-01-26',                           // required
 });
 const caps = res.hostCapabilities || {};
 // if (caps.updateModelContext) ... ; if (window.openai?.uploadFile) ...
@@ -32,19 +34,23 @@ so the rest of the view is standard.
 
 ## Host support matrix
 
+The canonical, maintained list is the official client matrix at
+`modelcontextprotocol.io/extensions/client-matrix` — check it before promising
+support for any host. Snapshot as of mid-2026:
+
 | Host | Standard Apps support | Notes |
 |---|---|---|
 | Claude (web, Desktop, iOS/Android, Cowork) | Yes — launch host, Jan 2026 | "Interactive connectors"; enable via claude.ai/directory or custom connector |
 | **Claude Code** | **No** | Terminal client — your tool's text `content` is all it shows |
 | ChatGPT | Yes | Standard format + proprietary `window.openai` extras; legacy skybridge still accepted |
-| VS Code / GitHub Copilot | Yes | Injects theming variables like Claude |
-| Microsoft 365 Copilot | Yes — partial | Per Microsoft Learn (not in the ext-apps README client list); notable gaps below |
+| VS Code / GitHub Copilot | Yes | In the official client matrix |
+| Microsoft 365 Copilot | Yes — partial | In the official matrix; notable gaps below |
 | Goose (Block) | Yes | Labeled experimental/minimal |
 | Postman | Yes | Also renders legacy mcp-ui format |
-| MCPJam Inspector | Yes | The dev/test harness |
-| LibreChat | Legacy mcp-ui only | Official Apps format is an open feature request |
+| MCP Inspector (official) / MCPJam | Yes | The dev/test harnesses |
 | Cursor | Yes — v2.6, Mar 2026 | In the official client matrix |
-| JetBrains, Kiro | Announced/exploring | Verify before promising support |
+| Archestra.AI, PostHog Code | Yes | In the official client matrix |
+| LibreChat | Legacy mcp-ui only | Official Apps support is an open feature request (PR in progress — re-check) |
 
 Because Claude Code and other text-only clients are real consumers of the same
 server, the graceful-degradation rule (meaningful text `content` always) is not
@@ -57,28 +63,32 @@ Users can disable interactive tool calls per conversation; Team/Enterprise owner
 disable org-wide. Purchases through interactive connectors are not supported (policy).
 
 **Getting your server in front of Claude (no directory needed):** Settings →
-Connectors → add your HTTPS endpoint (or `claude_desktop_config.json` for local
-stdio). Custom connectors render Apps; the directory is for distribution, not a
-rendering gate. Users grant per-app permission on first render.
+Customize → Connectors → add your HTTPS endpoint (or
+`claude_desktop_config.json` for local stdio). Custom connectors render Apps;
+the directory is for distribution, not a rendering gate. Users grant per-app
+permission on first render. Add connectors via web or desktop — mobile can use
+them but cannot add them.
 
 **Claude-specific constraints:**
 - `frameDomains` (nested iframes) restricted pending security review — don't depend
   on embedding third-party frames.
 - Mobile: no camera / microphone / geolocation grants; respect `safeAreaInsets`.
 - Design language: use the injected CSS variables (`--color-*`, `--font-*` — Claude
-  supplies "Anthropic Sans"; ~60 tokens documented), min 320pt viewport, 44×44pt
+  supplies "Anthropic Sans"; 50+ tokens documented), min 320pt viewport, 44×44pt
   targets, no floating panels in fullscreen, avoid popovers/dropdowns and nested
   scrolling inline.
-- Claude's design guidance documents inline and fullscreen patterns (carousel as an
-  inline variant); `pip` is undocumented there — rely on the negotiated
-  `availableDisplayModes` rather than assuming it.
+- Claude's design guidance names three modes — inline, fullscreen, `pip` —
+  with detailed patterns for the first two (carousel as an inline variant);
+  `pip` is listed without a guidance section. Rely on the negotiated
+  `availableDisplayModes` rather than assuming any mode.
 
 **Directory submission** (claude.ai → admin settings → directory submissions):
 OAuth 2.0 for authed services; accurate `title` + `readOnlyHint`/`destructiveHint`
 annotations on every tool; documentation and a support channel; **3–5 PNG screenshots
 ≥1000px wide (response-area crops) each paired with the prompt that produced it**
 (Anthropic publishes a Figma template). Review criteria are published — read them
-before submitting. Feedback contact: mcp-apps@anthropic.com.
+before submitting. Questions/escalations: mcp-review@anthropic.com;
+implementation bugs: github.com/anthropics/claude-ai-mcp.
 
 ## ChatGPT (OpenAI Apps SDK)
 
@@ -114,7 +124,8 @@ of `size-changed` and `ui/open-link`, plus the fullscreen "Open in App" target),
 file APIs (`uploadFile`, `selectFiles`, `getFileDownloadUrl`), and read-only
 context (`theme`, `displayMode`, `maxHeight`, `safeArea`, `view`, `locale`).
 `requestCheckout` (ChatGPT payment sheet) is documented on the Apps SDK
-monetization page — private beta, select marketplaces only.
+monetization page — private beta, select marketplaces, currently
+physical-goods apps only.
 Globals update via the `"openai:set_globals"` CustomEvent. All of it optional — the
 standard bridge covers the core.
 
@@ -136,12 +147,14 @@ cannot change after listing.
 
 ## VS Code, M365 Copilot, Goose, Postman
 
-- **VS Code / GitHub Copilot:** standard format; injects theme variables (mapped
-  onto the editor theme). Good second test host after MCPJam.
+- **VS Code / GitHub Copilot:** standard format; in the official client matrix.
+  Theming arrives through the standard `hostContext.styles` mechanism — VS
+  Code's own docs don't detail which variables, so keep the fallbacks. Good
+  second test host after the inspectors.
 - **M365 Copilot:** supports both standard MCP Apps and OpenAI-Apps-SDK-style
-  widgets inside declarative agents, per Microsoft's primary docs
-  (learn.microsoft.com — "MCP apps in Microsoft 365 Copilot"; it is *not* in the
-  ext-apps README's client list, so treat support as Microsoft-documented, partial).
+  widgets inside declarative agents; listed in the official client matrix, with
+  Microsoft Learn ("MCP apps in Microsoft 365 Copilot") documenting the gaps —
+  treat support as real but partial.
   Published gaps: no `tool-input-partial`, no `host-context-changed`, no teardown,
   no `hostContext.availableDisplayModes`, `ui/request-display-mode` fullscreen only,
   and `prefersBorder` / `domain` / `permissions` / `frameDomains` / `baseUriDomains`
@@ -156,16 +169,21 @@ cannot change after listing.
 
 ## Testing harnesses
 
-1. **MCPJam Inspector** — `npx @mcpjam/inspector`, point it at
-   `http://localhost:8000` (from `php -S localhost:8000 server.php`) or your deployed
-   URL. Renders the view, shows bridge traffic both directions, theme toggle. First
-   stop for every change.
-2. **ext-apps `basic-host`** — the reference host implementation in
-   `modelcontextprotocol/ext-apps` `examples/basic-host`; strictest
+1. **Official MCP Inspector** — `npx @modelcontextprotocol/inspector`, connect
+   to `http://localhost:8000` (from `php -S localhost:8000 server.php`), then
+   the **Apps** tab: select the app, fill the tool params, "Open App". It
+   validates the bridge strictly (a `ui/initialize` missing `appInfo` or
+   `protocolVersion` is rejected and the view never gets its result) — the
+   best first conformance stop.
+2. **MCPJam Inspector** — `npx @mcpjam/inspector`, same connection. Richer
+   host emulation: bridge traffic log both directions, theme toggle, device
+   and locale emulation.
+3. **ext-apps `basic-host`** — the reference host implementation in
+   `modelcontextprotocol/ext-apps` `examples/basic-host`; another strict
    standard-conformance check.
-3. **Claude custom connector** — real-host verification pre-directory (above).
-4. **ChatGPT developer mode** — enable in settings, add your server, iterate.
-5. **Plain browser** — open the view file directly: it must fail gracefully into its
+4. **Claude custom connector** — real-host verification pre-directory (above).
+5. **ChatGPT developer mode** — enable in settings, add your server, iterate.
+6. **Plain browser** — open the view file directly: it must fail gracefully into its
    skeleton state (the template guarantees this), which also makes visual/CSS work
    fast without any host.
 
@@ -178,8 +196,10 @@ well · no console errors in the iframe.
 Useful background when researching or debugging:
 
 - **Spec home:** github.com/modelcontextprotocol/ext-apps (stable `2026-01-26` +
-  draft); official docs at modelcontextprotocol.io/extensions/apps; SEP-1865 is the
-  governing proposal (authored jointly by Anthropic, OpenAI, and the MCP-UI community).
+  draft); official docs at modelcontextprotocol.io/extensions/apps and the
+  per-host support matrix at modelcontextprotocol.io/extensions/client-matrix;
+  SEP-1865 is the governing proposal (authored jointly by Anthropic, OpenAI,
+  and the MCP-UI community).
 - **Reference SDK:** npm `@modelcontextprotocol/ext-apps` (App class, React hooks,
   `app-bridge` for hosts, `registerAppTool`/`registerAppResource` server helpers) —
   the TypeScript mirror of what `McpServer::ui()` + the view template do here.

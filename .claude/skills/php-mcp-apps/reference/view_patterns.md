@@ -43,8 +43,9 @@ calls. Exact wire shapes: `apps_protocol.md`.
   answered or hosts may consider the view hung during shutdown)
 - helpers: `callTool`, `sendMessage`, `updateModelContext`, `openLink`,
   `requestDisplayMode`
-- automatic: handshake, host-context theming, `ResizeObserver` → `size-changed`,
-  skeleton/error/content state switching
+- automatic: handshake (all three required `ui/initialize` params), host-context
+  theming, `hostCapabilities` captured for feature detection,
+  `ResizeObserver` → `size-changed`, skeleton/error/content state switching
 
 Replace the marked block in `render()` with your UI; leave the plumbing alone.
 

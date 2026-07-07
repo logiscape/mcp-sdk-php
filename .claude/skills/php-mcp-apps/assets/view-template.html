@@ -125,6 +125,7 @@
     // 'fullscreen' / 'pip' here only once your layout genuinely handles them.
     const APP_DISPLAY_MODES = ['inline'];
     let hostContext = {};      // theme, locale, displayMode, containerDimensions, ...
+    let hostCapabilities = {}; // from the initialize result — feature-detect here
     let lastInput = null;      // arguments of the originating tools/call
 
     const $ = (id) => document.getElementById(id);
@@ -223,8 +224,9 @@
       return bridge.request('ui/update-model-context', { content: [{ type: 'text', text }] });
     }
     // Open an external link (direct navigation is sandbox-blocked).
+    // Also a request — the host may deny; await/catch if you care.
     function openLink(url) {
-      bridge.request('ui/open-link', { url });
+      return bridge.request('ui/open-link', { url });
     }
     // Ask for a different display mode. Preconditions per spec: the mode must be
     // one this view declared in APP_DISPLAY_MODES, and offered by the host in
@@ -241,19 +243,27 @@
       return res;
     }
 
-    /* ---------------- Handshake (required — nothing renders without it) ---- */
+    /* ---------------- Handshake (required — nothing renders without it) ----
+       appInfo, appCapabilities AND protocolVersion are ALL required request
+       params (McpUiInitializeRequest in the spec's types). Strict hosts —
+       the official MCP Inspector among them — validate and reject the
+       request when any is missing, and then never deliver the tool result:
+       the view sits on its skeleton forever. */
+    const APP_INFO = { name: 'my-app-view', version: '1.0.0' };   // identify your view
     bridge.request('ui/initialize', {
+      appInfo: APP_INFO,
       appCapabilities: { availableDisplayModes: APP_DISPLAY_MODES },
+      protocolVersion: '2026-01-26',
     })
       .then((res) => {
+        hostCapabilities = (res && res.hostCapabilities) || {};
         applyHostContext((res && res.hostContext) || {});
         bridge.notify('ui/notifications/initialized', {});
       })
-      .catch(() => {
-        // Handshake failed or was rejected: stay in skeleton state so the
-        // file is previewable, or swap in demo data here while developing.
-        // (Opened directly in a browser there is no host, no tool-result ever
-        // arrives, and the view likewise just sits in its skeleton state.)
+      .catch((err) => {
+        // A rejected handshake means the host refused us — surface it while
+        // developing; the view stays in its skeleton state either way.
+        console.error('ui/initialize failed', err);
       });
   </script>
 </body>

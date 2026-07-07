@@ -155,7 +155,8 @@ $server
         fn(string $date): CallToolResult => new CallToolResult(
             content: [new TextContent(text: Slots::summary($date))],
             structuredContent: ['date' => $date, 'slots' => Slots::for($date)],
-        ))
+        ),
+        annotations: ['readOnlyHint' => true, 'openWorldHint' => false])
     ->tool('book_slot', 'Book a specific slot by id',
         function (string $slotId, string $name, string $email): CallToolResult {
             if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -166,7 +167,11 @@ $server
                 content: [new TextContent(text: "Booked slot {$slotId} — confirmation {$ref}.")],
                 structuredContent: ['confirmed' => true, 'reference' => $ref, 'slotId' => $slotId],
             );
-        })
+        },
+        // The annotations directory reviews check — set them on every tool
+        // via tool()'s annotations: parameter.
+        annotations: ['readOnlyHint' => false, 'destructiveHint' => false,
+                      'idempotentHint' => true, 'openWorldHint' => false])
     ->ui(
         tool: 'list_slots',
         uri: 'ui://booking/picker-v1',
@@ -233,8 +238,9 @@ $server
 ```
 
 Do not reuse the exact same URI across `ui()` calls: each call appends a
-`resources/list` entry, so a repeated URI produces a duplicate listing (reads still
-work — the handler is keyed by URI — but duplicate listings may confuse hosts).
+`resources/list` entry, so a repeated URI produces a duplicate listing, and the
+read handler is keyed by URI — the **last** registration silently replaces the
+earlier one's HTML and hints.
 Distinct URIs sharing one file cost only a second host cache entry and keep the
 listing clean. The maintenance win is identical: one view file to evolve.
 

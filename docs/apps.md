@@ -69,7 +69,14 @@ $server
                         `${d.city}: ${d.condition}, ${d.temperatureC}°C`;
                 }
             });
-            post({id: 1, method: 'ui/initialize', params: {appCapabilities: {}}});
+            // All three params are required (appInfo, appCapabilities,
+            // protocolVersion — the Apps extension revision, not the MCP
+            // protocol version).
+            post({id: 1, method: 'ui/initialize', params: {
+                appInfo: {name: 'weather-view', version: '1.0.0'},
+                appCapabilities: {},
+                protocolVersion: '2026-01-26',
+            }});
             </script>
             </body></html>
             HTML,

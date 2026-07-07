@@ -123,8 +123,15 @@
 
     // Handshake: announce the view, then signal readiness. The host replies to
     // ui/initialize with McpUiInitializeResult and pushes the originating
-    // tool-call result via ui/notifications/tool-result.
-    request('ui/initialize', { appCapabilities: {} })
+    // tool-call result via ui/notifications/tool-result. appInfo,
+    // appCapabilities and protocolVersion are all required request params
+    // (McpUiInitializeRequest); strict hosts such as the official MCP
+    // Inspector reject the handshake if any is missing.
+    request('ui/initialize', {
+      appInfo: { name: 'weather-dashboard', version: '1.0.0' },
+      appCapabilities: {},
+      protocolVersion: '2026-01-26',
+    })
       .then(() => notify('ui/notifications/initialized', {}))
       .catch((err) => console.error('ui/initialize failed', err));
   </script>
