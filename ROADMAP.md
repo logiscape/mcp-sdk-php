@@ -13,26 +13,40 @@ delivery date — targets listed are intentions, not guarantees.
 
 These are the principles every roadmap item is judged against:
 
-1. **Track the spec as it evolves.** We aim for full conformance with the
-   latest MCP specification revision and sensible back-compat for prior
-   revisions.
+1. **Day-one support for each MCP specification release is the standing
+   priority.** Tracking the spec is not one roadmap item among many — it is
+   the continuous objective that outranks every other item in this document.
+   When a new revision enters its release-candidate window, implementing it
+   (with full conformance and sensible back-compat for prior revisions)
+   preempts whatever else is in flight. The `v2` cycle set the working
+   pattern: implement against the RC inside the RC-to-final validation
+   window, verify against the official conformance suite as it evolves, and
+   be ready to release when the spec is published.
 2. **No conformance shortcuts.** We do not engineer workarounds purely to
    green a conformance test. If a test fails honestly, it goes in the
    relevant conformance baseline file (see
-   [`conformance/README.md`](conformance/README.md) — during v2 development
-   there is one per track: stable and `2026-07-28` draft)
-   with a root cause and a plan — or no plan, if it is genuinely an optional
-   extension we are not pursuing yet.
+   [`conformance/README.md`](conformance/README.md) — one per track: stable
+   and draft) with a root cause and a plan — or no plan, if it is genuinely
+   an optional extension we are not pursuing yet.
 3. **cPanel/Apache compatibility is mandatory for core MCP features.**
    Features that cannot be compatible with shared hosting still ship (for spec
    alignment) but must fail gracefully instead of crashing the SDK. See
    [`docs/compatibility.md`](docs/compatibility.md).
-4. **Avoid breaking changes where we can.** On the `1.x` line, when breaking
-   the public API or documented flows is genuinely necessary, we bump the
-   minor version (`v1.X`), not the patch, and we document the change in
-   [CHANGELOG.md](CHANGELOG.md). The `v2` major now in development (see below)
-   exists precisely to absorb the breaking `2026-07-28` protocol revision in
-   one place rather than dribbling breaks into `v1`.
+4. **Avoid breaking changes where we can.** When breaking the public API or
+   documented flows is genuinely necessary on a stable line, we bump the
+   minor version and document the change in [CHANGELOG.md](CHANGELOG.md).
+   The `v2` major exists precisely to absorb the breaking `2026-07-28`
+   protocol revision in one place rather than dribbling breaks into `v1`.
+5. **The core stays pure PHP.** The SDK's only runtime dependency is
+   `psr/log` (see [`docs/dependency-policy.md`](docs/dependency-policy.md)),
+   which is what lets it embed anywhere — a Laravel or Symfony application, a
+   legacy codebase, a bare cPanel account — without version conflicts in the
+   consumer's dependency tree. Integration needs are met through interfaces
+   (`HttpIoInterface`, `SessionStoreInterface`, `TokenStorageInterface`,
+   `SubscriptionBusInterface`, the PSR-3 logger seam) and, where an
+   implementation is worth shipping in-box, through classes that add **zero**
+   Composer dependencies. Framework-specific conveniences belong in separate
+   bridge packages that depend on the core — never the other way around.
 
 ## Current tier position (self-assessment)
 
@@ -42,8 +56,8 @@ Group assigns tiers.
 
 | SEP-1730 criterion          | Target (Tier 1)          | Current state                                                                                                                          |
 | --------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Conformance pass rate       | 100%                     | **100%** of stable-track scenarios — both baseline lists are empty on suite `v0.1.16`. The `2026-07-28` draft track additionally runs in CI with a small, documented upstream-issue baseline. |
-| New protocol features       | Before spec release      | `2026-07-28` (the release candidate) supported on `main` ahead of the final spec, alongside `2024-11-05` … `2025-11-25` via built-in negotiation — the `v2` beta (see below).        |
+| Conformance pass rate       | 100%                     | **100%** of stable-track scenarios — both baseline lists are empty. The `2026-07-28` draft track additionally runs in CI with a small, documented upstream-issue baseline. |
+| New protocol features       | Before spec release      | `2026-07-28` (the release candidate) supported on `main` ahead of the final spec, alongside `2024-11-05` … `2025-11-25` via built-in negotiation — the `v2` pre-release (see below).        |
 | Issue triage                | 2 business days          | Best-effort; see response-time section below.                                                                         |
 | Critical bug resolution     | 7 days                   | Best-effort, typically weeks not days for non-trivial fixes.                                                          |
 | Stable release              | Required, clear versioning | Met. Latest stable is `v1.7.4` on the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x); `main` carries the pre-release `v2`. Semver-tagged since `v1.0.0`.       |
@@ -64,285 +78,191 @@ it would be dishonest to commit to them without a contributor base large enough
 to cover holidays, sickness, and life. If that community grows — and we hope it
 will — the arithmetic changes.
 
-## What we are working on
+## Now: shipping v2
 
-**v2 development has begun.** The `main` branch now carries the pre-release `v2`
-of the SDK, and the stable `v1` line lives on the
-[`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x), which
-continues to receive bug fixes and low-risk backports. v2 has two defining
-goals: day-one support for the `2026-07-28` spec revision, and full support
-for the MCP Apps extension as a release feature — both detailed below. The
-guiding principles above carry into v2 unchanged. In particular, principle #3
-is a v2 release requirement, not a v1 legacy: every core feature of v2 must
-run in a standard cPanel/Apache/PHP web hosting environment, while we
-simultaneously aim for 100% conformance with the new revision. The
-`2026-07-28` stateless core makes these two goals more compatible, not less —
-see the compatibility notes below.
+**v2 development is feature-complete and in testing.** The `main` branch
+carries the pre-release `v2`; the stable `v1` line lives on the
+[`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x) and
+continues to receive bug fixes and low-risk backports. Every workstream of
+the [v2 development plan](docs/v2-development-plan.md) — the stateless
+`2026-07-28` core, dual-era client/server negotiation, the transport and
+authorization changes, the Tasks (SEP-2663) and MCP Apps (SEP-1865)
+extensions, backward compatibility across all five supported revisions,
+conformance, shared-hosting validation on a live cPanel host, examples, and
+documentation — is implemented, reviewed, and verified. The plan itself now
+doubles as the development record; per-workstream status lines live there.
 
-**The main working plan for v2 development is
-[`docs/v2-development-plan.md`](docs/v2-development-plan.md).** This roadmap
-describes direction and rationale; the development plan describes execution —
-the ordered workstreams (stateless foundation through documentation), their
-dependencies and completion criteria, the research → implement → human review
-→ human commit milestone process, and the release gates between today's
-pre-release and a tagged `v2.0.0`. All commits in that process are
-human-initiated.
+What remains before a tagged `v2.0.0` is the release process, not feature
+work. In line with guiding principle #1, this section outranks everything
+below it:
 
-### Near-term (next release cycle)
+- **Track the RC through to the final `2026-07-28` specification.** Between
+  now and spec publication, monitor the spec repository and the official
+  conformance suite for changes relative to the release candidate. If the
+  final text lands changes, the affected workstreams re-open as new
+  milestones (research → implement → review → approve) before release — the
+  gates are checkpoints, not a ratchet.
+- **Pass the remaining release gates** (gates are human decisions — see the
+  [v2 plan's release-gate section](docs/v2-development-plan.md#release-gates)):
+  the validated pre-release tag, then **G4** — a clean conformance run
+  against the suite version current at spec publication, and the `v2.0.0`
+  tag.
+- **Burn down the draft-track conformance baseline.** The stable track is at
+  100% with empty baselines; the draft track carries a small documented
+  baseline of upstream-suite issues. Each entry is re-checked as new suite
+  versions ship, and upstream reports/PRs are pursued rather than worked
+  around (guiding principle #2).
+- **Release mechanics:** changelog, migration-guide final review, Packagist
+  release notes, and the `1.x` support statement — human-initiated, per the
+  project's process rules.
 
-- **Close optional conformance gaps, where we can do so spec-faithfully** —
-  **done with v2 WS3**: the `client_credentials` grant (JWT assertions and
-  HTTP Basic client authentication) and the full cross-app-access flow
-  shipped with the WS3 authorization hardening, so
-  [`conformance/conformance-baseline.yml`](conformance/conformance-baseline.yml)
-  is now empty and the stable suite passes 100% on both tracks.
-- **Continue tracking the spec.** Any mid-cycle SEP that reaches "Accepted"
-  status is a candidate for inclusion in a `v2` pre-release (and for backport
-  to `1.x` where low-risk).
-- **Inspector and real-world AI-app smoke tests as part of the contributor
-  workflow** — already described in [`docs/testing.md`](docs/testing.md);
-  continuing to refine what we check.
-- **Expand `conformance/everything-server.php` and `everything-client.php`**
-  to cover new tools, prompts, and resources as the official suite grows.
+## Post-v2: embedding and web-integration batteries
 
-### v2 core: day-one support for the 2026-07-28 spec revision
+The v2 work proved the SDK's integration seams end to end — the
+`HttpIoInterface` SAPI adapter for embedding the HTTP runner in any
+framework, `SessionStoreInterface` for legacy-era session persistence,
+`TokenStorageInterface` on the OAuth client side. What integrators still
+have to write themselves are the *implementations* behind those seams that
+nearly every web deployment wants — and, in a few places, a seam that
+reviewing the SDK against real embedding scenarios showed is still missing.
+The next tranche of SDK work ships those batteries in-box, under a strict
+inclusion test that keeps guiding principle #5 intact: each item must build
+on the SDK's existing public surface (adding at most a narrow new interface
+or convenience method of our own), add **zero** Composer dependencies, be
+purely additive and opt-in, and serve any web integrator rather than
+encoding one consumer's policy.
 
-The [`2026-07-28` Release Candidate](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/)
-(locked 2026-05-21; final spec 2026-07-28) is the largest revision since launch —
-a **stateless core** that drops the connection handshake and the protocol-level
-session. In line with guiding principle #1 and the SEP-1730 expectation that
-Tier 1 SDKs ship support within the ten-week RC-to-final validation window, our
-target is a clean conformance run inside that window. The official SDKs are on
-the same trajectory and the same timeline: the TypeScript SDK's `main` is a
-pre-release v2 whose documentation anticipates "a stable v2 release in Q3 2026
-along with the updated MCP spec," and the Python SDK's `main` is likewise its
-v2 development branch (its latest stable release, `v1.27.2`, still targets
-`2025-11-25`). Neither has published `2026-07-28` support yet. This work is the
-core of our own `v2` (see the release-vehicle note below).
+Planned for the `v2.x` minor line, once `v2.0.0` has shipped:
 
-**Strategy: additive and version-negotiated.** `2026-07-28` becomes a negotiable
-protocol version; the new stateless code paths run **only** when a client speaks
-that revision. The existing handshake-and-session paths for `2024-11-05`…
-`2025-11-25` stay untouched, so no existing client or server breaks (guiding
-principle #4). Mechanically this reuses the gating the SDK already has — a new
-entry in `Version::SUPPORTED_PROTOCOL_VERSIONS` / `LATEST_PROTOCOL_VERSION` and
-`FEATURE_VERSIONS` (`src/Shared/Version.php`), feature checks via
-`ServerSession::clientSupportsFeature()` / `ClientSession::supportsFeature()`,
-and backward shaping via `ServerSession::adaptResponseForClient()`. The new
-wrinkle is dual-era interoperability. The spec lets a server support both eras at
-once and defines how each side detects which it is talking to, so back-compat is
-achievable additively in both directions:
+- **A framework-neutral `McpServer` HTTP entry point.**
+  `HttpServerRunner::handleRequest()` is already embeddable — an
+  `HttpMessage` in, an `HttpMessage` out — but `McpServer::runHttp()`
+  constructs the runner privately and terminates through the SAPI adapter
+  (which reads the request from PHP globals), so framework users who want
+  the high-level registration API must rebuild the initialization-options,
+  session-store, and runner wiring themselves. A
+  `McpServer::handleHttpRequest(HttpMessage): HttpMessage` (or an
+  equivalent `createHttpRunner()`) closes that gap for every framework at
+  once.
+- **`PdoSessionStore`** — a database-backed `SessionStoreInterface`
+  implementation on bare PDO (bundled with PHP; no new dependency). Web
+  deployments that serve legacy-era (`2024-11-05` … `2025-11-25`) clients
+  today get file-based sessions by default and write their own DB store if
+  they want one; this makes the DB store a one-line constructor argument
+  instead. A PSR-6/PSR-16 cache adapter (Redis/Memcached/APCu without a hard
+  dependency) remains a candidate companion where PDO isn't the right fit.
+- **`PdoTokenStorage`** — the same pattern on the OAuth client side: a
+  database-backed `TokenStorageInterface` implementation joining the
+  existing `FileTokenStorage` and `MemoryTokenStorage`, for web-hosted MCP
+  clients that need token sets shared across PHP processes. Two
+  requirements up front: **caller/tenant scoping** — the interface keys
+  records by resource URL alone and `clear()` clears everything, so the
+  store must be constructor-scoped to a namespace before a shared table is
+  safe for multi-user web applications — and **encryption-at-rest parity**
+  with `FileTokenStorage`'s optional AES-256-GCM secret.
+- **A web OAuth redirect-flow coordinator.** The two-phase web
+  authorization flow already exists as public API —
+  `OAuthClient::initiateWebAuthorization()` returns an
+  `AuthorizationRequest` carrying all flow state, and
+  `exchangeCodeForTokens()` completes it after the browser redirect — but
+  persisting that in-flight state between the two web requests and wiring
+  the redirect and callback endpoints around it is currently left to each
+  integrator, with reference code in `webclient/`. The battery is a small
+  coordinator with a pluggable flow-state store that packages this
+  orchestration. Deliberately *not* shaped as an
+  `AuthorizationCallbackInterface` implementation: that interface's
+  synchronous authorize-and-wait contract cannot span two web requests,
+  and pretending otherwise would misuse the seam.
+- **An outbound endpoint and redirect policy seam.** Web applications that
+  let operators configure arbitrary MCP server URLs need SSRF-grade
+  controls — allowed schemes, hosts, ports, resolved-address checks, and
+  redirect policy. Today the HTTP client transport and SSE connection
+  follow redirects unconditionally with no policy hook. The SDK's role is
+  the enforcement seam: a policy interface consulted on the initial
+  endpoint and on every redirect, with safe defaults in-box; the
+  allow/deny policy itself stays each consumer's decision.
+- **Request-scoped context for server handler callbacks.** Tool, prompt,
+  and resource callbacks currently receive their typed arguments but no
+  first-class view of the request around them — the authenticated
+  principal and OAuth claims the transport already validates internally,
+  the request's `_meta`, HTTP headers. An optional, framework-neutral
+  request context injectable into callbacks would let embedded servers
+  make per-caller decisions without reaching into session internals or
+  leaning on framework globals.
+- **A framework-embedding guide in `docs/`** — concrete recipes for hosting
+  the SDK inside a framework: converting the framework's request/response
+  objects to and from `HttpMessage`, the `McpServer` HTTP entry point above
+  (or wiring `HttpServerRunner` directly), handling the
+  `StreamedHttpMessage` streaming-SSE sentinel, and choosing between the
+  buffered and native-IO paths. Target recipes: Laravel, Symfony, and a
+  generic PSR-15 middleware — plus the client-side counterpart (persisting
+  and resuming client sessions across stateless web requests with
+  `Client::resumeHttpSession()` / `detach()`).
 
-- **Server side.** A legacy client opens with an `initialize` request; a modern
-  client instead sends ordinary requests that carry the negotiated version in the
-  `MCP-Protocol-Version` HTTP header with matching `_meta`. The server keys off
-  that per-request version metadata (and the `initialize` method for legacy) —
-  *not* the session id. Under `2026-07-28` the `Mcp-Session-Id` header is removed
-  and ignored rather than used as a routing or mode signal.
-- **Client side.** We follow the spec's documented detection rather than guessing.
-  Over HTTP: send a modern request first and, on a `400`, inspect the body —
-  because a `400` is also returned for `UnsupportedProtocolVersionError`,
-  missing-capability, and header-validation failures, the status alone is not a
-  legacy signal. A recognized modern JSON-RPC error (e.g.
-  `UnsupportedProtocolVersionError`) means the server is modern (retry with one of
-  its advertised versions; do **not** fall back), whereas an empty or
-  unrecognized body means fall back to `initialize` and continue legacy. Over
-  stdio (no per-request status code): probe `server/discover` with the preferred
-  version in `_meta`, fall back to the legacy handshake on `Method not found`
-  (`-32601`), and on `UnsupportedProtocolVersionError` use one of the server's
-  advertised versions instead of falling back.
+These are sequenced deliberately *after* `v2.0.0`: they are additive
+convenience, not release blockers, and shipping them in a `v2.x` minor keeps
+the release focused on the spec revision (guiding principles #1 and #4).
 
-What we intend to implement (intentions, not final API shapes — the same caveat
-the Medium-term section carries; several of these SEPs are still settling):
+### Other post-v2 candidates
 
-- **Stateless core.**
-  - **SEP-2575** — remove the `initialize`/`initialized` handshake; carry
-    protocol version, client info, and capabilities in `_meta` on every request,
-    and answer the new `server/discover` method on demand (reusing
-    `Server::getCapabilities()`).
-  - **SEP-2567** — remove the protocol-level session: under `2026-07-28` the
-    SDK stops emitting and stops honouring the `Mcp-Session-Id` header (legacy
-    revisions keep it), so any request can land on any instance.
-  - **SEP-2243** — read and validate the request-metadata headers so gateways can
-    route without inspecting the body: `Mcp-Method` on **all** requests and
-    notifications, and `Mcp-Name` only on the name/uri-bearing methods
-    (`tools/call`, `resources/read`, `prompts/get`; the Tasks extension reuses it
-    for the task id). A header whose value disagrees with the body, or a missing
-    required header, is rejected `400` with a `HeaderMismatch` / `-32020` error
-    (renumbered from `-32001` per spec PR modelcontextprotocol#2907; see the v2
-    plan's WS7 update).
-    (The mandatory per-request `MCP-Protocol-Version` header and its
-    must-match-`_meta` rule are defined by SEP-2575 above; SEP-2243 supplies the
-    `-32020` enforcement, which also covers a version-header/`_meta` mismatch.)
-    Also support the `x-mcp-header` schema annotation that mirrors designated tool
-    parameters into `Mcp-Param-*` headers (clients MUST emit them; whether those
-    headers survive network intermediaries and shared-hosting `.htaccess` is a
-    deployment concern, not something the spec obliges intermediaries to do).
-  - **SEP-2549** — emit `ttlMs` / `cacheScope` on list and resource-read results
-    (HTTP `Cache-Control` semantics).
-  - **SEP-414** — preserve and expose W3C Trace Context fields
-    (`traceparent` / `tracestate`) carried in `_meta`, per the documented
-    distributed-tracing convention. The SDK's role is pass-through and
-    accessor surface only — no OpenTelemetry dependency (consistent with
-    [`docs/dependency-policy.md`](docs/dependency-policy.md)).
-  - **SEP-2322** — the multi-round-trip request mechanism: sampling, elicitation,
-    and roots become `InputRequiredResult` exchanges (`inputRequests` /
-    `requestState` / `inputResponses`) instead of server-initiated requests. (Two
-    related removals live in adjacent SEPs: SEP-2575 removes the standalone GET
-    SSE stream, replacing it with `subscriptions/listen`, and SEP-2260 restricts
-    that channel to server→client *notifications* only — no independent
-    server-initiated *requests*.) Request-scoped SSE response streams
-    (request-related notifications then the final response) and long-lived
-    `subscriptions/listen` streams for change notifications remain; `Last-Event-ID`
-    resumption does not.
-  - **SEP-2106** — accept JSON Schema 2020-12 keywords (composition, conditionals,
-    `$ref`) in tool schemas, with the spec's constraints: `inputSchema` still
-    requires a root `type: "object"`, `outputSchema` is unrestricted, and
-    `structuredContent` may be any JSON value conforming to it. **SEP-2164** —
-    change the missing-resource error from `-32002` to `-32602`.
-- **Authorization.** SEP-2468 (`iss` validation, RFC 9207), SEP-837
-  (`application_type` on registration), SEP-2352 (credential binding), SEP-2207
-  (refresh-token flow), SEP-2350 (scope accumulation), and SEP-2351
-  (`.well-known` discovery). These drop into the existing `Client/Auth/` and
-  `Server/Auth/` framework rather than needing a new abstraction.
-- **Governance.** Adopt the SEP-2596 / SEP-2577 feature-lifecycle states (Active
-  / Deprecated / Removed, 12-month minimum) for the now-deprecated Roots,
-  Sampling, and Logging features — deprecated, not removed — and track the
-  SEP-2484 requirement that Standards-Track SEPs ship matching conformance
-  scenarios.
-- **Tasks extension (SEP-2663).** A **breaking redesign** of the experimental
-  Tasks primitive already in the tree: `tasks/get` / `tasks/update` /
-  `tasks/cancel`, the task handle returned from `tools/call`, and **removal of
-  `tasks/list`** (which cannot be scoped without sessions). Because the existing
-  Tasks surface is pre-release, we redesign it cleanly — gated to `2026-07-28`,
-  no deprecation shims — and keep the file-based store for shared-hosting
-  compatibility.
-- **MCP Apps extension (SEP-1865) — a committed v2 release feature.** Decision
-  finalized June 2026: full support ships with `v2` releases, promoting Apps
-  from the wait-and-see long-term position it previously held here. Apps
-  looks to be a critical component of MCP going forward — at launch it was
-  co-developed by Anthropic and OpenAI with the MCP-UI maintainers, Claude and
-  VS Code already render it, and the `2026-07-28` extensions framework
-  (SEP-2133) formalises it as an independently versioned first-class
-  extension. The stable extension revision is
-  [`2026-01-26`](https://github.com/modelcontextprotocol/ext-apps); the
-  official ext-apps SDK is TypeScript-only today, so PHP server-side support
-  fills a real gap. The UI renders host-side in a sandboxed iframe, so the
-  SDK's role is the server side: declaring the extension, registering `ui://`
-  template resources with the MIME-type and size conventions the extension
-  defines, associating templates with tools through tool metadata so hosts can
-  prefetch, cache, and security-review them ahead of execution, and handling
-  the UI's tool-call-shaped messages like any other tool call. We will add a
-  first-class `McpServer` helper (working name `->ui(...)`) that bundles those
-  conventions so an app-enabled server stays a few lines of PHP, and the
-  server must degrade gracefully where a host cannot display the UI.
+Carried forward from the v2 cycle, in no committed order:
 
-**cPanel/Apache compatibility (guiding principle #3).** On balance this revision
-helps shared hosting: dropping sticky sessions and shared session stores, and
-turning sampling/elicitation into `InputRequiredResult` round-trips instead of
-server-initiated requests over an open stream, removes the most fragile pieces
-documented in [`docs/compatibility.md`](docs/compatibility.md). It is not a
-clean break from SSE, though — request-scoped SSE responses and opt-in
-`subscriptions/listen` streams remain long-lived, so the existing SSE
-shared-hosting guidance still applies to those. The items that need attention
-rather than a hard requirement are narrow: the request-metadata headers
-(`Mcp-Method`, `Mcp-Name`, `MCP-Protocol-Version`, and any `Mcp-Param-*`) must
-survive `.htaccess` and any proxy — the same class of forwarding concern we
-already document for `Authorization` — and the MCP Apps extension (now a
-committed v2 feature, above) renders host-side, so the server's job is plain
-resource emission over standard HTTP — a natural fit for shared hosting — and
-it must not fatal where a host can't display the UI. Core features (tools,
-prompts, resources, `server/discover`) remain a must-work-everywhere
-commitment, and that commitment is a v2 release gate alongside the 100%
-conformance target, not a trade-off against it.
-
-**Release vehicle — decided: `v2`.** Per CONTRIBUTING's versioning policy, the
-major (`v2`) is reserved for "when the official MCP SDKs cut a `v2`." That
-linkage is now confirmed rather than speculative: the Python SDK's v1.25.0
-release note stated its v2 plan "relies on the next upcoming spec release
-which will heavily change how the transport layer works," its `main` branch is
-now its v2 development line, and the TypeScript SDK's v2 documentation
-anticipates "a stable v2 release in Q3 2026 along with the updated MCP spec."
-The ecosystem `v2` and `2026-07-28` are arriving together, so we have aligned:
-this repository's `main` branch is the pre-release `v2`, and `2026-07-28`
-day-one support ships as the headline feature of `v2.0` (with the MCP Apps
-extension as a release feature alongside it). The stable `v1` line continues
-on the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x) for
-users on the `2024-11-05`…`2025-11-25` revisions, receiving bug fixes and
-low-risk backports.
-
-### Medium-term
-
-Items in this section are directions we intend to explore ahead of a formal
-spec release, in line with the Tier 1 expectation that SDKs begin implementing
-new features before the revision that introduces them ships. Inclusion here is
-not a commitment to a specific API shape — SEPs named below are still moving,
-and we expect the concrete surface to change. Work that lands on the basis of
-a moving SEP goes in under an "experimental" label (matching the convention
-the official TypeScript and Python SDKs use for Tasks) and only graduates once
-the SEP is stable.
-
+- **Tasks extension follow-ups** as the extension's own draft line moves:
+  the optional `notifications/tasks` status push (this SDK is poll-based
+  today) and richer application-driven retry/expiry policies on the
+  file-based store.
+- **Server Cards (SEP-2127)** — the static `.well-known` pre-connection
+  descriptor complementing the `server/discover` RPC that shipped with v2: a
+  thin endpoint on `HttpServerRunner`, a natural fit for shared hosting,
+  behind a config flag once the SEP's path and schema stop moving.
+- **Remaining OAuth-spec alignment** — baseline default scopes (SEP-835) and
+  any smaller auth extensions that reach Accepted status; these drop into
+  the existing `Client/Auth/` and `Server/Auth/` framework.
 - **Raise response-time expectations** in [SECURITY.md](SECURITY.md) and
   [SUPPORT.md](SUPPORT.md) once enough trusted contributors are on board to
   sustain them. See [GOVERNANCE.md](GOVERNANCE.md) for the path to becoming
   one.
-- **Round out the Tasks extension.** The SEP-2663 stateless redesign
-  shipped with `v2` (WS4 in the
-  [v2 development plan](docs/v2-development-plan.md)): `tasks/get` /
-  `tasks/update` / `tasks/cancel` on the file-based `TaskManager`,
-  server-directed task creation via `tool(..., taskSupport:)`, in-task
-  input through `inputRequests` / `inputResponses`, and the client-side
-  `getTask()` / `updateTask()` / `cancelTask()` API — see
-  [docs/tasks.md](docs/tasks.md). Remaining post-v2 candidates as the
-  extension's own draft line moves: the optional `notifications/tasks`
-  status push (this SDK is poll-based today) and richer
-  application-driven retry/expiry policies on the store.
-- **Shared session store for clustered HTTP deployments.** The
-  `SessionStoreInterface` seam already accepts pluggable implementations;
-  file-based and in-memory stores ship in-box. The stateless transport work
-  once described here as "forthcoming from the Transports WG" is now concrete in
-  the `2026-07-28` RC (SEP-2567 removes the protocol-level session, SEP-2575
-  removes the handshake), which makes a shared session store **optional** rather
-  than a horizontal-scaling prerequisite under the new revision. The remaining
-  value is for clients still on `2024-11-05`…`2025-11-25`: publishing a reference
-  shared-store implementation (likely a PSR-6 or PSR-16 adapter, so users can
-  pick Redis/Memcached/APCu without the SDK taking a hard dependency) and keeping
-  the seam stable so the additive stateless paths above do not force API churn.
-- **Pre-connection discovery: Server Cards (SEP-2127).** The `2026-07-28`
-  `server/discover` RPC method (an on-demand, cacheable capability fetch
-  that replaces what the handshake used to provide) shipped with `v2` as
-  part of day-one revision support. The complementary SEP-2127 Server Card
-  — a static `.well-known` pre-connection descriptor — remains a
-  lower-priority addition: a thin endpoint on `HttpServerRunner` and a
-  natural fit for shared hosting, shipped behind a config flag once its
-  path and schema stop moving.
-- **Close remaining OAuth-spec alignment gaps.** `v2` shipped the
-  `client_credentials` grant (private_key_jwt and client_secret_basic),
-  SEP-990 cross-app access, issuer-bound pre-registered credentials, and
-  the SEP-2468/837/2352/2207/2350/2351 hardening set, alongside the
-  existing CIMD (SEP-991), PKCE, and metadata-discovery support. The
-  remaining alignment work tracks items still landing on the spec side:
-  baseline default scopes (SEP-835) and follow-through on any smaller
-  auth extensions that reach Accepted status. These drop into the
-  existing `Client/Auth/` and `Server/Auth/` framework rather than
-  requiring a new abstraction.
 
-### Long-term / conditional
+## Possible future: framework bridge packages
 
-Items here are further out, either because the relevant SEP is not yet stable,
-because the feature is an optional extension rather than a core SDK
+An idea documented here so it isn't lost, deliberately **not** on any
+timeline: first-party bridge packages for popular frameworks, starting with a
+hypothetical **`logiscape/mcp-sdk-laravel`** (a service provider, config
+publishing, route registration, and container wiring around the core SDK),
+with a Symfony bundle and a PSR-7/PSR-17 message-conversion bridge as the
+other obvious candidates.
+
+The rules that would govern them, per guiding principle #5:
+
+- Bridges are **separate Composer packages that depend on the core** — the
+  core never depends on, suggests, or special-cases any framework. Existing
+  users of the pure-PHP SDK see no change whatsoever.
+- Bridges are **demand-driven.** A convenience package carries its own
+  compatibility promise and maintenance cost (framework major versions, for
+  one), so it should exist only when enough real consumers are asking for it
+  — one integrator copying a documented recipe does not justify a public
+  package. The framework-embedding guide above is the measuring instrument:
+  if its recipes turn out to be all anyone needs, no bridge ships; if the
+  same glue keeps getting rebuilt, the guide's Laravel recipe becomes the
+  bridge package's seed.
+- Anything a bridge needs from the core must be expressible through the
+  existing public seams. If writing a bridge exposes a missing seam, the
+  seam (not the framework coupling) is the core change.
+
+## Long-term / conditional
+
+Items here are further out, either because the relevant SEP is not yet
+stable, because the feature is an optional extension rather than a core SDK
 requirement, or because adoption depends on demand from this SDK's users
 (primarily PHP developers deploying on shared hosting). We would rather wait
 than put users on a breaking-API treadmill.
 
 - **Advanced OAuth profiles: DPoP and Workload Identity Federation.**
   SEP-1932 (DPoP, sender-constrained tokens per RFC 9449) and SEP-1933
-  (Workload Identity Federation) are both in review and aimed primarily at
-  enterprise deployments. Neither has any implementation in the tree today,
-  and both require real cryptographic care (DPoP in particular introduces
-  per-request JWT proofs). We plan to revisit once the profiles stabilise
-  and at least one major SDK has a reference implementation worth
-  comparing against.
+  (Workload Identity Federation) are aimed primarily at enterprise
+  deployments and require real cryptographic care. We plan to revisit once
+  the profiles stabilise and at least one major SDK has a reference
+  implementation worth comparing against.
 - **Enterprise operability surfaces.** The 2026 MCP roadmap names audit
   trails and SIEM/APM integration, SSO-aware auth, gateway and
   session-affinity patterns, and configuration portability as priorities.
@@ -355,7 +275,8 @@ than put users on a breaking-API treadmill.
   reference-based result types, and other early-exploration work flagged in
   the [2026 MCP Roadmap](https://blog.modelcontextprotocol.io/posts/2026-mcp-roadmap/).
   Too early to commit to; we will pick them up when the corresponding SEPs
-  are close to stable.
+  are close to stable — at which point guiding principle #1 moves them to
+  the top of this document.
 
 ## What it would take to become Tier 1 in practice
 
@@ -368,7 +289,8 @@ This is the honest answer to "what would have to be true?":
 - **Sustained time-to-first-label under two business days** over a rolling
   three-month window, measurable from GitHub's API.
 - **A clean conformance run** on every new spec revision within the
-  RC-to-final validation window (ten weeks for `2026-07-28`).
+  RC-to-final validation window (ten weeks for `2026-07-28`) — the standing
+  practice guiding principle #1 already demands.
 
 None of these are out of reach. They are the conditions the project needs to
 grow into — and the point of publishing them is so anyone reading can see

@@ -252,6 +252,13 @@ that will feed the migration guide.
 - ROADMAP.md updated: `v2` confirmed as the release vehicle for
   `2026-07-28` day-one support, and the MCP Apps extension (SEP-1865)
   promoted to a committed v2 release feature.
+- ROADMAP.md rewritten now that v2 is feature-complete and in testing:
+  day-one support for each MCP spec release is codified as the project's
+  standing top priority, the immediate items narrow to what remains for
+  the `2026-07-28` release gates, and a post-v2 direction is laid out —
+  dependency-free embedding and web-integration batteries, with framework
+  bridge packages documented as a possible future. See
+  [ROADMAP.md](ROADMAP.md) for the plan.
 
 ### Removed
 
