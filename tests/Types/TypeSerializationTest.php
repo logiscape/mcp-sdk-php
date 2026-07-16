@@ -14,6 +14,7 @@ use Mcp\Types\JSONRPCNotification;
 use Mcp\Types\JsonRpcMessage;
 use Mcp\Types\TextContent;
 use Mcp\Types\ImageContent;
+use Mcp\Types\ToolInputSchema;
 use Mcp\Types\InitializeResult;
 use Mcp\Types\RequestId;
 use Mcp\Types\ServerCapabilities;
@@ -490,5 +491,39 @@ final class TypeSerializationTest extends TestCase
         $meta = $notification->params->_meta;
         $this->assertInstanceOf(Meta::class, $meta);
         $this->assertSame('w', $meta->trace);
+    }
+
+    /**
+     * A tool input schema that declares no properties still emits an explicit
+     * empty "properties" object on the wire. The spec allows omitting the key
+     * (an empty object is semantically equivalent), but the reference
+     * TypeScript and Python SDKs both emit `"properties": {}`, and this SDK
+     * deliberately matches their wire shape.
+     */
+    public function testToolInputSchemaEmitsEmptyPropertiesObject(): void
+    {
+        $schema = ToolInputSchema::fromArray(['type' => 'object']);
+        $this->assertSame('{"type":"object","properties":{}}', json_encode($schema));
+
+        $default = new ToolInputSchema();
+        $this->assertSame('{"type":"object","properties":{}}', json_encode($default));
+    }
+
+    /**
+     * Declared properties and required entries round-trip through
+     * serialization as-is, alongside the fixed "object" type.
+     */
+    public function testToolInputSchemaSerializesDeclaredProperties(): void
+    {
+        $schema = ToolInputSchema::fromArray([
+            'type' => 'object',
+            'properties' => ['name' => ['type' => 'string']],
+            'required' => ['name'],
+        ]);
+
+        $json = json_decode(json_encode($schema), true);
+        $this->assertSame('object', $json['type']);
+        $this->assertSame(['name' => ['type' => 'string']], $json['properties']);
+        $this->assertSame(['name'], $json['required']);
     }
 }

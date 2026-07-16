@@ -393,6 +393,17 @@ that will feed the migration guide.
   any record that failed to decode, reads under `LOCK_SH` too, so it can
   no longer delete a live task caught mid-write. The locks are advisory
   and assume a local filesystem, like the file store itself.
+- `ToolInputSchema::jsonSerialize()` no longer relies on a dead guard around
+  `properties`: the serializer used `!empty()` on the `ToolInputProperties`
+  object intending to omit the key when no properties are declared, but
+  `empty()` on an object is always false in PHP, so the omit branch could
+  never fire and `"properties": {}` was always emitted. Always emitting the
+  explicit empty object is now the deliberate, test-pinned behavior — the
+  spec marks `properties` optional on every supported revision and an empty
+  object is semantically equivalent to omitting it, and the reference
+  TypeScript and Python SDKs both emit `"properties": {}` — so the wire
+  output is byte-identical to before; only the misleading dead code and its
+  comment were removed.
 - Injected context parameters no longer leak into advertised metadata:
   `buildSchemaFromCallback()` now strips an `InputContext` parameter from
   the reflection-built tool `inputSchema` like the other four injectable

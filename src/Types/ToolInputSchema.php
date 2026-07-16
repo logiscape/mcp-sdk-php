@@ -115,10 +115,11 @@ class ToolInputSchema implements McpModel {
         if ($this->required !== null) {
             $data['required'] = $this->required;
         }
-        // properties is optional, but if not empty, we include it
-        if (!empty($this->properties)) {
-            $data['properties'] = $this->properties;
-        }
+        // The spec marks properties as optional and an empty object is
+        // equivalent to omitting it, but the reference TypeScript and Python
+        // SDKs both always emit an explicit properties object (possibly {}),
+        // so we deliberately match their wire shape.
+        $data['properties'] = $this->properties;
         return array_merge($data, $this->extraFields);
     }
 }
