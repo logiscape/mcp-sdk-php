@@ -381,6 +381,16 @@ that will feed the migration guide.
   any record that failed to decode, reads under `LOCK_SH` too, so it can
   no longer delete a live task caught mid-write. The locks are advisory
   and assume a local filesystem, like the file store itself.
+- Injected context parameters no longer leak into advertised metadata:
+  `buildSchemaFromCallback()` now strips an `InputContext` parameter from
+  the reflection-built tool `inputSchema` like the other four injectable
+  contexts (an `InputContext`-hinted tool previously advertised a bogus
+  required string property — per the `2026-07-28` spec, `inputSchema`
+  describes only the client-supplied `tools/call` arguments, and SEP-2322
+  input gathering is out-of-band), and prompt registration applies the
+  same stripping so a context-hinted prompt callback no longer advertises
+  a phantom required argument in `prompts/list`. Dispatch was already
+  correct; only the advertised schemas change.
 
 ## [1.7.3]
 

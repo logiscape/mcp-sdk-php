@@ -2182,6 +2182,7 @@ class McpServer
             if ($typeName === ElicitationContext::class
                 || $typeName === ProgressContext::class
                 || $typeName === SamplingContext::class
+                || $typeName === InputContext::class
                 || $typeName === TaskContext::class
             ) {
                 continue;
@@ -2224,6 +2225,19 @@ class McpServer
         $arguments = [];
 
         foreach ($parameters as $param) {
+            $type = $param->getType();
+            $typeName = $type instanceof ReflectionNamedType ? $type->getName() : 'string';
+
+            // Skip injected context parameters — they are not user input
+            if ($typeName === ElicitationContext::class
+                || $typeName === ProgressContext::class
+                || $typeName === SamplingContext::class
+                || $typeName === InputContext::class
+                || $typeName === TaskContext::class
+            ) {
+                continue;
+            }
+
             $arguments[] = new PromptArgument(
                 name: $param->getName(),
                 description: "Parameter: {$param->getName()}",

@@ -123,12 +123,26 @@ final class McpServerInputRequiredTest extends TestCase
                 return 'capability-aware complete';
             }
         );
+        $mcp->tool(
+            'mixed_signature',
+            'Real parameter plus injected InputContext',
+            function (string $city, InputContext $input): string {
+                return 'City: ' . $city;
+            }
+        );
         $mcp->prompt(
             'context_prompt',
             'Prompt that elicits context first',
             function (ElicitationContext $elicit): string {
                 $elicit->form('Context?', ['type' => 'object', 'properties' => ['context' => ['type' => 'string']]], inputKey: 'user_context');
                 return 'Prompt with context';
+            }
+        );
+        $mcp->prompt(
+            'mixed_prompt',
+            'Prompt with a real argument plus injected InputContext',
+            function (string $topic, InputContext $input): string {
+                return "Prompt about {$topic}";
             }
         );
 
@@ -515,6 +529,65 @@ final class McpServerInputRequiredTest extends TestCase
             $body = $this->rpc($runner, $method, ['_meta' => $this->envelope()], id: 10 + $i);
             $this->assertNotSame('input_required', $body['result']['resultType'] ?? null);
         }
+    }
+
+    /**
+     * An InputContext parameter is a server-injected context, not client
+     * input (server-dev.md's context-injection contract): it must be
+     * stripped from the tool's wire inputSchema, exactly like the other
+     * four injectable contexts. Mirrors the TaskContext stripping
+     * assertion in TasksExtensionTest.
+     */
+    public function testInputContextParameterIsStrippedFromToolSchema(): void
+    {
+        $runner = $this->makeRunner();
+
+        $body = $this->rpc($runner, 'tools/list', ['_meta' => $this->envelope()], id: 30);
+        $this->assertArrayNotHasKey('error', $body);
+        $tools = [];
+        foreach ($body['result']['tools'] as $tool) {
+            $tools[$tool['name']] = $tool;
+        }
+
+        // InputContext-only signature: nothing user-facing remains.
+        $this->assertArrayHasKey('ask_roots', $tools);
+        $properties = (array) ($tools['ask_roots']['inputSchema']['properties'] ?? []);
+        $this->assertArrayNotHasKey('input', $properties, 'The injected context is invisible on the wire');
+        $this->assertSame([], (array) ($tools['ask_roots']['inputSchema']['required'] ?? []));
+
+        // Mixed signature: real parameters survive, the context does not.
+        $this->assertArrayHasKey('mixed_signature', $tools);
+        $properties = (array) ($tools['mixed_signature']['inputSchema']['properties'] ?? []);
+        $this->assertArrayHasKey('city', $properties);
+        $this->assertArrayNotHasKey('input', $properties);
+        $this->assertSame(['city'], (array) ($tools['mixed_signature']['inputSchema']['required'] ?? []));
+    }
+
+    /**
+     * The same stripping applies to prompts/list: injectable context
+     * parameters (ElicitationContext, InputContext) on a prompt callback
+     * must not surface as advertised PromptArguments.
+     */
+    public function testContextParametersAreStrippedFromPromptArguments(): void
+    {
+        $runner = $this->makeRunner();
+
+        $body = $this->rpc($runner, 'prompts/list', ['_meta' => $this->envelope()], id: 31);
+        $this->assertArrayNotHasKey('error', $body);
+        $prompts = [];
+        foreach ($body['result']['prompts'] as $prompt) {
+            $prompts[$prompt['name']] = $prompt;
+        }
+
+        // ElicitationContext-only signature: no arguments advertised.
+        $this->assertArrayHasKey('context_prompt', $prompts);
+        $names = array_column((array) ($prompts['context_prompt']['arguments'] ?? []), 'name');
+        $this->assertSame([], $names, 'The injected context is invisible on the wire');
+
+        // Mixed signature: real arguments survive, the context does not.
+        $this->assertArrayHasKey('mixed_prompt', $prompts);
+        $names = array_column((array) ($prompts['mixed_prompt']['arguments'] ?? []), 'name');
+        $this->assertSame(['topic'], $names);
     }
 
     public function testLegacyHttpSuspendResumeUnaffected(): void
