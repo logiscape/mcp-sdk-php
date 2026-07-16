@@ -178,6 +178,22 @@ class McpServerException extends McpError
     }
 
     /**
+     * Create a new exception for a tool that called TaskContext::defer()
+     * outside a task round (SEP-2663). A handler-contract error, like
+     * invalidToolResult: deferral only exists when the call was augmented
+     * as a task.
+     */
+    public static function taskDeferralUnavailable(string $toolName): self
+    {
+        return new self(new ErrorData(
+            code: -32603,
+            message: "Tool '{$toolName}' called TaskContext::defer() but the call is not running as a task"
+                . ' (tasks disabled, taskSupport forbidden, or the client did not declare the Tasks extension).'
+                . ' Guard the call with TaskContext::isTask().'
+        ));
+    }
+
+    /**
      * Create a URL elicitation required error (-32042).
      *
      * Per MCP spec: returned when a request cannot be processed until

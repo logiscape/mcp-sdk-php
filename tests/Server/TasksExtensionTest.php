@@ -17,6 +17,7 @@ namespace Mcp\Tests\Server;
 
 use Mcp\Server\Elicitation\ElicitationContext;
 use Mcp\Server\HttpServerRunner;
+use Mcp\Server\Tasks\TaskContext;
 use Mcp\Server\InitializationOptions;
 use Mcp\Server\McpServer;
 use Mcp\Server\NotificationOptions;
@@ -40,11 +41,19 @@ use PHPUnit\Framework\TestCase;
  * tools/call, the flat CreateTaskResult / DetailedTask wire shapes, the
  * in-task input mechanism (tasks/get inputRequests → tasks/update), cancel,
  * capability gating (-32021), the removed tasks/list & tasks/result methods
- * (-32601), and the extension declaration in server/discover.
+ * (-32601), the extension declaration in server/discover, and the
+ * application-driven deferral model (TaskContext::defer() leaves the task
+ * `working` for an out-of-band worker to settle via getTaskManager()).
  */
 final class TasksExtensionTest extends TestCase
 {
     private function makeRunner(): HttpServerRunner
+    {
+        return $this->makeServerAndRunner()[1];
+    }
+
+    /** @return array{McpServer, HttpServerRunner} */
+    private function makeServerAndRunner(): array
     {
         $mcp = new McpServer('tasks-test');
         $mcp->enableTasks(sys_get_temp_dir() . '/mcp_tasks_test_' . bin2hex(random_bytes(4)), 60000, 500);
@@ -105,13 +114,66 @@ final class TasksExtensionTest extends TestCase
         // A non-task tool, to prove forbidden tools never create tasks.
         $mcp->tool('greet', 'Greets', fn (string $who = 'world'): string => "Hello, {$who}!");
 
+        // A deferring tool: hands the work to an out-of-band worker and
+        // leaves the task `working` (application-driven model). Guards with
+        // isTask() so an undeclared client's synchronous call still works.
+        $mcp->tool(
+            'deferred_job',
+            'Queues work for a background worker',
+            function (TaskContext $task): string {
+                if (!$task->isTask()) {
+                    return 'ran synchronously';
+                }
+                $task->defer('queued for worker');
+            },
+            taskSupport: TaskSupport::OPTIONAL,
+        );
+
+        // A deferring tool WITHOUT the isTask() guard: deferring outside a
+        // task round is a handler-contract error (-32603).
+        $mcp->tool(
+            'defer_unconditionally',
+            'Defers even when not running as a task',
+            function (TaskContext $task): string {
+                $task->defer();
+            },
+            taskSupport: TaskSupport::OPTIONAL,
+        );
+
+        // Simulates a worker that settles the task BEFORE defer() unwinds
+        // (the fast-worker race): the settled state must survive and the
+        // handle must still reach the client.
+        $mcp->tool(
+            'settle_then_defer',
+            'Worker completes the task before the tool defers',
+            function (TaskContext $task) use ($mcp): string {
+                $mcp->getTaskManager()->complete($task->taskId(), [
+                    'content' => [['type' => 'text', 'text' => 'settled early']],
+                ]);
+                $task->defer('queued for worker');
+            },
+            taskSupport: TaskSupport::REQUIRED,
+        );
+
+        // Simulates a worker that writes progress before defer() unwinds:
+        // the worker's fresher statusMessage must not be clobbered.
+        $mcp->tool(
+            'progress_then_defer',
+            'Worker writes progress before the tool defers',
+            function (TaskContext $task) use ($mcp): string {
+                $mcp->getTaskManager()->updateStatus($task->taskId(), 'working', 'crunching batch 1/10');
+                $task->defer('queued for worker');
+            },
+            taskSupport: TaskSupport::REQUIRED,
+        );
+
         $server = $mcp->getServer();
         $initOptions = new InitializationOptions(
             serverName: 'tasks-test',
             serverVersion: '1.0.0',
             capabilities: $server->getCapabilities(new NotificationOptions(), []),
         );
-        return new HttpServerRunner($server, $initOptions, [], null, null, new BufferedIo());
+        return [$mcp, new HttpServerRunner($server, $initOptions, [], null, null, new BufferedIo())];
     }
 
     /**
@@ -358,6 +420,132 @@ final class TasksExtensionTest extends TestCase
         $this->assertSame(['resultType' => 'complete'], $again);
     }
 
+    public function testDeferredToolReturnsWorkingTask(): void
+    {
+        $runner = $this->makeRunner();
+        $create = $this->callTool($runner, 'deferred_job', id: 1)['result'];
+
+        // The spec-shaped deferred handle: flat CreateTaskResult, still
+        // `working`, with the defer() statusMessage riding on it.
+        $this->assertSame('task', $create['resultType']);
+        $this->assertSame('working', $create['status']);
+        $this->assertSame('queued for worker', $create['statusMessage']);
+        $taskId = $create['taskId'];
+
+        // Polling before the worker acts: still working, handle-only shape.
+        $get = $this->rpc($runner, 'tasks/get', ['taskId' => $taskId, '_meta' => $this->envelope()], id: 2)['result'];
+        $this->assertSame('working', $get['status']);
+        $this->assertArrayNotHasKey('result', $get);
+        $this->assertArrayNotHasKey('error', $get);
+        $this->assertArrayNotHasKey('inputRequests', $get);
+        $this->assertArrayNotHasKey('requestState', $get);
+    }
+
+    public function testWorkerAdvancesAndCompletesDeferredTask(): void
+    {
+        [$mcp, $runner] = $this->makeServerAndRunner();
+        $taskId = $this->callTool($runner, 'deferred_job', id: 1)['result']['taskId'];
+        $tasks = $mcp->getTaskManager();
+        $this->assertNotNull($tasks);
+
+        // The out-of-band worker refreshes progress (working → working)...
+        $tasks->updateStatus($taskId, 'working', 'crunching batch 3/10');
+        $get = $this->rpc($runner, 'tasks/get', ['taskId' => $taskId, '_meta' => $this->envelope()], id: 2)['result'];
+        $this->assertSame('working', $get['status']);
+        $this->assertSame('crunching batch 3/10', $get['statusMessage']);
+
+        // ...then settles the task; the client's next poll inlines the result.
+        $tasks->complete($taskId, ['content' => [['type' => 'text', 'text' => 'Batch finished.']]]);
+        $final = $this->rpc($runner, 'tasks/get', ['taskId' => $taskId, '_meta' => $this->envelope()], id: 3)['result'];
+        $this->assertSame('completed', $final['status']);
+        $this->assertSame('Batch finished.', $final['result']['content'][0]['text']);
+    }
+
+    public function testWorkerCompleteAfterCancelThrows(): void
+    {
+        [$mcp, $runner] = $this->makeServerAndRunner();
+        $taskId = $this->callTool($runner, 'deferred_job', id: 1)['result']['taskId'];
+
+        // The client cancels while the worker is still running...
+        $cancel = $this->rpc($runner, 'tasks/cancel', ['taskId' => $taskId, '_meta' => $this->envelope()], id: 2)['result'];
+        $this->assertSame(['resultType' => 'complete'], $cancel);
+
+        // ...so the worker's late complete() hits the terminal-state guard.
+        // Workers should check getRecord()['status'] first (or catch this).
+        $this->expectException(\InvalidArgumentException::class);
+        $mcp->getTaskManager()->complete($taskId, ['content' => []]);
+    }
+
+    public function testWorkerSettlingBeforeDeferKeepsSettledState(): void
+    {
+        $runner = $this->makeRunner();
+        // The worker completed the task before defer() unwound: the create
+        // response must still carry the handle — with the settled status,
+        // never an error, and never a forced regression to `working`.
+        $create = $this->callTool($runner, 'settle_then_defer', id: 1);
+
+        $this->assertArrayNotHasKey('error', $create);
+        $result = $create['result'];
+        $this->assertSame('task', $result['resultType']);
+        $this->assertSame('completed', $result['status']);
+
+        $get = $this->rpc($runner, 'tasks/get', ['taskId' => $result['taskId'], '_meta' => $this->envelope()], id: 2)['result'];
+        $this->assertSame('completed', $get['status']);
+        $this->assertSame('settled early', $get['result']['content'][0]['text']);
+    }
+
+    public function testDeferDoesNotClobberWorkerProgressMessage(): void
+    {
+        $runner = $this->makeRunner();
+        $create = $this->callTool($runner, 'progress_then_defer', id: 1)['result'];
+
+        // The worker's fresher progress message wins over defer()'s.
+        $this->assertSame('task', $create['resultType']);
+        $this->assertSame('working', $create['status']);
+        $this->assertSame('crunching batch 1/10', $create['statusMessage']);
+    }
+
+    public function testDeferredToolFallsBackToSyncForUndeclaredClient(): void
+    {
+        $runner = $this->makeRunner();
+        // No tasks extension declared: OPTIONAL degrades to a synchronous
+        // call, where the injected TaskContext is inert (isTask() false).
+        $body = $this->callTool($runner, 'deferred_job', id: 1, capabilities: ['elicitation' => new \stdClass()]);
+
+        $this->assertArrayNotHasKey('error', $body);
+        $this->assertNotSame('task', $body['result']['resultType'] ?? null);
+        $this->assertSame('ran synchronously', $body['result']['content'][0]['text']);
+    }
+
+    public function testDeferOutsideTaskRoundIsProtocolError(): void
+    {
+        $runner = $this->makeRunner();
+        // Unguarded defer() on the synchronous path: a handler-contract
+        // error surfacing as a JSON-RPC error, never an isError result.
+        $body = $this->callTool($runner, 'defer_unconditionally', id: 1, capabilities: ['elicitation' => new \stdClass()]);
+
+        $this->assertArrayHasKey('error', $body);
+        $this->assertSame(-32603, $body['error']['code']);
+        $this->assertStringContainsString('defer', $body['error']['message']);
+    }
+
+    public function testTaskContextParamIsNotPartOfInputSchema(): void
+    {
+        $runner = $this->makeRunner();
+        $tools = $this->rpc($runner, 'tools/list', ['_meta' => $this->envelope()], id: 1)['result']['tools'];
+        $deferred = null;
+        foreach ($tools as $tool) {
+            if ($tool['name'] === 'deferred_job') {
+                $deferred = $tool;
+            }
+        }
+        $this->assertNotNull($deferred);
+        // The injected context is invisible on the wire.
+        $properties = (array) ($deferred['inputSchema']['properties'] ?? []);
+        $this->assertArrayNotHasKey('task', $properties);
+        $this->assertSame([], (array) ($deferred['inputSchema']['required'] ?? []));
+    }
+
     public function testRequiredToolRejectsUndeclaredClient(): void
     {
         $runner = $this->makeRunner();
@@ -473,6 +661,17 @@ final class TasksExtensionTest extends TestCase
             },
             taskSupport: TaskSupport::OPTIONAL,
         );
+        $mcp->tool(
+            'deferred_job',
+            'Queues work for a background worker',
+            function (TaskContext $task): string {
+                if (!$task->isTask()) {
+                    return 'ran synchronously';
+                }
+                $task->defer('queued for worker');
+            },
+            taskSupport: TaskSupport::OPTIONAL,
+        );
 
         $server = $mcp->getServer();
         $transport = new TaskStdioTransport();
@@ -534,6 +733,37 @@ final class TasksExtensionTest extends TestCase
             '_meta' => $this->envelope(),
         ], 3)['result'];
         $this->assertSame(['resultType' => 'complete'], $cancel);
+    }
+
+    public function testStdioDeferredTaskLifecycle(): void
+    {
+        [$transport, $session, $mcp] = $this->makeStdioSession();
+
+        $create = $this->stdioRpc($transport, $session, 'tools/call', [
+            'name' => 'deferred_job',
+            'arguments' => [],
+            '_meta' => $this->envelope(),
+        ], 1)['result'];
+        $this->assertSame('task', $create['resultType']);
+        $this->assertSame('working', $create['status']);
+        $taskId = $create['taskId'];
+
+        $get = $this->stdioRpc($transport, $session, 'tasks/get', [
+            'taskId' => $taskId,
+            '_meta' => $this->envelope(),
+        ], 2)['result'];
+        $this->assertSame('working', $get['status']);
+        $this->assertArrayNotHasKey('result', $get);
+
+        // The application worker settles the record out-of-band.
+        $mcp->getTaskManager()->complete($taskId, ['content' => [['type' => 'text', 'text' => 'done']]]);
+
+        $final = $this->stdioRpc($transport, $session, 'tasks/get', [
+            'taskId' => $taskId,
+            '_meta' => $this->envelope(),
+        ], 3)['result'];
+        $this->assertSame('completed', $final['status']);
+        $this->assertSame('done', $final['result']['content'][0]['text']);
     }
 
     public function testStdioInTaskInputThenUpdate(): void

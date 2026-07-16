@@ -982,6 +982,11 @@ Tasks surface was replaced cleanly (no shims) with the SEP-2663 model:
   synchronous result. Execution is synchronous-capture (shared-hosting model):
   the tool body runs in the creating request and the outcome is stored;
   genuine async/working tasks are application-driven via `getTaskManager()`.
+  A tool enters that application-driven model in-band via the injectable
+  `TaskContext` — `defer()` leaves the task `working` for an out-of-band
+  worker to settle (added post-WS4 to close the docs/code gap: the docs
+  promised the model but no supported API could initiate it, and the
+  `working → working` progress transition was missing from `TaskManager`).
 - Client: `getTask()`/`updateTask()`/`cancelTask()`; `callTool()` returns
   `CallToolResult|CreateTaskResult` so a task handle is surfaced rather than
   mis-typed. The stubbed `task` parameter on `ElicitationContext` was removed;

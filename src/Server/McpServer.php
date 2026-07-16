@@ -32,6 +32,8 @@ use Mcp\Server\InputRequired\InputRequiredSuspendException;
 use Mcp\Server\InputRequired\RequestStateCodec;
 use Mcp\Server\Sampling\SamplingContext;
 use Mcp\Server\Sampling\SamplingSuspendException;
+use Mcp\Server\Tasks\TaskContext;
+use Mcp\Server\Tasks\TaskDeferredException;
 use Mcp\Server\Transport\Http\FileSessionStore;
 use Mcp\Server\Transport\Http\HttpIoInterface;
 use Mcp\Server\Transport\Http\SessionStoreInterface;
@@ -188,6 +190,13 @@ class McpServer
     protected ?InputExchange $currentExchange = null;
 
     /**
+     * SEP-2663: taskId of the task round currently dispatching. Set around
+     * runTaskRound()'s handler call; the TaskContext injected into the tool
+     * callback reads it at construction (null on plain synchronous calls).
+     */
+    protected ?string $currentTaskId = null;
+
+    /**
      * SEP-2322 requestState signer. Lazily defaults to the per-installation
      * file-backed secret; override via inputStateCodec().
      */
@@ -313,8 +322,9 @@ class McpServer
         }
         $needsProgress = $this->callbackNeedsProgress($callback);
         $needsInput = $this->callbackNeedsInputContext($callback);
+        $needsTask = $this->callbackNeedsTaskContext($callback);
 
-        $this->toolHandlers[$name] = function ($args, ?Meta $meta = null) use ($name, $tool, $callback, $outputSchema, $needsElicitation, $needsSampling, $needsProgress, $needsInput) {
+        $this->toolHandlers[$name] = function ($args, ?Meta $meta = null) use ($name, $tool, $callback, $outputSchema, $needsElicitation, $needsSampling, $needsProgress, $needsInput, $needsTask) {
             $arguments = json_decode(json_encode($args), true) ?? [];
 
             // SEP-2243: on the modern HTTP path, arguments designated by an
@@ -384,7 +394,15 @@ class McpServer
                 }
             }
 
-            $ordered = $this->matchNamedParameters($callback, $arguments, $elicitContext, $progressContext, $samplingContext, $inputContext);
+            // SEP-2663: always non-null when hinted — inert (null taskId)
+            // on a plain synchronous call, so callbacks can branch on
+            // isTask() and may declare a non-nullable parameter.
+            $taskContext = null;
+            if ($needsTask) {
+                $taskContext = new TaskContext($this->currentTaskId, $name);
+            }
+
+            $ordered = $this->matchNamedParameters($callback, $arguments, $elicitContext, $progressContext, $samplingContext, $inputContext, $taskContext);
 
             $result = $callback(...$ordered);
 
@@ -1428,7 +1446,8 @@ class McpServer
     /**
      * Get the TaskManager instance (if tasks are enabled). Applications that
      * advance tasks out-of-band (a worker, cron, or a later request
-     * completing/failing a deferred task) use this handle.
+     * completing/failing a deferred task) use this handle. A tool enters the
+     * deferred model in-band via {@see \Mcp\Server\Tasks\TaskContext::defer()}.
      */
     public function getTaskManager(): ?TaskManager
     {
@@ -1527,6 +1546,9 @@ class McpServer
      * - The tool suspends for client input → input_required, recording the
      *   pending inputRequests and a signed requestState that `tasks/update`
      *   echoes to resume.
+     * - The tool defers via TaskContext::defer() → stays `working`; an
+     *   application worker settles the record later through
+     *   getTaskManager().
      */
     private function runTaskRound(string $taskId, ?Meta $meta): ?Task
     {
@@ -1544,8 +1566,34 @@ class McpServer
         }
         $args = (object) ($record['toolArguments'] ?? []);
 
+        $this->currentTaskId = $taskId;
         try {
             $result = $handler($args, $meta);
+        } catch (TaskDeferredException $e) {
+            // SEP-2663 application-driven model: the tool handed the work to
+            // an out-of-band worker, which holds the taskId and may have
+            // advanced — or even settled — the task before defer() unwound.
+            // Never force a transition over that newer state: write only
+            // when the record still needs it (an input_required record from
+            // a resumed round must move back to `working`; a fresh working
+            // record takes the defer statusMessage unless the worker already
+            // wrote one), and otherwise return the task exactly as the
+            // worker left it.
+            $record = $this->taskManager->getRecord($taskId);
+            $status = $record === null ? null : (string) ($record['status'] ?? '');
+            $needsWrite = $status === TaskStatus::INPUT_REQUIRED
+                || ($status === TaskStatus::WORKING
+                    && $e->statusMessage !== null
+                    && ($record['statusMessage'] ?? null) === null);
+            if ($needsWrite) {
+                try {
+                    return $this->taskManager->updateStatus($taskId, TaskStatus::WORKING, $e->statusMessage);
+                } catch (\InvalidArgumentException) {
+                    // Settled by the worker between the read and the write —
+                    // fall through to the state the worker left.
+                }
+            }
+            return $this->taskManager->getTask($taskId);
         } catch (InputRequiredSuspendException $e) {
             $state = $this->getStateCodec()->encode([
                 'm' => 'tools/call',
@@ -1577,6 +1625,8 @@ class McpServer
                 content: [new TextContent(text: 'Error: ' . $e->getMessage())],
                 isError: true
             );
+        } finally {
+            $this->currentTaskId = null;
         }
 
         $resultArray = json_decode(json_encode($result), true);
@@ -2132,6 +2182,7 @@ class McpServer
             if ($typeName === ElicitationContext::class
                 || $typeName === ProgressContext::class
                 || $typeName === SamplingContext::class
+                || $typeName === TaskContext::class
             ) {
                 continue;
             }
@@ -2196,9 +2247,13 @@ class McpServer
      * @param ElicitationContext|null $elicitContext Optional context to inject
      * @param ProgressContext|null $progressContext Optional context to inject
      * @param SamplingContext|null $samplingContext Optional context to inject
+     * @param InputContext|null $inputContext Optional context to inject
+     * @param TaskContext|null $taskContext Optional context to inject (an
+     *        inert instance is substituted when absent, so non-nullable
+     *        TaskContext parameters stay safe on non-task call sites)
      * @return array<int, mixed> Ordered arguments matching the callback's parameter list
      */
-    protected function matchNamedParameters(callable $callback, array $arguments, ?ElicitationContext $elicitContext = null, ?ProgressContext $progressContext = null, ?SamplingContext $samplingContext = null, ?InputContext $inputContext = null): array
+    protected function matchNamedParameters(callable $callback, array $arguments, ?ElicitationContext $elicitContext = null, ?ProgressContext $progressContext = null, ?SamplingContext $samplingContext = null, ?InputContext $inputContext = null, ?TaskContext $taskContext = null): array
     {
         $reflection = new ReflectionFunction(\Closure::fromCallable($callback));
         $parameters = $reflection->getParameters();
@@ -2224,6 +2279,12 @@ class McpServer
             // Inject InputContext (SEP-2322 batch input gathering)
             if ($typeName === InputContext::class) {
                 $ordered[] = $inputContext;
+                continue;
+            }
+
+            // Inject TaskContext (SEP-2663 task awareness / deferral)
+            if ($typeName === TaskContext::class) {
+                $ordered[] = $taskContext ?? new TaskContext();
                 continue;
             }
 
@@ -2306,6 +2367,21 @@ class McpServer
         foreach ($reflection->getParameters() as $param) {
             $type = $param->getType();
             if ($type instanceof ReflectionNamedType && $type->getName() === ProgressContext::class) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Check if a callback has a TaskContext parameter (SEP-2663).
+     */
+    protected function callbackNeedsTaskContext(callable $callback): bool
+    {
+        $reflection = new ReflectionFunction(\Closure::fromCallable($callback));
+        foreach ($reflection->getParameters() as $param) {
+            $type = $param->getType();
+            if ($type instanceof ReflectionNamedType && $type->getName() === TaskContext::class) {
                 return true;
             }
         }

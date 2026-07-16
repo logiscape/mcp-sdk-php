@@ -108,6 +108,99 @@ final class TaskManagerTest extends TestCase
         $this->assertNull($this->manager->getTask($task->taskId));
     }
 
+    /**
+     * The working → working self-transition is legal: it is how an
+     * out-of-band worker refreshes progress (statusMessage) on a deferred
+     * task without changing state.
+     */
+    public function testWorkingToWorkingSelfTransitionAllowed(): void {
+        $task = $this->manager->createTask();
+
+        $updated = $this->manager->updateStatus($task->taskId, TaskStatus::WORKING, 'crunching batch 3/10');
+        $this->assertNotNull($updated);
+        $this->assertEquals(TaskStatus::WORKING, $updated->status);
+        $this->assertEquals('crunching batch 3/10', $updated->statusMessage);
+
+        // A refresh without a message is also legal (clears the previous one).
+        $again = $this->manager->updateStatus($task->taskId, TaskStatus::WORKING);
+        $this->assertNotNull($again);
+        $this->assertEquals(TaskStatus::WORKING, $again->status);
+        $this->assertNull($again->statusMessage);
+    }
+
+    /**
+     * Moving to `working` clears pending input state: a working task must
+     * surface handle-only via tasks/get, so a resumed tool that defers (or a
+     * worker reviving an input_required task) must not leave stale
+     * inputRequests/requestState in the record.
+     */
+    public function testUpdateStatusToWorkingClearsPendingInput(): void {
+        $task = $this->manager->createTask();
+        $this->manager->setInputRequired($task->taskId, [
+            'name' => ['method' => 'elicitation/create', 'params' => []],
+        ], 'signed-state');
+
+        $record = $this->manager->getRecord($task->taskId);
+        $this->assertArrayHasKey('inputRequests', $record);
+        $this->assertArrayHasKey('requestState', $record);
+
+        $this->manager->updateStatus($task->taskId, TaskStatus::WORKING, 'resumed by worker');
+
+        $record = $this->manager->getRecord($task->taskId);
+        $this->assertNotNull($record);
+        $this->assertEquals(TaskStatus::WORKING, $record['status']);
+        $this->assertArrayNotHasKey('inputRequests', $record);
+        $this->assertArrayNotHasKey('requestState', $record);
+    }
+
+    /**
+     * State transitions serialize per record through a `.lock` sidecar
+     * (flock LOCK_EX over the whole read-validate-write). The sidecar is
+     * created by the first mutation and removed with the record.
+     */
+    public function testMutationLockSidecarLifecycle(): void {
+        $task = $this->manager->createTask();
+        $this->assertCount(0, glob($this->storagePath . '/task_*.json.lock') ?: []);
+
+        $this->manager->updateStatus($task->taskId, TaskStatus::WORKING, 'progress');
+        $this->assertCount(1, glob($this->storagePath . '/task_*.json.lock') ?: []);
+
+        $this->manager->deleteTask($task->taskId);
+        $this->assertCount(0, glob($this->storagePath . '/task_*.json') ?: []);
+        $this->assertCount(0, glob($this->storagePath . '/task_*.json.lock') ?: []);
+    }
+
+    /**
+     * cleanup() removes records that are genuinely corrupt (not valid JSON
+     * objects) while leaving live tasks untouched — the corrupt-check reads
+     * under LOCK_SH so a mid-write record can never be mistaken for corrupt.
+     */
+    public function testCleanupRemovesCorruptRecords(): void {
+        $live = $this->manager->createTask();
+        file_put_contents($this->storagePath . '/task_corrupt.json', '{not json');
+
+        $this->manager->cleanup();
+
+        $this->assertFileDoesNotExist($this->storagePath . '/task_corrupt.json');
+        $this->assertNotNull($this->manager->getTask($live->taskId));
+    }
+
+    /**
+     * cleanup() sweeps lock sidecars whose record is gone, but never a live
+     * task's sidecar.
+     */
+    public function testCleanupRemovesOrphanedLockFiles(): void {
+        $task = $this->manager->createTask();
+        $this->manager->updateStatus($task->taskId, TaskStatus::WORKING); // creates live sidecar
+        file_put_contents($this->storagePath . '/task_orphan.json.lock', '');
+
+        $this->manager->cleanup();
+
+        $this->assertFileDoesNotExist($this->storagePath . '/task_orphan.json.lock');
+        $this->assertCount(1, glob($this->storagePath . '/task_*.json.lock') ?: []);
+        $this->assertNotNull($this->manager->getTask($task->taskId));
+    }
+
     public function testCannotTransitionFromTerminalState(): void {
         $task = $this->manager->createTask();
         $this->manager->updateStatus($task->taskId, TaskStatus::COMPLETED, 'Done');

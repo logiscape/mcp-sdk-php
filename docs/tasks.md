@@ -96,13 +96,54 @@ This SDK executes the tool body **synchronously during the creating
 request** and records the outcome for `tasks/get` to surface. That is a
 deliberate consequence of PHP's shared-hosting execution model (no
 background workers): a simple task is already terminal on the client's
-first poll, while a tool that requests input parks in `input_required`
-until the client answers.
+first poll, a tool that requests input parks in `input_required` until
+the client answers, and a tool that hands its work off defers (next
+section), leaving the task `working`.
+
+### Deferring to a background worker
 
 Genuinely asynchronous tasks — work carried out by a cron job, a queue
-worker, or another process — are application-driven: your out-of-band
-worker updates the same file-backed store through
-`McpServer::getTaskManager()`:
+worker, or another process — are application-driven, in two halves. The
+tool side enters the deferred model by declaring a `TaskContext`
+parameter and calling `defer()` once the work is handed off:
+
+```php
+use Mcp\Server\TaskSupport;
+use Mcp\Server\Tasks\TaskContext;
+
+$server->tool(
+    'start-batch',
+    'Queues a batch job',
+    function (TaskContext $task, string $dataset): string {
+        if (!$task->isTask()) {
+            // TaskSupport::OPTIONAL + a client without the Tasks
+            // extension: the call is synchronous — run inline instead.
+            return runBatchInline($dataset);
+        }
+        // Hand the taskId to the worker — it is the only key to the record.
+        enqueueJob(['taskId' => $task->taskId(), 'dataset' => $dataset]);
+        $task->defer('queued for worker'); // never returns
+    },
+    taskSupport: TaskSupport::OPTIONAL,
+);
+```
+
+`defer()` throws a control-flow signal, so it never returns and the
+callback's return-value contract does not apply on that path. The task
+stays `working` and the client receives the flat `CreateTaskResult`
+handle (carrying the optional status message). Calling `defer()` on a
+plain synchronous call is a programming error (JSON-RPC `-32603`) —
+guard it with `isTask()`, or declare the tool `TaskSupport::REQUIRED`
+so it only ever runs as a task.
+
+A fast worker is safe: the worker holds the taskId from the moment the
+job is enqueued, and anything it writes before `defer()` unwinds wins —
+a progress message it already wrote is kept over `defer()`'s, and a task
+it already settled is returned settled on the create response (the same
+shape a synchronous-capture task produces).
+
+The worker side — your cron job, queue consumer, or a later request —
+updates the same file-backed store through `McpServer::getTaskManager()`:
 
 ```php
 $tasks = $server->getTaskManager();
@@ -116,7 +157,17 @@ $tasks->complete($taskId, [
 ```
 
 Clients polling `tasks/get` observe every update, whichever process wrote
-it.
+it. Two operational notes for workers:
+
+- **Cancellation races.** The client may `tasks/cancel` while the worker
+  runs. Terminal tasks reject further transitions, so a late
+  `complete()`/`fail()` throws `InvalidArgumentException` — check
+  `getRecord($taskId)['status']` before settling (a `null` record means
+  the task expired or was deleted), or catch the exception.
+- **TTL.** `ttlMs` counts from creation, and the store deletes expired
+  records on access regardless of status — set the `enableTasks()`
+  default high enough to outlive the longest job, or `null` for
+  unlimited.
 
 ### In-task input
 

@@ -119,6 +119,29 @@ that will feed the migration guide.
     `ServerCapabilities`/`ClientCapabilities` and the
     `Mcp\Types\ExtensionIds` constants. A malformed (non-object) extension
     value is ignored, so it can never unlock a feature.
+- **Application-driven task deferral (`TaskContext::defer()`).** A
+  task-augmented tool can now hand its work to an out-of-band worker (a
+  queue consumer, cron job, or another process) instead of finishing
+  synchronously — the in-band entry point to the application-driven model
+  the Tasks guide describes. The tool type-hints the new injectable
+  `Mcp\Server\Tasks\TaskContext` (always injected non-null and stripped
+  from the tool's input schema; inert on plain synchronous calls, with
+  `isTask()`/`taskId()` for branching), hands the taskId to its worker,
+  and calls `defer(?statusMessage)`: the task stays `working`, the client
+  receives the flat `CreateTaskResult` handle and polls `tasks/get`, and
+  the worker settles the record through the existing
+  `McpServer::getTaskManager()` API. Deferral is race-safe against fast
+  workers — anything the worker writes before `defer()` unwinds wins (an
+  earlier progress message is kept, and a task the worker already settled
+  is returned settled on the create response). Calling `defer()` outside a
+  task round is a `-32603` programming error. `TaskManager` gains the
+  `working → working` self-transition so workers can refresh progress
+  (the documented worker call previously threw), and a transition to
+  `working` sheds stale `inputRequests`/`requestState` so a resumed tool
+  that defers surfaces handle-only. Documented in the Tasks guide
+  ("Deferring to a background worker"); `examples/tasks_server.php`
+  demonstrates the full flow with a `queue-batch` tool and a `--worker`
+  mode that settles queued tasks.
 - **MCP Apps extension (SEP-1865, ext-apps revision `2026-01-26`).**
   Server-side support for host-rendered tool UIs — capability declaration
   plus `_meta` plumbing; the extension adds no new RPC method:
@@ -342,6 +365,22 @@ that will feed the migration guide.
   defaults into handler state.
 - `initialize` requests carrying `_meta` (e.g. SEP-414 trace context) no
   longer crash typed request construction with a `TypeError`.
+- `TaskManager`'s file store is now safe for concurrent cross-process
+  mutation — load-bearing for the deferred-worker flow, where a worker,
+  `tasks/get`, and `tasks/cancel` race across processes. Every state
+  transition runs its complete read-validate-write under a per-record
+  advisory lock (a `.lock` sidecar file, `flock` `LOCK_EX`, removed with
+  the record and swept by `cleanup()` when orphaned), closing the
+  lost-update interleaving where a stale read could overwrite a newer
+  transition and resurrect a cancelled or completed task back to
+  `working`. Reads take `LOCK_SH`, and writes open non-truncating (`'c'`)
+  and truncate only after the exclusive lock is held —
+  `file_put_contents(..., LOCK_EX)` truncates before acquiring the lock,
+  so a reader could observe an empty record and treat a live task as
+  missing. `cleanup()`, which previously read without a lock and deleted
+  any record that failed to decode, reads under `LOCK_SH` too, so it can
+  no longer delete a live task caught mid-write. The locks are advisory
+  and assume a local filesystem, like the file store itself.
 
 ## [1.7.3]
 

@@ -21,19 +21,29 @@ use Mcp\Types\TaskStatus;
  *
  * State machine (SEP-2663):
  *   working ⇄ input_required
+ *   working → working (self-transition: statusMessage/progress refresh)
  *   working → completed | failed | cancelled
  *   input_required → completed | failed | cancelled
  *   {completed, failed, cancelled} are terminal (immutable).
  *
  * TTL is `ttlMs` measured from `createdAt` (null = unlimited). Once elapsed
  * the record is treated as gone and removed on the next access.
+ *
+ * Concurrency: every state transition runs its complete read-validate-write
+ * under a per-record advisory lock (a `.lock` sidecar file, flock LOCK_EX),
+ * reads take LOCK_SH against the record file, and writes open non-truncating
+ * ('c') and truncate only after LOCK_EX is held — so two processes (an
+ * out-of-band worker vs. a `tasks/cancel` request, say) cannot interleave a
+ * stale read into a write that resurrects a terminal task, and a reader
+ * never observes a half-written record. The locks are advisory and assume a
+ * local filesystem, like the file store itself.
  */
 class TaskManager
 {
     private string $storagePath;
 
     private const VALID_TRANSITIONS = [
-        TaskStatus::WORKING => [TaskStatus::INPUT_REQUIRED, TaskStatus::COMPLETED, TaskStatus::FAILED, TaskStatus::CANCELLED],
+        TaskStatus::WORKING => [TaskStatus::WORKING, TaskStatus::INPUT_REQUIRED, TaskStatus::COMPLETED, TaskStatus::FAILED, TaskStatus::CANCELLED],
         TaskStatus::INPUT_REQUIRED => [TaskStatus::WORKING, TaskStatus::COMPLETED, TaskStatus::FAILED, TaskStatus::CANCELLED],
         TaskStatus::COMPLETED => [],
         TaskStatus::FAILED => [],
@@ -127,23 +137,34 @@ class TaskManager
 
     /**
      * Apply a validated state transition (used for working ⇄ input_required
-     * and other explicit moves). Returns null when the task is gone; throws
-     * on an illegal transition.
+     * and other explicit moves, including the working → working progress
+     * refresh an out-of-band worker sends). Returns null when the task is
+     * gone; throws on an illegal transition.
+     *
+     * A move to `working` clears any pending `inputRequests`/`requestState`:
+     * a working task must surface as a handle-only `tasks/get` response, so
+     * stale input state (e.g. a resumed tool deferring instead of re-parking)
+     * must not ride along.
      */
     public function updateStatus(string $taskId, string $status, ?string $statusMessage = null): ?Task
     {
-        $record = $this->getRecord($taskId);
-        if ($record === null) {
-            return null;
-        }
-        $this->assertTransition((string) $record['status'], $status);
+        return $this->withRecordLock($taskId, function () use ($taskId, $status, $statusMessage): ?Task {
+            $record = $this->getRecord($taskId);
+            if ($record === null) {
+                return null;
+            }
+            $this->assertTransition((string) $record['status'], $status);
 
-        $record['status'] = $status;
-        $record['statusMessage'] = $statusMessage;
-        $record['lastUpdatedAt'] = self::now();
-        $this->saveRecord($record);
+            $record['status'] = $status;
+            $record['statusMessage'] = $statusMessage;
+            $record['lastUpdatedAt'] = self::now();
+            if ($status === TaskStatus::WORKING) {
+                unset($record['inputRequests'], $record['requestState']);
+            }
+            $this->saveRecord($record);
 
-        return Task::fromArray($record);
+            return Task::fromArray($record);
+        });
     }
 
     /**
@@ -155,19 +176,21 @@ class TaskManager
      */
     public function complete(string $taskId, array $result): ?Task
     {
-        $record = $this->getRecord($taskId);
-        if ($record === null) {
-            return null;
-        }
-        $this->assertTransition((string) $record['status'], TaskStatus::COMPLETED);
+        return $this->withRecordLock($taskId, function () use ($taskId, $result): ?Task {
+            $record = $this->getRecord($taskId);
+            if ($record === null) {
+                return null;
+            }
+            $this->assertTransition((string) $record['status'], TaskStatus::COMPLETED);
 
-        $record['status'] = TaskStatus::COMPLETED;
-        $record['lastUpdatedAt'] = self::now();
-        $record['result'] = $result;
-        unset($record['error'], $record['inputRequests'], $record['requestState']);
-        $this->saveRecord($record);
+            $record['status'] = TaskStatus::COMPLETED;
+            $record['lastUpdatedAt'] = self::now();
+            $record['result'] = $result;
+            unset($record['error'], $record['inputRequests'], $record['requestState']);
+            $this->saveRecord($record);
 
-        return Task::fromArray($record);
+            return Task::fromArray($record);
+        });
     }
 
     /**
@@ -178,20 +201,22 @@ class TaskManager
      */
     public function fail(string $taskId, array $error, ?string $statusMessage = null): ?Task
     {
-        $record = $this->getRecord($taskId);
-        if ($record === null) {
-            return null;
-        }
-        $this->assertTransition((string) $record['status'], TaskStatus::FAILED);
+        return $this->withRecordLock($taskId, function () use ($taskId, $error, $statusMessage): ?Task {
+            $record = $this->getRecord($taskId);
+            if ($record === null) {
+                return null;
+            }
+            $this->assertTransition((string) $record['status'], TaskStatus::FAILED);
 
-        $record['status'] = TaskStatus::FAILED;
-        $record['statusMessage'] = $statusMessage;
-        $record['lastUpdatedAt'] = self::now();
-        $record['error'] = $error;
-        unset($record['result'], $record['inputRequests'], $record['requestState']);
-        $this->saveRecord($record);
+            $record['status'] = TaskStatus::FAILED;
+            $record['statusMessage'] = $statusMessage;
+            $record['lastUpdatedAt'] = self::now();
+            $record['error'] = $error;
+            unset($record['result'], $record['inputRequests'], $record['requestState']);
+            $this->saveRecord($record);
 
-        return Task::fromArray($record);
+            return Task::fromArray($record);
+        });
     }
 
     /**
@@ -203,23 +228,25 @@ class TaskManager
      */
     public function setInputRequired(string $taskId, array $inputRequests, ?string $requestState = null): ?Task
     {
-        $record = $this->getRecord($taskId);
-        if ($record === null) {
-            return null;
-        }
-        $current = (string) $record['status'];
-        if ($current !== TaskStatus::INPUT_REQUIRED) {
-            $this->assertTransition($current, TaskStatus::INPUT_REQUIRED);
-            $record['status'] = TaskStatus::INPUT_REQUIRED;
-        }
-        $record['lastUpdatedAt'] = self::now();
-        $record['inputRequests'] = $inputRequests;
-        if ($requestState !== null) {
-            $record['requestState'] = $requestState;
-        }
-        $this->saveRecord($record);
+        return $this->withRecordLock($taskId, function () use ($taskId, $inputRequests, $requestState): ?Task {
+            $record = $this->getRecord($taskId);
+            if ($record === null) {
+                return null;
+            }
+            $current = (string) $record['status'];
+            if ($current !== TaskStatus::INPUT_REQUIRED) {
+                $this->assertTransition($current, TaskStatus::INPUT_REQUIRED);
+                $record['status'] = TaskStatus::INPUT_REQUIRED;
+            }
+            $record['lastUpdatedAt'] = self::now();
+            $record['inputRequests'] = $inputRequests;
+            if ($requestState !== null) {
+                $record['requestState'] = $requestState;
+            }
+            $this->saveRecord($record);
 
-        return Task::fromArray($record);
+            return Task::fromArray($record);
+        });
     }
 
     /**
@@ -230,25 +257,28 @@ class TaskManager
      */
     public function cancelTask(string $taskId): ?Task
     {
-        $record = $this->getRecord($taskId);
-        if ($record === null) {
-            return null;
-        }
-        if (in_array($record['status'], self::TERMINAL_STATES, true)) {
+        return $this->withRecordLock($taskId, function () use ($taskId): ?Task {
+            $record = $this->getRecord($taskId);
+            if ($record === null) {
+                return null;
+            }
+            if (in_array($record['status'], self::TERMINAL_STATES, true)) {
+                return Task::fromArray($record);
+            }
+
+            $record['status'] = TaskStatus::CANCELLED;
+            $record['lastUpdatedAt'] = self::now();
+            unset($record['inputRequests'], $record['requestState']);
+            $this->saveRecord($record);
+
             return Task::fromArray($record);
-        }
-
-        $record['status'] = TaskStatus::CANCELLED;
-        $record['lastUpdatedAt'] = self::now();
-        unset($record['inputRequests'], $record['requestState']);
-        $this->saveRecord($record);
-
-        return Task::fromArray($record);
+        });
     }
 
     public function deleteTask(string $taskId): void
     {
         @unlink($this->taskFile($taskId));
+        @unlink($this->taskFile($taskId) . '.lock');
     }
 
     /**
@@ -262,14 +292,24 @@ class TaskManager
             return;
         }
         foreach ($files as $file) {
-            $content = @file_get_contents($file);
-            $record = $content === false ? null : json_decode($content, true);
-            if (!is_array($record)) {
+            // Locked read: an unlocked read here could catch a concurrent
+            // save mid-write and delete a LIVE task as "corrupt".
+            $record = $this->readRecordFile($file);
+            if ($record === null) {
                 @unlink($file);
                 continue;
             }
             if ($this->isExpired($record)) {
                 @unlink($file);
+            }
+        }
+
+        // Sweep lock sidecars whose record is gone (a mutation attempted on
+        // a missing/expired task leaves one behind; deleteTask can also fail
+        // to remove a lock currently held on Windows).
+        foreach (glob($this->storagePath . '/task_*.json.lock') ?: [] as $lockFile) {
+            if (!file_exists(substr($lockFile, 0, -5))) {
+                @unlink($lockFile);
             }
         }
     }
@@ -310,11 +350,59 @@ class TaskManager
     }
 
     /**
+     * Run a state transition's complete read-validate-write as a critical
+     * section, serialized per record against other processes via an
+     * exclusive advisory lock on a `.lock` sidecar (the sidecar keeps the
+     * lock handle distinct from saveRecord()'s own LOCK_EX on the record
+     * file). Degrades to the unlocked behavior when the sidecar cannot be
+     * opened, mirroring the store's best-effort @-suppressed file handling.
+     *
+     * @param \Closure(): ?Task $fn
+     */
+    private function withRecordLock(string $taskId, \Closure $fn): ?Task
+    {
+        $handle = @fopen($this->taskFile($taskId) . '.lock', 'c');
+        if ($handle === false) {
+            return $fn();
+        }
+        try {
+            flock($handle, LOCK_EX);
+            return $fn();
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+        }
+    }
+
+    /**
+     * Read a record under a shared lock, so a concurrent saveRecord() (which
+     * truncates then writes under LOCK_EX on the same file) can never be
+     * observed half-written as a corrupt — hence seemingly missing — task.
+     *
      * @return array<string, mixed>|null
      */
     private function readRecord(string $taskId): ?array
     {
-        $content = @file_get_contents($this->taskFile($taskId));
+        return $this->readRecordFile($this->taskFile($taskId));
+    }
+
+    /**
+     * @return array<string, mixed>|null Null when the file is gone or its
+     *         content is not a JSON object.
+     */
+    private function readRecordFile(string $file): ?array
+    {
+        $handle = @fopen($file, 'r');
+        if ($handle === false) {
+            return null;
+        }
+        try {
+            flock($handle, LOCK_SH);
+            $content = stream_get_contents($handle);
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+        }
         if ($content === false) {
             return null;
         }
@@ -339,12 +427,31 @@ class TaskManager
     }
 
     /**
+     * Write a record under LOCK_EX, truncating only INSIDE the critical
+     * section. file_put_contents(LOCK_EX) is unusable here: it opens "wb",
+     * which truncates before the lock is acquired (per the PHP docs the
+     * lock happens between fopen() and fwrite()), so a LOCK_SH reader could
+     * observe an empty record. Mode 'c' creates without truncating — the
+     * same pattern RequestStateCodec uses for its secret file.
+     *
      * @param array<string, mixed> $record
      */
     private function saveRecord(array $record): void
     {
         $file = $this->taskFile((string) $record['taskId']);
-        file_put_contents($file, json_encode($record), LOCK_EX);
+        $handle = @fopen($file, 'c');
+        if ($handle === false) {
+            return;
+        }
+        try {
+            flock($handle, LOCK_EX);
+            ftruncate($handle, 0);
+            fwrite($handle, (string) json_encode($record));
+            fflush($handle);
+        } finally {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+        }
     }
 
     private function taskFile(string $taskId): string

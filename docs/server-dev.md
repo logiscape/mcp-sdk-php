@@ -2946,9 +2946,10 @@ registry, including the client-side entries, is in the
 | `run()` | Auto-detect transport and start |
 | `runStdio()` | Force stdio transport |
 | `runHttp()` | Force HTTP transport |
-| *Context injection* | A tool callback that type-hints `ElicitationContext`, `SamplingContext`, `InputContext`, or `ProgressContext` automatically receives that context at call time. The parameter is stripped from the tool's input schema. |
+| *Context injection* | A tool callback that type-hints `ElicitationContext`, `SamplingContext`, `InputContext`, `ProgressContext`, or `TaskContext` automatically receives that context at call time. The parameter is stripped from the tool's input schema. |
 | `getServer()` | Access the underlying Server instance |
 | `getTaskManager()` | Access the TaskManager instance (application-driven async tasks -- see the [Tasks guide](tasks.md)) |
+| `TaskContext::defer(statusMessage?)` | From inside a task-augmented tool: hand the work to an out-of-band worker and leave the task `working`; the worker settles it via `getTaskManager()` -- see [Deferring to a background worker](tasks.md#deferring-to-a-background-worker) |
 
 ### Callback Return Types
 
