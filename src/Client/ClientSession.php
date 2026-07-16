@@ -67,6 +67,7 @@ use Mcp\Types\ClientRootsCapability;
 use Mcp\Types\LoggingLevel;
 use Mcp\Types\ProgressToken;
 use Mcp\Types\ListResourcesResult;
+use Mcp\Types\ListResourceTemplatesResult;
 use Mcp\Types\ReadResourceResult;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\CreateTaskResult;
@@ -1177,15 +1178,35 @@ class ClientSession extends BaseSession {
     /**
      * List available resources on the server.
      *
+     * @param string|null $cursor Opaque pagination token from a previous
+     *                            page's `nextCursor`, or null for the first page.
+     *
      * @throws RuntimeException If the session is not initialized or if sending the request fails.
      *
      * @return ListResourcesResult The list of resources.
      */
-    public function listResources(): ListResourcesResult {
+    public function listResources(?string $cursor = null): ListResourcesResult {
         $this->ensureInitialized();
-        $listResourcesRequest = new \Mcp\Types\ListResourcesRequest();
+        $listResourcesRequest = new \Mcp\Types\ListResourcesRequest($cursor);
         $this->logger->info('Requesting list of resources from server');
         return $this->sendRequest($listResourcesRequest, ListResourcesResult::class);
+    }
+
+    /**
+     * List available resource templates on the server.
+     *
+     * @param string|null $cursor Opaque pagination token from a previous
+     *                            page's `nextCursor`, or null for the first page.
+     *
+     * @throws RuntimeException If the session is not initialized or if sending the request fails.
+     *
+     * @return ListResourceTemplatesResult The list of resource templates.
+     */
+    public function listResourceTemplates(?string $cursor = null): ListResourceTemplatesResult {
+        $this->ensureInitialized();
+        $listTemplatesRequest = new \Mcp\Types\ListTemplatesRequest($cursor);
+        $this->logger->info('Requesting list of resource templates from server');
+        return $this->sendRequest($listTemplatesRequest, ListResourceTemplatesResult::class);
     }
 
     /**
@@ -1275,13 +1296,16 @@ class ClientSession extends BaseSession {
     /**
      * List available prompts on the server.
      *
+     * @param string|null $cursor Opaque pagination token from a previous
+     *                            page's `nextCursor`, or null for the first page.
+     *
      * @throws RuntimeException If the session is not initialized or if sending the request fails.
      *
      * @return ListPromptsResult The list of prompts.
      */
-    public function listPrompts(): ListPromptsResult {
+    public function listPrompts(?string $cursor = null): ListPromptsResult {
         $this->ensureInitialized();
-        $listPromptsRequest = new \Mcp\Types\ListPromptsRequest();
+        $listPromptsRequest = new \Mcp\Types\ListPromptsRequest($cursor);
         $this->logger->info('Requesting list of prompts from server');
         return $this->sendRequest($listPromptsRequest, ListPromptsResult::class);
     }
@@ -1361,17 +1385,20 @@ class ClientSession extends BaseSession {
     /**
      * List available tools on the server.
      *
+     * @param string|null $cursor Opaque pagination token from a previous
+     *                            page's `nextCursor`, or null for the first page.
+     *
      * @throws RuntimeException If the session is not initialized or if sending the request fails.
      *
      * @return ListToolsResult The list of tools.
      */
-    public function listTools(): ListToolsResult {
+    public function listTools(?string $cursor = null): ListToolsResult {
         $this->ensureInitialized();
-        $listToolsRequest = new \Mcp\Types\ListToolsRequest();
+        $listToolsRequest = new \Mcp\Types\ListToolsRequest($cursor);
         $this->logger->info('Requesting list of tools from server');
         $result = $this->sendRequest($listToolsRequest, ListToolsResult::class);
         if ($this->modernWireVersion !== null && $this->httpTransportMode) {
-            $result = $this->applyToolHeaderAnnotationPolicy($result);
+            $result = $this->applyToolHeaderAnnotationPolicy($result, $cursor === null);
         }
         return $result;
     }
@@ -1386,12 +1413,16 @@ class ClientSession extends BaseSession {
      * from the returned list — the spec's MUST for HTTP clients — logged,
      * and cached as rejected so callTool() refuses them. One invalid tool
      * never affects valid siblings. Valid annotation maps are cached per
-     * tool name for Mcp-Param-* mirroring; both caches are refreshed on
-     * every listTools() call.
+     * tool name for Mcp-Param-* mirroring; both caches are reset on every
+     * fresh (first-page) listTools() call, while continuation pages
+     * (listTools() with a cursor) merge into them so a paginated listing
+     * never drops the hints or rejections cached from earlier pages.
      */
-    private function applyToolHeaderAnnotationPolicy(ListToolsResult $result): ListToolsResult {
-        $this->toolHeaderAnnotations = [];
-        $this->rejectedToolErrors = [];
+    private function applyToolHeaderAnnotationPolicy(ListToolsResult $result, bool $resetCaches = true): ListToolsResult {
+        if ($resetCaches) {
+            $this->toolHeaderAnnotations = [];
+            $this->rejectedToolErrors = [];
+        }
 
         $validTools = [];
         $rejectedAny = false;

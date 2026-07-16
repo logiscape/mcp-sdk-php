@@ -333,9 +333,7 @@ $client->close();
 
 ### Paginated Listings
 
-Most MCP servers return their entire tool, prompt, or resource catalog in a single response, so the convenience methods on `ClientSession` (`listTools()`, `listPrompts()`, `listResources()`) are deliberately cursor-free. For servers that *do* paginate -- typically because the catalog is large enough that returning it in one shot would blow past a sensible response budget -- the response will arrive with a non-null `nextCursor`, and the SDK exposes pagination through the lower-level `sendRequest()` API on the session.
-
-The pattern is the same for any paginated list method: build the typed `List…Request` with the cursor you want to send (or `null` to start from the beginning), call `sendRequest()`, and keep going while `nextCursor` is non-null:
+Most MCP servers return their entire tool, prompt, or resource catalog in a single response. For servers that *do* paginate -- typically because the catalog is large enough that returning it in one shot would blow past a sensible response budget -- the response arrives with a non-null `nextCursor`, and each list method (`listTools()`, `listPrompts()`, `listResources()`, `listResourceTemplates()`) accepts that cursor as an optional argument to fetch the next page:
 
 ```php
 <?php
@@ -343,8 +341,6 @@ The pattern is the same for any paginated list method: build the typed `List…R
 require __DIR__ . '/vendor/autoload.php';
 
 use Mcp\Client\Client;
-use Mcp\Types\ListToolsRequest;
-use Mcp\Types\ListToolsResult;
 
 $client = new Client();
 $session = $client->connect('https://example.com/mcp-server.php');
@@ -354,11 +350,7 @@ $allTools = [];
 $pageCount = 0;
 
 do {
-    /** @var ListToolsResult $page */
-    $page = $session->sendRequest(
-        new ListToolsRequest($cursor),
-        ListToolsResult::class,
-    );
+    $page = $session->listTools($cursor);
     $pageCount++;
 
     foreach ($page->tools as $tool) {
@@ -373,9 +365,9 @@ echo "Fetched " . count($allTools) . " tool(s) across {$pageCount} page(s)\n";
 $client->close();
 ```
 
-`sendRequest()` is the same low-level call the convenience methods use under the hood; passing the typed request directly just gives you control over the cursor parameter that the wrappers don't expose. The same pattern works for `ListPromptsRequest` / `ListPromptsResult`, `ListResourcesRequest` / `ListResourcesResult`, and `ListTemplatesRequest` / `ListResourceTemplatesResult`. Treat the cursor as opaque -- it's a server-defined token, never something you construct yourself.
+The same loop works for `listPrompts()`, `listResources()`, and `listResourceTemplates()`. Treat the cursor as opaque -- it's a server-defined token, never something you construct yourself.
 
-If you don't care about pagination (and most callers don't), `listTools()` and friends are still the right call: they fetch a single page and ignore `nextCursor`. Reach for the lower-level form only when you know the server paginates and you actually need every page.
+If you don't care about pagination (and most callers don't), calling the list methods with no argument fetches the first page and ignores `nextCursor` -- exactly the right behavior against the vast majority of servers, which return everything in that first page.
 
 ### Calling a Tool
 
@@ -1850,12 +1842,13 @@ For a complete reference implementation -- including OAuth, elicitation capture,
 | `discover()` | `server/discover` -- raw `DiscoverResult` (modern servers) |
 | `supportsFeature(string)` | Boolean check against the version + feature matrix |
 | `declareExtension(string, array)` | Declare a SEP-2133 extension (e.g. `ExtensionIds::TASKS`) in the per-request capability envelope |
-| `listTools()` | `tools/list` |
+| `listTools(?string)` | `tools/list` (optional pagination cursor) |
 | `callTool(string, ?array)` | `tools/call` -- returns `CallToolResult\|CreateTaskResult` (see [Tasks guide](tasks.md)) |
 | `getTask(string)` / `updateTask(string, array)` / `cancelTask(string)` | `tasks/get` / `tasks/update` / `tasks/cancel` (Tasks extension) |
-| `listPrompts()` | `prompts/list` |
+| `listPrompts(?string)` | `prompts/list` (optional pagination cursor) |
 | `getPrompt(string, ?array)` | `prompts/get` |
-| `listResources()` | `resources/list` |
+| `listResources(?string)` | `resources/list` (optional pagination cursor) |
+| `listResourceTemplates(?string)` | `resources/templates/list` (optional pagination cursor) |
 | `readResource(string)` | `resources/read` |
 | `subscribeResource(string)` | `resources/subscribe` (**legacy only** -- removed in `2026-07-28`) |
 | `unsubscribeResource(string)` | `resources/unsubscribe` (**legacy only**) |

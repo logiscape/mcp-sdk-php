@@ -199,6 +199,18 @@ that will feed the migration guide.
   `ClientSession::onSampling()` must run before initialization, which
   `connect()` performs; without the wrapper the capability could not be
   advertised). Applied on both `connect()` and `resumeHttpSession()`.
+- Pagination cursors on the client list methods, and the new
+  `ClientSession::listResourceTemplates()`. `listTools()`, `listPrompts()`,
+  `listResources()`, and `listResourceTemplates()` accept an optional
+  opaque cursor (a previous page's `nextCursor`), so paginated catalogs
+  can be walked entirely through the convenience API — matching the
+  Python and TypeScript SDKs — where pagination previously required
+  dropping to `sendRequest()` with the typed `List…Request` classes.
+  Calls without a cursor are wire-identical to before. On the modern HTTP
+  path, a continuation page merges into the SEP-2243 annotation caches
+  instead of resetting them, so paginating never drops an earlier page's
+  `Mcp-Param-*` hints or rejection guards; a fresh (cursor-free) listing
+  still resets both caches as before.
 - New examples, one per major v2 feature — `stateless_server.php`,
   `client_negotiation.php`, `tasks_server.php` / `tasks_client.php`,
   `elicitation_server.php` / `elicitation_client.php`, and

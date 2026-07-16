@@ -297,6 +297,80 @@ final class ClientSessionRpcMethodsTest extends TestCase
     }
 
     // -----------------------------------------------------------------------
+    // 9a. list methods – cursor propagation
+    // -----------------------------------------------------------------------
+
+    /**
+     * Verify that the optional $cursor parameter on listTools(),
+     * listResources(), listPrompts(), and listResourceTemplates() is
+     * forwarded as params.cursor on the wire, and that omitting it keeps
+     * the request cursor-free (the pre-existing default behavior).
+     */
+    public function testListMethodsPropagateCursor(): void
+    {
+        $calls = [
+            ['listTools',             'tools/list',                ['tools' => []]],
+            ['listResources',         'resources/list',            ['resources' => []]],
+            ['listPrompts',           'prompts/list',              ['prompts' => []]],
+            ['listResourceTemplates', 'resources/templates/list',  ['resourceTemplates' => []]],
+        ];
+
+        foreach ($calls as [$method, $wireMethod, $resultData]) {
+            // With a cursor: it must appear verbatim in params.
+            $readStream  = new MemoryStream();
+            $writeStream = new MemoryStream();
+            $this->preloadResponse($readStream, 0, $resultData);
+            $session = $this->createRestoredSession($readStream, $writeStream, nextRequestId: 0);
+            $session->$method('opaque-token');
+
+            $sent = $this->decodeSentMessage($writeStream);
+            $this->assertSame($wireMethod, $sent['method']);
+            $this->assertSame('opaque-token', $sent['params']['cursor'] ?? null, "{$method} must send params.cursor");
+
+            // Without a cursor: no cursor key may be emitted.
+            $readStream  = new MemoryStream();
+            $writeStream = new MemoryStream();
+            $this->preloadResponse($readStream, 0, $resultData);
+            $session = $this->createRestoredSession($readStream, $writeStream, nextRequestId: 0);
+            $session->$method();
+
+            $sent = $this->decodeSentMessage($writeStream);
+            $this->assertSame($wireMethod, $sent['method']);
+            $this->assertFalse(isset($sent['params']['cursor']), "{$method} must not send a cursor by default");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 9b. listResourceTemplates – return value
+    // -----------------------------------------------------------------------
+
+    /**
+     * Verify that listResourceTemplates() returns a ListResourceTemplatesResult
+     * containing the templates described in the preloaded response, including
+     * the nextCursor needed to fetch the following page.
+     */
+    public function testListResourceTemplatesReturnsResult(): void
+    {
+        $readStream  = new MemoryStream();
+        $writeStream = new MemoryStream();
+
+        $this->preloadResponse($readStream, 0, [
+            'resourceTemplates' => [
+                ['uriTemplate' => 'file:///logs/{name}', 'name' => 'Log file'],
+            ],
+            'nextCursor' => 'page-2',
+        ]);
+
+        $session = $this->createRestoredSession($readStream, $writeStream, nextRequestId: 0);
+        $result  = $session->listResourceTemplates();
+
+        $this->assertInstanceOf(\Mcp\Types\ListResourceTemplatesResult::class, $result);
+        $this->assertCount(1, $result->resourceTemplates);
+        $this->assertSame('file:///logs/{name}', $result->resourceTemplates[0]->uriTemplate);
+        $this->assertSame('page-2', $result->nextCursor);
+    }
+
+    // -----------------------------------------------------------------------
     // 10. getPrompt – request shape
     // -----------------------------------------------------------------------
 

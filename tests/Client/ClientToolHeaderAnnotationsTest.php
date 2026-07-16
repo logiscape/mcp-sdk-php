@@ -399,4 +399,111 @@ final class ClientToolHeaderAnnotationsTest extends TestCase
         $session->callTool('bad_empty', []);
         $this->assertNotNull($writeStream->receive());
     }
+
+    /**
+     * A continuation page (listTools() with a cursor) MERGES into the
+     * annotation caches instead of resetting them: rejections and
+     * annotation maps cached from page 1 survive fetching page 2, and
+     * page 2's own annotations are added alongside them. Otherwise a
+     * paginated listing would silently drop the SEP-2243 rejection guard
+     * and Mcp-Param-* hints for every tool on an earlier page.
+     */
+    public function testPaginatedListToolsMergesAnnotationCaches(): void
+    {
+        [$session, $readStream, $writeStream] = $this->modernHttpSession();
+
+        // Page 1 (fresh listing): one rejected tool, one valid tool.
+        $readStream->send($this->response(0, [
+            'resultType' => 'complete',
+            'tools' => [$this->invalidTools()[0], $this->validTool()],
+            'nextCursor' => 'page-2',
+        ]));
+        $page1 = $session->listTools();
+        $this->assertCount(1, $page1->tools);
+        $this->assertSame('page-2', $page1->nextCursor);
+
+        // Page 2 (continuation): a new valid tool.
+        $readStream->send($this->response(1, [
+            'resultType' => 'complete',
+            'tools' => [$this->tool('page_two', ['q' => ['type' => 'string', 'x-mcp-header' => 'Q']])],
+        ]));
+        $page2 = $session->listTools('page-2');
+        $this->assertCount(1, $page2->tools);
+        while ($writeStream->receive() !== null) {
+        }
+
+        // Page-1 rejection survived page 2: still refused off the wire.
+        try {
+            $session->callTool('bad_empty', []);
+            $this->fail('Expected InvalidArgumentException');
+        } catch (InvalidArgumentException $e) {
+            $this->assertStringContainsString('bad_empty', $e->getMessage());
+        }
+        $this->assertNull($writeStream->receive(), 'Rejected page-1 tool must stay uncallable after page 2');
+
+        // Page-1 annotations survived page 2: hints still emitted.
+        $readStream->send($this->response(2, [
+            'resultType' => 'complete',
+            'content' => [['type' => 'text', 'text' => 'ok']],
+        ]));
+        $session->callTool('valid_tool', ['region' => 'us-east1']);
+        $sent = $writeStream->receive();
+        $this->assertSame(['Mcp-Param-Region' => 'us-east1'], $sent->httpHeaderHints);
+
+        // Page-2 annotations were merged in alongside.
+        $readStream->send($this->response(3, [
+            'resultType' => 'complete',
+            'content' => [['type' => 'text', 'text' => 'ok']],
+        ]));
+        $session->callTool('page_two', ['q' => 'v']);
+        $sent = $writeStream->receive();
+        $this->assertSame(['Mcp-Param-Q' => 'v'], $sent->httpHeaderHints);
+    }
+
+    /**
+     * A later FRESH listing (no cursor) still resets both caches exactly
+     * as before pagination support: tools cached from a previous
+     * paginated listing lose their annotations, and previously rejected
+     * tools become callable again.
+     */
+    public function testFreshListingAfterPaginationResetsCaches(): void
+    {
+        [$session, $readStream, $writeStream] = $this->modernHttpSession();
+
+        // Paginated listing: rejected tool + valid tool on page 1, another on page 2.
+        $readStream->send($this->response(0, [
+            'resultType' => 'complete',
+            'tools' => [$this->invalidTools()[0], $this->validTool()],
+            'nextCursor' => 'page-2',
+        ]));
+        $session->listTools();
+        $readStream->send($this->response(1, [
+            'resultType' => 'complete',
+            'tools' => [$this->tool('page_two', ['q' => ['type' => 'string', 'x-mcp-header' => 'Q']])],
+        ]));
+        $session->listTools('page-2');
+
+        // Fresh listing advertising none of them: caches reset.
+        $readStream->send($this->response(2, ['resultType' => 'complete', 'tools' => []]));
+        $session->listTools();
+        while ($writeStream->receive() !== null) {
+        }
+
+        // Annotations gone: call goes out unmirrored.
+        $readStream->send($this->response(3, [
+            'resultType' => 'complete',
+            'content' => [['type' => 'text', 'text' => 'ok']],
+        ]));
+        $session->callTool('valid_tool', ['region' => 'us-east1']);
+        $sent = $writeStream->receive();
+        $this->assertNull($sent->httpHeaderHints, 'Fresh listing must clear annotations from prior pages');
+
+        // Rejection gone: the previously rejected tool reaches the wire again.
+        $readStream->send($this->response(4, [
+            'resultType' => 'complete',
+            'content' => [['type' => 'text', 'text' => 'ok']],
+        ]));
+        $session->callTool('bad_empty', []);
+        $this->assertNotNull($writeStream->receive(), 'Fresh listing must clear prior rejections');
+    }
 }
