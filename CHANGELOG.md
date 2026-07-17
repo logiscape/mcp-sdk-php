@@ -197,6 +197,19 @@ that will feed the migration guide.
   `scopes_supported`; the `client_credentials` grant (private_key_jwt with
   ES256/RS256 assertions and client_secret_basic); and the SEP-990
   cross-app-access flow (RFC 8693 token exchange + RFC 7523 jwt-bearer).
+- **`TaskManager::sweep()` — a bounded, resumable task-store sweep.**
+  `cleanup()` examines every task record in one call, which cannot fit a
+  fixed cron budget once a file store has grown large (and task filenames
+  are hashed, so callers cannot bound the work externally). The new
+  `sweep(?int $maxFiles = null, ?string $cursor = null)` examines at most
+  `maxFiles` records per call in stable filename order and returns
+  `{examined, deleted, cursor}` — persist the cursor and pass it back to
+  resume the pass on the next cron run (`null` = pass completed; orphaned
+  lock sidecars are swept only on a completing call). The bound covers
+  the per-record work (locked reads, expiry checks, deletions) — the
+  filename enumeration itself still spans the store each call, cheap by
+  comparison but not constant. `cleanup()` now delegates to an unbounded
+  `sweep()`, with behavior unchanged.
 - **`Mcp\Server\Tasks\TaskTransitionRejectedException`** — the dedicated
   type `TaskManager` now throws when an illegal task state transition is
   rejected (typically the documented settlement race: the task went

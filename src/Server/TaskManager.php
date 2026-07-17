@@ -293,35 +293,108 @@ class TaskManager
 
     /**
      * Remove every expired task. Useful for a periodic cron sweep on
-     * shared hosting where nothing else triggers expiry.
+     * shared hosting where nothing else triggers expiry. For a store too
+     * large to examine in one cron budget, use {@see sweep()} — this method
+     * is exactly an unbounded `sweep()`.
      */
     public function cleanup(): void
     {
-        $files = glob($this->storagePath . '/task_*.json');
-        if ($files === false) {
-            return;
+        $this->sweep();
+    }
+
+    /**
+     * Bounded, resumable variant of {@see cleanup()} for stores too large
+     * to examine within one cron budget.
+     *
+     * `$maxFiles` bounds the expensive per-record work — the locked read,
+     * expiry check, and deletion of each examined record. The directory
+     * enumeration itself (one `glob()` plus an in-memory sort/filter of
+     * the filenames) still covers the whole store on every call, and a
+     * completing call additionally stats each lock sidecar for the orphan
+     * sweep; both are cheap relative to per-record locking but do grow
+     * with store size.
+     *
+     * Examines up to `$maxFiles` task records in stable (lexicographic
+     * filename) order, deleting expired or corrupt ones, and returns a
+     * cursor for the next call to resume after:
+     *
+     * ```php
+     * $state = json_decode(@file_get_contents($stateFile), true);
+     * $r = $tasks->sweep(maxFiles: 500, cursor: $state['cursor'] ?? null);
+     * file_put_contents($stateFile, json_encode(['cursor' => $r['cursor']]));
+     * ```
+     *
+     * A returned `cursor` of `null` means the pass reached the end of the
+     * store (start over from the beginning next run); orphaned lock
+     * sidecars are swept only on such a completing call, keeping bounded
+     * calls' per-record work bounded. Records created during a multi-run
+     * pass may sort before the cursor and be picked up by the next pass
+     * instead, and a record whose deletion fails (e.g. a concurrent open
+     * handle on Windows) is left uncounted, keeps its lock sidecar, and is
+     * retried on a later pass — expiry is also enforced on every record
+     * access, so a sweep is a space-reclamation aid, never a correctness
+     * requirement.
+     *
+     * @param int|null $maxFiles Maximum records to examine (null = all)
+     * @param string|null $cursor Resume after this record filename (a
+     *        previous call's `cursor`); null starts from the beginning
+     * @return array{examined: int, deleted: int, cursor: string|null}
+     *         Records examined and deleted this call, and the resume
+     *         cursor (null when the store's listing was completed)
+     * @throws \InvalidArgumentException If $maxFiles is less than 1
+     */
+    public function sweep(?int $maxFiles = null, ?string $cursor = null): array
+    {
+        if ($maxFiles !== null && $maxFiles < 1) {
+            throw new \InvalidArgumentException("maxFiles must be at least 1 or null, got {$maxFiles}");
         }
-        foreach ($files as $file) {
+
+        $files = glob($this->storagePath . '/task_*.json') ?: [];
+        sort($files, SORT_STRING);
+        if ($cursor !== null) {
+            $files = array_values(array_filter(
+                $files,
+                static fn (string $file): bool => strcmp(basename($file), $cursor) > 0
+            ));
+        }
+        $slice = $maxFiles === null ? $files : array_slice($files, 0, $maxFiles);
+
+        $deleted = 0;
+        foreach ($slice as $file) {
             // Locked read: an unlocked read here could catch a concurrent
             // save mid-write and delete a LIVE task as "corrupt".
             $record = $this->readRecordFile($file);
-            if ($record === null) {
-                @unlink($file);
-                continue;
-            }
-            if ($this->isExpired($record)) {
-                @unlink($file);
+            if ($record === null || $this->isExpired($record)) {
+                // Count only confirmed removals, and keep the lock sidecar
+                // whenever the record remains (Windows share violations,
+                // filesystem errors): a still-present record must keep its
+                // lock, and the record is re-examined on a later pass.
+                if (@unlink($file)) {
+                    @unlink($file . '.lock');
+                    $deleted++;
+                }
             }
         }
 
-        // Sweep lock sidecars whose record is gone (a mutation attempted on
-        // a missing/expired task leaves one behind; deleteTask can also fail
-        // to remove a lock currently held on Windows).
+        if (count($slice) < count($files)) {
+            return [
+                'examined' => count($slice),
+                'deleted' => $deleted,
+                'cursor' => basename($slice[count($slice) - 1]),
+            ];
+        }
+
+        // Listing completed: sweep lock sidecars whose record is gone (a
+        // mutation attempted on a missing/expired task leaves one behind;
+        // deleteTask can also fail to remove a lock currently held on
+        // Windows).
         foreach (glob($this->storagePath . '/task_*.json.lock') ?: [] as $lockFile) {
             if (!file_exists(substr($lockFile, 0, -5))) {
                 @unlink($lockFile);
             }
         }
+
+        return ['examined' => count($slice), 'deleted' => $deleted, 'cursor' => null];
     }
 
     /**

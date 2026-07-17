@@ -202,6 +202,113 @@ final class TaskManagerTest extends TestCase
         $this->assertNotNull($this->manager->getTask($task->taskId));
     }
 
+    /**
+     * sweep() bounds the work of a single call to maxFiles records and
+     * returns a cursor that resumes the pass exactly where it stopped, so
+     * a cron job on a fixed budget can walk an arbitrarily large store
+     * across runs. A completed pass returns a null cursor. Deletion
+     * results across the bounded runs match one unbounded cleanup().
+     */
+    public function testSweepBoundedAndResumable(): void {
+        $expired = [];
+        for ($i = 0; $i < 3; $i++) {
+            $expired[] = $this->manager->createTask(ttlMs: 0);
+        }
+        $live = $this->manager->createTask(); // ttlMs null = unlimited
+        sleep(1);
+
+        $calls = 0;
+        $examined = 0;
+        $deleted = 0;
+        $cursor = null;
+        do {
+            $result = $this->manager->sweep(maxFiles: 2, cursor: $cursor);
+            $this->assertLessThanOrEqual(2, $result['examined']);
+            $calls++;
+            $examined += $result['examined'];
+            $deleted += $result['deleted'];
+            $cursor = $result['cursor'];
+        } while ($cursor !== null);
+
+        $this->assertGreaterThanOrEqual(2, $calls, 'Four records at maxFiles 2 must take multiple calls');
+        $this->assertSame(4, $examined);
+        $this->assertSame(3, $deleted);
+        $this->assertNotNull($this->manager->getTask($live->taskId));
+        foreach ($expired as $task) {
+            $this->assertNull($this->manager->getTask($task->taskId));
+        }
+    }
+
+    /**
+     * The orphaned-lock-sidecar sweep runs only on a call that reaches the
+     * end of the listing (null cursor) — a bounded mid-pass call stays
+     * bounded and leaves the orphan for the completing call.
+     */
+    public function testSweepOrphanSidecarsRemovedOnlyOnCompletingCall(): void {
+        $this->manager->createTask();
+        $this->manager->createTask();
+        $this->manager->createTask();
+        file_put_contents($this->storagePath . '/task_orphan.json.lock', '');
+
+        $partial = $this->manager->sweep(maxFiles: 1);
+        $this->assertNotNull($partial['cursor']);
+        $this->assertFileExists($this->storagePath . '/task_orphan.json.lock');
+
+        $completing = $this->manager->sweep(cursor: $partial['cursor']);
+        $this->assertNull($completing['cursor']);
+        $this->assertSame(2, $completing['examined']);
+        $this->assertFileDoesNotExist($this->storagePath . '/task_orphan.json.lock');
+        $this->assertCount(3, glob($this->storagePath . '/task_*.json') ?: []);
+    }
+
+    public function testSweepRejectsNonPositiveMaxFiles(): void {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('maxFiles must be at least 1');
+        $this->manager->sweep(maxFiles: 0);
+    }
+
+    /**
+     * `deleted` counts only confirmed removals: when unlink fails (a
+     * concurrent open handle on Windows, a filesystem error elsewhere) the
+     * record is examined but not counted, stays on disk, and is removed by
+     * a later pass once the obstacle clears.
+     */
+    public function testSweepDoesNotCountFailedUnlinkAsDeleted(): void {
+        $expired = $this->manager->createTask(ttlMs: 0);
+        sleep(1);
+        $files = glob($this->storagePath . '/task_*.json') ?: [];
+        $this->assertCount(1, $files);
+
+        if (PHP_OS_FAMILY === 'Windows') {
+            // The read-only attribute blocks unlink on Windows (open
+            // handles do not: PHP opens streams with FILE_SHARE_DELETE).
+            chmod($files[0], 0444);
+        } else {
+            if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
+                $this->markTestSkipped('Directory permissions do not block unlink for root');
+            }
+            // A non-writable directory blocks unlink of its entries.
+            chmod($this->storagePath, 0555);
+        }
+
+        try {
+            $result = $this->manager->sweep();
+            $this->assertSame(1, $result['examined']);
+            $this->assertSame(0, $result['deleted'], 'A failed unlink must not be counted as deleted');
+            $this->assertFileExists($files[0]);
+        } finally {
+            if (PHP_OS_FAMILY === 'Windows') {
+                chmod($files[0], 0644);
+            } else {
+                chmod($this->storagePath, 0755);
+            }
+        }
+
+        $retry = $this->manager->sweep();
+        $this->assertSame(1, $retry['deleted'], 'The record is removed once the obstacle clears');
+        $this->assertNull($this->manager->getTask($expired->taskId));
+    }
+
     public function testCannotTransitionFromTerminalState(): void {
         $task = $this->manager->createTask();
         $this->manager->updateStatus($task->taskId, TaskStatus::COMPLETED, 'Done');

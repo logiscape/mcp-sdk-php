@@ -173,6 +173,17 @@ it. Two operational notes for workers:
   records on access regardless of status — set the `enableTasks()`
   default high enough to outlive the longest job, or `null` for
   unlimited.
+- **Store maintenance.** Expired records that are never accessed again
+  stay on disk until swept. `cleanup()` removes every expired record in
+  one call; for a store too large to examine within one cron budget, the
+  bounded `sweep(maxFiles: 500, cursor: $lastCursor)` examines at most
+  `maxFiles` records per run and returns a `cursor` to persist and pass
+  back next run (`null` means the pass completed — start over). The bound
+  covers the per-record work (locked reads, expiry checks, deletions);
+  the directory listing itself still enumerates every task filename each
+  run, which is cheap by comparison but grows with store size. A sweep
+  is space reclamation only, never a correctness requirement: expiry is
+  also enforced on every record access.
 
 ### In-task input
 
