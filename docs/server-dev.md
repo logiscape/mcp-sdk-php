@@ -1721,7 +1721,7 @@ $server->tool(
 $server->run();
 ```
 
-> **Wrap non-text content in a result object.** The convenience wrapper only auto-coerces `string` and `array` returns into a `CallToolResult`. Returning a bare `AudioContent`, `ImageContent`, or `EmbeddedResource` will throw an invalid-result error -- always wrap them in a `CallToolResult` as shown here.
+> **Wrap non-text content in a result object.** The convenience wrapper only auto-coerces `string` returns into a `CallToolResult` (plus, for tools that declare an `outputSchema`, the structured-output coercion described in [Part 6: Structured Output](#part-6-structured-output)). Returning anything else -- a bare `array`, `AudioContent`, `ImageContent`, or `EmbeddedResource` -- will throw an invalid-result error; always wrap it in a `CallToolResult` as shown here.
 
 ### Returning Audio
 
