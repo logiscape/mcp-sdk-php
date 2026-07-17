@@ -321,6 +321,15 @@ that will feed the migration guide.
 - ROADMAP.md updated: `v2` confirmed as the release vehicle for
   `2026-07-28` day-one support, and the MCP Apps extension (SEP-1865)
   promoted to a committed v2 release feature.
+- ROADMAP.md: two items added to the post-v2 embedding batteries, drawn
+  from production embedding feedback on the v2 beta — a **handler
+  call-interceptor seam** on `McpServer` (generic decoration of
+  tool/prompt handlers — cross-cutting error translation, metering,
+  audit — without disturbing reflection-driven parameter matching) and a
+  **client-side HTTP exchange seam** (the mirror of the server's
+  `HttpIoInterface`, enabling in-process client+server testing and
+  non-cURL environments; to be designed together with the already-planned
+  outbound endpoint/redirect policy seam).
 - ROADMAP.md rewritten now that v2 is feature-complete and in testing:
   day-one support for each MCP spec release is codified as the project's
   standing top priority, the immediate items narrow to what remains for

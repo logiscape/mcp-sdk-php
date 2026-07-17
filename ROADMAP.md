@@ -181,6 +181,22 @@ Planned for the `v2.x` minor line, once `v2.0.0` has shipped:
   the enforcement seam: a policy interface consulted on the initial
   endpoint and on every redirect, with safe defaults in-box; the
   allow/deny policy itself stays each consumer's decision.
+- **A client-side HTTP exchange seam.** The server side is embeddable end
+  to end (`HttpIoInterface`: an `HttpMessage` in, an `HttpMessage` out),
+  but the client transport drives cURL directly — so an embedded server
+  cannot be exercised in-process by the SDK's *own* client in a test
+  suite (integrators end up hand-writing wire-format fixture clients,
+  reintroducing exactly the `_meta`-envelope and header-rule bugs the
+  SDK's client already avoids), and hosts with cURL disabled or an
+  existing instrumented HTTP layer cannot substitute one. The seam: a
+  narrow injectable exchange — `function (HttpMessage $request):
+  HttpMessage` — with the cURL implementation remaining the
+  zero-configuration default; streaming/SSE can stay cURL-only initially,
+  since the non-streaming JSON-RPC exchange covers the in-process testing
+  case (the auth components' direct cURL calls are part of the same
+  design surface). To be designed *together with* the outbound
+  endpoint/redirect policy seam above — both intercept the same outbound
+  requests, and one well-placed seam should serve both.
 - **Request-scoped context for server handler callbacks.** Tool, prompt,
   and resource callbacks currently receive their typed arguments but no
   first-class view of the request around them — the authenticated
@@ -189,6 +205,19 @@ Planned for the `v2.x` minor line, once `v2.0.0` has shipped:
   request context injectable into callbacks would let embedded servers
   make per-caller decisions without reaching into session internals or
   leaning on framework globals.
+- **A handler call-interceptor seam on `McpServer`.** Dispatch reflects
+  the registered callable's own named parameters, so a host cannot wrap a
+  handler in a generic decorator (a closure, an invokable middleware
+  object) without destroying parameter matching — production embedders
+  report resorting to per-tool wrapper code generation for cross-cutting
+  behavior at the call boundary (translating domain exceptions into typed
+  JSON-RPC errors, normalizing returns, metering, audit). The seam: an
+  optional per-registration or server-wide interceptor —
+  `function (callable $handler, array $orderedArgs): mixed` — invoked
+  around the already-matched call, leaving reflection-driven parameter
+  matching untouched. Composes with the request-scoped context above:
+  context injects *information* into the call, the interceptor enables
+  *decoration* around it.
 - **A framework-embedding guide in `docs/`** — concrete recipes for hosting
   the SDK inside a framework: converting the framework's request/response
   objects to and from `HttpMessage`, the `McpServer` HTTP entry point above
