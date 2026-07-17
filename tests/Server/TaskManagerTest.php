@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mcp\Tests\Server;
 
 use Mcp\Server\TaskManager;
+use Mcp\Server\Tasks\TaskTransitionRejectedException;
 use Mcp\Types\TaskStatus;
 use PHPUnit\Framework\TestCase;
 
@@ -208,6 +209,33 @@ final class TaskManagerTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('Invalid task state transition');
         $this->manager->updateStatus($task->taskId, TaskStatus::WORKING);
+    }
+
+    /**
+     * An illegal transition throws the dedicated
+     * TaskTransitionRejectedException — the precise type a worker catches
+     * in the documented settlement race, distinguishable from a genuine
+     * \InvalidArgumentException programming error — carrying the observed
+     * store status (the terminal status, in the lost-race case) and the
+     * rejected target. The message stays byte-identical to the previous
+     * bare \InvalidArgumentException, which the test above pins as the
+     * still-working parent-type catch.
+     */
+    public function testTerminalRejectionThrowsDedicatedTypeWithStatuses(): void {
+        $task = $this->manager->createTask();
+        $this->manager->cancelTask($task->taskId);
+
+        try {
+            $this->manager->complete($task->taskId, ['content' => []]);
+            $this->fail('Expected TaskTransitionRejectedException');
+        } catch (TaskTransitionRejectedException $e) {
+            $this->assertSame(TaskStatus::CANCELLED, $e->fromStatus);
+            $this->assertSame(TaskStatus::COMPLETED, $e->toStatus);
+            $this->assertSame(
+                "Invalid task state transition from 'cancelled' to 'completed'",
+                $e->getMessage()
+            );
+        }
     }
 
     /**

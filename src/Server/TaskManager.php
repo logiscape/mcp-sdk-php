@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mcp\Server;
 
+use Mcp\Server\Tasks\TaskTransitionRejectedException;
 use Mcp\Types\Task;
 use Mcp\Types\TaskStatus;
 
@@ -145,6 +146,8 @@ class TaskManager
      * a working task must surface as a handle-only `tasks/get` response, so
      * stale input state (e.g. a resumed tool deferring instead of re-parking)
      * must not ride along.
+     *
+     * @throws TaskTransitionRejectedException On an illegal transition
      */
     public function updateStatus(string $taskId, string $status, ?string $statusMessage = null): ?Task
     {
@@ -173,6 +176,9 @@ class TaskManager
      *
      * @param array<string, mixed> $result The original result (e.g. a
      *        CallToolResult-shaped array)
+     * @throws TaskTransitionRejectedException When the task is already
+     *         terminal (e.g. cancelled first — see "Cancellation races"
+     *         in the Tasks guide)
      */
     public function complete(string $taskId, array $result): ?Task
     {
@@ -198,6 +204,9 @@ class TaskManager
      * response will carry.
      *
      * @param array{code: int, message: string, data?: mixed} $error
+     * @throws TaskTransitionRejectedException When the task is already
+     *         terminal (e.g. cancelled first — see "Cancellation races"
+     *         in the Tasks guide)
      */
     public function fail(string $taskId, array $error, ?string $statusMessage = null): ?Task
     {
@@ -225,6 +234,7 @@ class TaskManager
      * later `tasks/update` echoes to resume the tool.
      *
      * @param array<string, array{method: string, params: mixed}> $inputRequests
+     * @throws TaskTransitionRejectedException On an illegal transition
      */
     public function setInputRequired(string $taskId, array $inputRequests, ?string $requestState = null): ?Task
     {
@@ -326,9 +336,7 @@ class TaskManager
     {
         $allowed = self::VALID_TRANSITIONS[$from] ?? [];
         if (!in_array($to, $allowed, true)) {
-            throw new \InvalidArgumentException(
-                "Invalid task state transition from '{$from}' to '{$to}'"
-            );
+            throw new TaskTransitionRejectedException($from, $to);
         }
     }
 

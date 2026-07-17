@@ -197,6 +197,18 @@ that will feed the migration guide.
   `scopes_supported`; the `client_credentials` grant (private_key_jwt with
   ES256/RS256 assertions and client_secret_basic); and the SEP-990
   cross-app-access flow (RFC 8693 token exchange + RFC 7523 jwt-bearer).
+- **`Mcp\Server\Tasks\TaskTransitionRejectedException`** — the dedicated
+  type `TaskManager` now throws when an illegal task state transition is
+  rejected (typically the documented settlement race: the task went
+  terminal first because a `tasks/cancel` or a concurrent settlement won),
+  carrying the observed store status (`$fromStatus`) and the rejected
+  target (`$toStatus`). Out-of-band workers can catch this precise type
+  instead of the overbroad `\InvalidArgumentException` the rejection
+  previously threw bare — which could silently misclassify a genuine
+  programming error as a benign lost race. Fully backward compatible: the
+  new type extends `\InvalidArgumentException` with a byte-identical
+  message, so existing catches keep working. The Tasks guide's
+  "Cancellation races" advice now names the precise type.
 - New typed exceptions `Mcp\Shared\UnknownMethodException`,
   `Mcp\Client\Transport\ReadTimeoutException`, and
   `Mcp\Server\Transport\TransportClosedException`, replacing

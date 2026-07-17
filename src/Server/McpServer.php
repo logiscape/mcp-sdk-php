@@ -34,6 +34,7 @@ use Mcp\Server\Sampling\SamplingContext;
 use Mcp\Server\Sampling\SamplingSuspendException;
 use Mcp\Server\Tasks\TaskContext;
 use Mcp\Server\Tasks\TaskDeferredException;
+use Mcp\Server\Tasks\TaskTransitionRejectedException;
 use Mcp\Server\Transport\Http\FileSessionStore;
 use Mcp\Server\Transport\Http\HttpIoInterface;
 use Mcp\Server\Transport\Http\SessionStoreInterface;
@@ -1638,7 +1639,7 @@ class McpServer
             if ($needsWrite) {
                 try {
                     return $this->taskManager->updateStatus($taskId, TaskStatus::WORKING, $e->statusMessage);
-                } catch (\InvalidArgumentException) {
+                } catch (TaskTransitionRejectedException) {
                     // Settled by the worker between the read and the write —
                     // fall through to the state the worker left.
                 }

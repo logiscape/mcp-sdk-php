@@ -161,9 +161,14 @@ it. Two operational notes for workers:
 
 - **Cancellation races.** The client may `tasks/cancel` while the worker
   runs. Terminal tasks reject further transitions, so a late
-  `complete()`/`fail()` throws `InvalidArgumentException` — check
-  `getRecord($taskId)['status']` before settling (a `null` record means
-  the task expired or was deleted), or catch the exception.
+  `complete()`/`fail()` throws
+  `Mcp\Server\Tasks\TaskTransitionRejectedException` (carrying the
+  observed status as `$fromStatus`) — check `getRecord($taskId)['status']`
+  before settling (a `null` record means the task expired or was deleted),
+  or catch that precise exception type. Catch it rather than its
+  `\InvalidArgumentException` parent, so a genuine programming error (a
+  malformed argument, say) is not silently misclassified as a benign lost
+  race.
 - **TTL.** `ttlMs` counts from creation, and the store deletes expired
   records on access regardless of status — set the `enableTasks()`
   default high enough to outlive the longest job, or `null` for
