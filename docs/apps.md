@@ -157,6 +157,15 @@ stable extension revision reads them — and mirrored on the listed resource
 Invalid values (an unknown `visibility` entry, an out-of-range permission)
 throw `InvalidArgumentException` at registration time.
 
+Deployments that author hints into stored configuration long before a
+server is built from it (for example, per-request server construction)
+can run the same checks ahead of time with the static
+`McpServer::validateUiHints(?array $visibility, ?array $csp, ?array
+$permissions)` — it delegates to the validators `ui()` itself uses, so the
+two can never disagree. The allowed values are also public constants for
+configuration UIs to enumerate: `McpServer::UI_VISIBILITY`,
+`McpServer::UI_CSP_KEYS`, and `McpServer::UI_PERMISSIONS`.
+
 ## Graceful degradation
 
 Automatic, by construction: the linked tool keeps returning its ordinary

@@ -125,14 +125,26 @@ class McpServer
      */
     public const UI_MIME_TYPE = 'text/html;profile=mcp-app';
 
-    /** Allowed `_meta.ui.visibility` values (MCP Apps). */
-    private const UI_VISIBILITY = ['model', 'app'];
+    /**
+     * Allowed `_meta.ui.visibility` values (MCP Apps). Public so
+     * configuration authors can enumerate the closed set; prefer
+     * {@see validateUiHints()} for ahead-of-time validation.
+     */
+    public const UI_VISIBILITY = ['model', 'app'];
 
-    /** Allowed `_meta.ui.permissions` members (each an empty-object value). */
-    private const UI_PERMISSIONS = ['camera', 'microphone', 'geolocation', 'clipboardWrite'];
+    /**
+     * Allowed `_meta.ui.permissions` members (each an empty-object value).
+     * Public so configuration authors can enumerate the closed set; prefer
+     * {@see validateUiHints()} for ahead-of-time validation.
+     */
+    public const UI_PERMISSIONS = ['camera', 'microphone', 'geolocation', 'clipboardWrite'];
 
-    /** Allowed `_meta.ui.csp` keys (each a `string[]` of domains). */
-    private const UI_CSP_KEYS = ['connectDomains', 'resourceDomains', 'frameDomains', 'baseUriDomains'];
+    /**
+     * Allowed `_meta.ui.csp` keys (each a `string[]` of domains). Public so
+     * configuration authors can enumerate the closed set; prefer
+     * {@see validateUiHints()} for ahead-of-time validation.
+     */
+    public const UI_CSP_KEYS = ['connectDomains', 'resourceDomains', 'frameDomains', 'baseUriDomains'];
 
     /** The underlying MCP Server instance. */
     protected Server $server;
@@ -955,7 +967,7 @@ class McpServer
         // block; dual-write the deprecated flat key for host back-compat.
         $uiToolMeta = ['resourceUri' => $uri];
         if ($visibility !== null) {
-            $uiToolMeta['visibility'] = $this->validateUiVisibility($visibility);
+            $uiToolMeta['visibility'] = self::validateUiVisibility($visibility);
         }
         $existing = $target->getExtraField('_meta');
         $meta = is_array($existing) ? $existing : [];
@@ -1017,6 +1029,44 @@ class McpServer
     }
 
     /**
+     * Validate MCP Apps host hints ahead of registration time.
+     *
+     * Applies exactly the checks {@see ui()} applies (both delegate to the
+     * same internal validators, so the two can never disagree): `visibility`
+     * must be a non-empty subset of {@see UI_VISIBILITY}, every `csp` key
+     * must be in {@see UI_CSP_KEYS} with a list-of-strings value, and every
+     * `permissions` member must be in {@see UI_PERMISSIONS}. A `null`
+     * argument means "hint omitted" and is skipped, mirroring ui().
+     *
+     * Intended for deployments that author UI hints into stored
+     * configuration long before a server is constructed from it: validating
+     * at config-write time keeps an invalid hint from throwing on every
+     * subsequent request during per-request server construction.
+     *
+     * @param array<int, string>|null $visibility Subset of `model`/`app`
+     * @param array<string, array<int, string>>|null $csp Domain allowlists
+     *        keyed by connect/resource/frame/baseUri Domains
+     * @param array<int, string>|null $permissions Subset of camera/
+     *        microphone/geolocation/clipboardWrite
+     * @throws \InvalidArgumentException On the first out-of-range hint
+     */
+    public static function validateUiHints(
+        ?array $visibility = null,
+        ?array $csp = null,
+        ?array $permissions = null,
+    ): void {
+        if ($visibility !== null) {
+            self::validateUiVisibility($visibility);
+        }
+        if ($csp !== null) {
+            self::buildUiCsp($csp);
+        }
+        if ($permissions !== null) {
+            self::buildUiPermissions($permissions);
+        }
+    }
+
+    /**
      * Validate a `_meta.ui.visibility` array against the allowed values,
      * returning it re-indexed. An empty array is rejected (it would hide the
      * tool from the agent AND block app calls — omit the argument for the
@@ -1025,7 +1075,7 @@ class McpServer
      * @param array<int, string> $visibility
      * @return array<int, string>
      */
-    private function validateUiVisibility(array $visibility): array
+    private static function validateUiVisibility(array $visibility): array
     {
         if ($visibility === []) {
             throw new \InvalidArgumentException(
@@ -1060,10 +1110,10 @@ class McpServer
         $ui = [];
 
         if ($csp !== null) {
-            $ui['csp'] = $this->buildUiCsp($csp);
+            $ui['csp'] = self::buildUiCsp($csp);
         }
         if ($permissions !== null) {
-            $ui['permissions'] = $this->buildUiPermissions($permissions);
+            $ui['permissions'] = self::buildUiPermissions($permissions);
         }
         if ($domain !== null) {
             $ui['domain'] = $domain;
@@ -1082,7 +1132,7 @@ class McpServer
      * @param array<string, array<int, string>> $csp
      * @return array<string, array<int, string>>
      */
-    private function buildUiCsp(array $csp): array
+    private static function buildUiCsp(array $csp): array
     {
         $out = [];
         foreach ($csp as $key => $domains) {
@@ -1111,7 +1161,7 @@ class McpServer
      * @param array<int, string> $permissions
      * @return array<string, \stdClass>
      */
-    private function buildUiPermissions(array $permissions): array
+    private static function buildUiPermissions(array $permissions): array
     {
         $out = [];
         foreach ($permissions as $permission) {

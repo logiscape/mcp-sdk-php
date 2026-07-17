@@ -370,4 +370,41 @@ final class AppsExtensionTest extends TestCase
             'csp non-string' => [['csp' => ['connectDomains' => [123]]], 'only domain strings'],
         ];
     }
+
+    /**
+     * validateUiHints() rejects exactly what ui() rejects — same closed
+     * sets, same exception messages (both delegate to the same internal
+     * validators) — so a host validating stored configuration ahead of
+     * registration time can never drift from registration behavior. Reuses
+     * ui()'s own invalid-metadata cases verbatim.
+     *
+     * @dataProvider invalidMetadataProvider
+     * @param array<string, mixed> $extra Named hint args (visibility/csp/permissions)
+     */
+    public function testValidateUiHintsRejectsSameInvalidMetadata(array $extra, string $expectedMessageFragment): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage($expectedMessageFragment);
+        McpServer::validateUiHints(...$extra);
+    }
+
+    /**
+     * Ahead-of-time validation accepts every in-range hint without any
+     * server or registered tool, treats null (hint omitted) as a no-op,
+     * and the closed sets themselves are public API so configuration
+     * authors can enumerate the allowed values.
+     */
+    public function testValidateUiHintsAcceptsValidHintsAndExposesClosedSets(): void
+    {
+        McpServer::validateUiHints(
+            visibility: McpServer::UI_VISIBILITY,
+            csp: ['connectDomains' => ['api.example.com'], 'frameDomains' => []],
+            permissions: McpServer::UI_PERMISSIONS,
+        );
+        McpServer::validateUiHints();
+
+        $this->assertSame(['model', 'app'], McpServer::UI_VISIBILITY);
+        $this->assertSame(['camera', 'microphone', 'geolocation', 'clipboardWrite'], McpServer::UI_PERMISSIONS);
+        $this->assertSame(['connectDomains', 'resourceDomains', 'frameDomains', 'baseUriDomains'], McpServer::UI_CSP_KEYS);
+    }
 }

@@ -158,6 +158,15 @@ that will feed the migration guide.
     degradation is automatic: a host that cannot render the UI ignores
     `_meta.ui` and the tool still returns its ordinary `content`.
 - Added a MCP Apps for PHP skill for AI coding agents.
+- **Ahead-of-time validation for MCP Apps host hints.** The new public
+  static `McpServer::validateUiHints(?visibility, ?csp, ?permissions)`
+  applies exactly the checks `ui()` applies at registration (both delegate
+  to the same internal validators), so deployments that author hints into
+  stored configuration can reject an invalid hint at config-write time
+  instead of throwing on every request during per-request server
+  construction. The closed sets themselves are now public constants
+  (`McpServer::UI_VISIBILITY`, `UI_CSP_KEYS`, `UI_PERMISSIONS`) for
+  configuration UIs to enumerate. Registration behavior is unchanged.
 - **Tool annotations on `McpServer::tool()`.** New trailing `annotations:`
   parameter (an array or a `Mcp\Types\ToolAnnotations`, normalized via the
   new `ToolAnnotations::parse()`) emitting the spec's `ToolAnnotations`
