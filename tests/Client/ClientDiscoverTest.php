@@ -51,7 +51,10 @@ final class ClientDiscoverTest extends TestCase
             'resultType' => 'complete',
             'supportedVersions' => ['2026-07-28', '2025-11-25'],
             'capabilities' => ['tools' => ['listChanged' => true]],
-            'serverInfo' => ['name' => 'modern-server', 'version' => '2.0.0'],
+            // Identity rides _meta since spec PR #3002.
+            '_meta' => [
+                MetaKeys::SERVER_INFO => ['name' => 'modern-server', 'version' => '2.0.0'],
+            ],
             'ttlMs' => 3600000,
             'cacheScope' => 'public',
         ];
@@ -91,7 +94,7 @@ final class ClientDiscoverTest extends TestCase
         // Parsed result
         $this->assertInstanceOf(DiscoverResult::class, $result);
         $this->assertSame(['2026-07-28', '2025-11-25'], $result->supportedVersions);
-        $this->assertSame('modern-server', $result->serverInfo->name);
+        $this->assertSame('modern-server', $result->getServerInfo()?->name);
         $this->assertSame(3600000, $result->getTtlMs());
         $this->assertSame('public', $result->getCacheScope());
     }

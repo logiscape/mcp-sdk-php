@@ -230,6 +230,13 @@ final class McpServerInputRequiredTest extends TestCase
         $this->assertArrayHasKey('user_name', $result['inputRequests']);
         $this->assertSame('elicitation/create', $result['inputRequests']['user_name']['method']);
         $this->assertIsString($result['requestState']);
+        // Spec PR #3002: the identity stamp rides EVERY modern result,
+        // input_required included.
+        $this->assertSame(
+            ['name' => 'mrtr-test', 'version' => '1.0.0'],
+            $result['_meta'][MetaKeys::SERVER_INFO] ?? null,
+            'input_required results carry the serverInfo identity stamp'
+        );
 
         $round2 = $this->callTool($runner, 'ask_name', [
             'inputResponses' => ['user_name' => ['action' => 'accept', 'content' => ['name' => 'Alice']]],

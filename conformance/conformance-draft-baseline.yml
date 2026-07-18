@@ -14,9 +14,12 @@
 # may legitimately add entries for genuinely-new upstream behavior, each
 # with its own root cause (recorded below).
 #
-# Last updated: 2026-07-03 (request-metadata cleared via SDK fix; other
-# root causes re-verified against the reference SDKs, the draft spec
-# text, and the tool source — details per entry)
+# Last updated: 2026-07-17 (spec PR #3002 absorption: server-stateless
+# annotation updated 27/28 -> 24/28 — three checks fail at the alpha.9
+# pin because the PINNED TOOL still asserts the pre-#3002 wire shape the
+# merged spec removed; upstream already fixed its checks on main in
+# conformance PR #403 (2026-07-17), so all three retire at the next
+# draft-pin bump. Details in the server-stateless entry.)
 # Conformance tool version: 0.2.0-alpha.9 (draft pin)
 #
 # (CLEARED at pin 0.2.0-alpha.9, 2026-07-03, via SDK FIX) request-metadata —
@@ -90,9 +93,40 @@
 #  tests. Re-evaluate at WS7 convergence.
 
 server:
-  # --- Fixture-contract mismatch (root cause re-verified 2026-07-03) ---
+  # --- One fixture-contract mismatch + three pinned-tool staleness ---
   - server-stateless
-    # 27/28 checks pass at alpha.9. The one failing check is
+    # 24/28 checks pass at alpha.9 (was 27/28 before 2026-07-17). FOUR
+    # failing checks, two distinct root causes:
+    #
+    # CAUSE A (three checks, TOOL STALENESS after spec PR #3002 — verified
+    # 2026-07-17): the SDK absorbed spec PR #3002 (merged 2026-07-16,
+    # rc-high-priority: clientInfo demoted to SHOULD in the request _meta
+    # envelope; serverInfo moved from the DiscoverResult body into result
+    # _meta), but the PINNED alpha.9 tool still asserts the pre-#3002
+    # shapes:
+    #  * sep-2575-request-meta-invalid-missing-client-info — expects the
+    #    server to REJECT an envelope without clientInfo; the merged spec
+    #    makes that envelope valid and upstream's own replacement check
+    #    (sep-2575-request-meta-client-info-optional, conformance PR #403)
+    #    REQUIRES serving it with HTTP 200 — which this SDK now does.
+    #  * sep-2575-http-server-meta-invalid-400 — the missing-client-info
+    #    iteration of the aggregate HTTP-400 check, same cause.
+    #  * sep-2575-server-implements-discover — validates the DiscoverResult
+    #    against the pre-#3002 shape with a required top-level serverInfo;
+    #    the SDK now emits identity in
+    #    _meta["io.modelcontextprotocol/serverInfo"] per the merged schema
+    #    (and #403's updated spec-types drop the body field entirely).
+    # Upstream already aligned all three on main in conformance PR #403
+    # (merged 2026-07-17, after the alpha.9 build): the rejection probe is
+    # deleted, clientInfo-optional is a required positive check, and
+    # server identity in result _meta is a WARNING-level SHOULD check.
+    # EXPECTED RESOLUTION: all three leave this entry at the next
+    # draft-pin bump to a build containing #403; no SDK action. (Reverting
+    # the SDK to the pre-#3002 shapes to please the stale pin would
+    # violate both the merged spec and the no-shortcuts rule.)
+    #
+    # CAUSE B (one check, fixture-contract mismatch — root cause
+    # re-verified 2026-07-03):
     # sep-2575-http-server-no-independent-requests-on-stream: the scenario
     # builds ONE generic request _meta with
     #   "io.modelcontextprotocol/clientCapabilities": {}   (empty)

@@ -30,9 +30,18 @@ declare(strict_types=1);
 namespace Mcp\Types;
 
 class InitializeResult extends Result {
+    /**
+     * `$serverInfo` is nullable only for the modern (2026-07-28) era, where
+     * this object doubles as the session's initialization result: since spec
+     * PR #3002 a modern server's identity is an optional result-`_meta`
+     * field, so an anonymous server yields null here rather than a
+     * fabricated Implementation. The legacy initialize handshake still
+     * requires serverInfo on the wire — ClientSession::initialize() rejects
+     * a legacy result without it.
+     */
     public function __construct(
         public readonly ServerCapabilities $capabilities,
-        public readonly Implementation $serverInfo,
+        public readonly ?Implementation $serverInfo,
         public readonly string $protocolVersion,
         public ?string $instructions = null,
         ?Meta $_meta = null,
@@ -58,14 +67,18 @@ class InitializeResult extends Result {
         // Extract known fields
         $protocolVersion = $data['protocolVersion'] ?? '';
         $capabilitiesData = $data['capabilities'] ?? [];
-        $serverInfoData = $data['serverInfo'] ?? [];
+        $serverInfoData = $data['serverInfo'] ?? null;
         $instructions = $data['instructions'] ?? null;
 
         unset($data['protocolVersion'], $data['capabilities'], $data['serverInfo'], $data['instructions']);
 
-        // Construct nested objects
+        // Construct nested objects. serverInfo may be absent: a persisted
+        // modern-era session with an anonymous server round-trips through
+        // here on resume (Client::resumeHttpSession). A present value must
+        // still parse as a well-formed Implementation. The legacy handshake
+        // path enforces presence separately (ClientSession::initialize()).
         $capabilities = ServerCapabilities::fromArray($capabilitiesData);
-        $serverInfo = Implementation::fromArray($serverInfoData);
+        $serverInfo = $serverInfoData === null ? null : Implementation::fromArray($serverInfoData);
 
         $obj = new self($capabilities, $serverInfo, $protocolVersion, $instructions, $meta);
 
@@ -81,7 +94,7 @@ class InitializeResult extends Result {
     public function validate(): void {
         parent::validate();
         $this->capabilities->validate();
-        $this->serverInfo->validate();
+        $this->serverInfo?->validate();
         if (empty($this->protocolVersion)) {
             throw new \InvalidArgumentException('Protocol version cannot be empty');
         }
@@ -90,7 +103,9 @@ class InitializeResult extends Result {
     public function jsonSerialize(): mixed {
         $data = parent::jsonSerialize();
         $data['capabilities'] = $this->capabilities;
-        $data['serverInfo'] = $this->serverInfo;
+        if ($this->serverInfo !== null) {
+            $data['serverInfo'] = $this->serverInfo;
+        }
         $data['protocolVersion'] = $this->protocolVersion;
         if ($this->instructions !== null) {
             $data['instructions'] = $this->instructions;

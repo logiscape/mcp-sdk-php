@@ -29,10 +29,11 @@ namespace Mcp\Types;
  * protocol versions, capabilities, and implementation info before (or
  * instead of) other requests.
  *
- * Like every modern request, its params carry the required `_meta` envelope
- * (protocol version, client info, client capabilities — see {@see MetaKeys}).
- * Envelope validation happens server-side so a malformed request can be
- * answered with the spec's -32602 error rather than failing to parse.
+ * Like every modern request, its params carry the required `_meta` envelope:
+ * protocol version and client capabilities are mandatory, client info is a
+ * SHOULD since spec PR #3002 (see {@see MetaKeys}). Envelope validation
+ * happens server-side so a malformed request can be answered with the
+ * spec's -32602 error rather than failing to parse.
  */
 class DiscoverRequest extends Request {
     public function __construct(?RequestParams $params = null) {

@@ -165,6 +165,34 @@ final class TypeSerializationTest extends TestCase
     }
 
     /**
+     * An InitializeResult WITHOUT serverInfo round-trips with a null
+     * identity and no serialized `serverInfo` key. This is the persisted
+     * shape of a modern-era session whose server is anonymous (spec PR
+     * #3002) — Client::resumeHttpSession() re-parses it through
+     * fromResponseData(), so absence must not be fatal at the type level.
+     * (The legacy handshake enforces presence separately, in
+     * ClientSession::initialize().)
+     */
+    public function testInitializeResultWithoutServerInfoRoundTrip(): void
+    {
+        $data = [
+            'protocolVersion' => '2026-07-28',
+            'capabilities' => [],
+        ];
+
+        $result = InitializeResult::fromResponseData($data);
+
+        $this->assertNull($result->serverInfo);
+
+        $serialized = $result->jsonSerialize();
+        $this->assertArrayNotHasKey('serverInfo', $serialized, 'A null identity is omitted, never emitted as null');
+
+        // And the serialized form parses back identically.
+        $again = InitializeResult::fromResponseData(json_decode((string) json_encode($serialized), true));
+        $this->assertNull($again->serverInfo);
+    }
+
+    /**
      * Verify that the optional instructions field on InitializeResult is
      * preserved through the deserialization and serialization round-trip.
      */

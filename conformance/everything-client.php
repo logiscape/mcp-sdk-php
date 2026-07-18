@@ -227,7 +227,7 @@ function scenarioInitialize(string $serverUrl): void
 
     $initResult = $session->getInitializeResult();
     fwrite(STDERR, "Protocol version: " . ($initResult->protocolVersion ?? 'unknown') . "\n");
-    fwrite(STDERR, "Server name: " . ($initResult->serverInfo->name ?? 'unknown') . "\n");
+    fwrite(STDERR, "Server name: " . ($initResult->serverInfo?->name ?? 'unknown') . "\n");
 
     // Follow-up RPC to verify the connection works beyond the handshake
     $toolsResult = $session->listTools();
@@ -642,7 +642,7 @@ function scenarioAuth(string $scenario, string $serverUrl, ?array $context): voi
 
     $initResult = $session->getInitializeResult();
     fwrite(STDERR, "Protocol version: " . ($initResult->protocolVersion ?? 'unknown') . "\n");
-    fwrite(STDERR, "Server name: " . ($initResult->serverInfo->name ?? 'unknown') . "\n");
+    fwrite(STDERR, "Server name: " . ($initResult->serverInfo?->name ?? 'unknown') . "\n");
 
     // List tools to verify authenticated access
     $toolsResult = $session->listTools();
@@ -662,7 +662,7 @@ function verifyAuthenticatedAccess(ClientSession $session): void
 {
     $initResult = $session->getInitializeResult();
     fwrite(STDERR, "Protocol version: " . ($initResult->protocolVersion ?? 'unknown') . "\n");
-    fwrite(STDERR, "Server name: " . ($initResult->serverInfo->name ?? 'unknown') . "\n");
+    fwrite(STDERR, "Server name: " . ($initResult->serverInfo?->name ?? 'unknown') . "\n");
 
     $toolsResult = $session->listTools();
     fwrite(STDERR, "Listed " . count($toolsResult->tools ?? []) . " tools after auth\n");

@@ -180,6 +180,22 @@ final class TasksExtensionTest extends TestCase
      * @param array<string, mixed>|null $capabilities
      * @return array<string, mixed>
      */
+    /**
+     * Assert a tasks/update / tasks/cancel "empty ack": nothing but the
+     * resultType discriminator and the SDK-stamped `_meta` serverInfo
+     * identity (a SHOULD on every modern response since spec PR #3002).
+     */
+    private function assertEmptyAck(array $result, string $serverName = 'tasks-test'): void
+    {
+        $this->assertSame('complete', $result['resultType'] ?? null);
+        $this->assertSame(
+            ['name' => $serverName, 'version' => '1.0.0'],
+            $result['_meta'][MetaKeys::SERVER_INFO] ?? null,
+            'Modern acks carry the serverInfo identity stamp'
+        );
+        $this->assertCount(2, $result, 'An empty ack carries nothing beyond resultType and _meta');
+    }
+
     private function envelope(?array $capabilities = null): array
     {
         return [
@@ -395,8 +411,8 @@ final class TasksExtensionTest extends TestCase
             'inputResponses' => ['name' => ['action' => 'accept', 'content' => ['name' => 'report.txt']]],
             '_meta' => $this->envelope(),
         ], id: 3)['result'];
-        // tasks/update is an empty ack: exactly {resultType: complete}.
-        $this->assertSame(['resultType' => 'complete'], $update);
+        // tasks/update is an empty ack (plus the modern identity stamp).
+        $this->assertEmptyAck($update);
 
         $final = $this->rpc($runner, 'tasks/get', ['taskId' => $taskId, '_meta' => $this->envelope()], id: 4)['result'];
         $this->assertSame('completed', $final['status']);
@@ -410,14 +426,14 @@ final class TasksExtensionTest extends TestCase
         $taskId = $this->callTool($runner, 'confirm_delete', id: 1)['result']['taskId'];
 
         $cancel = $this->rpc($runner, 'tasks/cancel', ['taskId' => $taskId, '_meta' => $this->envelope()], id: 2)['result'];
-        $this->assertSame(['resultType' => 'complete'], $cancel);
+        $this->assertEmptyAck($cancel);
 
         $get = $this->rpc($runner, 'tasks/get', ['taskId' => $taskId, '_meta' => $this->envelope()], id: 3)['result'];
         $this->assertSame('cancelled', $get['status']);
 
         // Cancel is idempotent on a terminal task: still an empty ack.
         $again = $this->rpc($runner, 'tasks/cancel', ['taskId' => $taskId, '_meta' => $this->envelope()], id: 4)['result'];
-        $this->assertSame(['resultType' => 'complete'], $again);
+        $this->assertEmptyAck($again);
     }
 
     public function testDeferredToolReturnsWorkingTask(): void
@@ -468,7 +484,7 @@ final class TasksExtensionTest extends TestCase
 
         // The client cancels while the worker is still running...
         $cancel = $this->rpc($runner, 'tasks/cancel', ['taskId' => $taskId, '_meta' => $this->envelope()], id: 2)['result'];
-        $this->assertSame(['resultType' => 'complete'], $cancel);
+        $this->assertEmptyAck($cancel);
 
         // ...so the worker's late complete() hits the terminal-state guard.
         // Workers should check getRecord()['status'] first (or catch this).
@@ -732,7 +748,7 @@ final class TasksExtensionTest extends TestCase
             'taskId' => $taskId,
             '_meta' => $this->envelope(),
         ], 3)['result'];
-        $this->assertSame(['resultType' => 'complete'], $cancel);
+        $this->assertEmptyAck($cancel, serverName: 'tasks-stdio');
     }
 
     public function testStdioDeferredTaskLifecycle(): void

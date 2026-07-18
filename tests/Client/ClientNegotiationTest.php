@@ -59,7 +59,10 @@ final class ClientNegotiationTest extends TestCase
             'resultType' => 'complete',
             'supportedVersions' => $supported,
             'capabilities' => ['tools' => ['listChanged' => true]],
-            'serverInfo' => ['name' => 'matrix-server', 'version' => '1.0.0'],
+            // Identity rides _meta since spec PR #3002.
+            '_meta' => [
+                MetaKeys::SERVER_INFO => ['name' => 'matrix-server', 'version' => '1.0.0'],
+            ],
             'instructions' => 'be nice',
             'ttlMs' => 60000,
             'cacheScope' => 'public',
@@ -124,7 +127,8 @@ final class ClientNegotiationTest extends TestCase
         $this->assertSame('2026-07-28', $session->getModernWireVersion());
         $this->assertSame('2026-07-28', $session->getNegotiatedProtocolVersion());
         $this->assertTrue($session->supportsFeature('stateless_lifecycle'));
-        $this->assertSame('matrix-server', $session->getInitializeResult()->serverInfo->name);
+        $this->assertSame('matrix-server', $session->getServerInfo()?->name);
+        $this->assertSame('matrix-server', $session->getInitializeResult()->serverInfo?->name);
         $this->assertSame('be nice', $session->getInitializeResult()->instructions);
 
         $session->listTools();
@@ -138,6 +142,85 @@ final class ClientNegotiationTest extends TestCase
         $this->assertSame('2026-07-28', $meta[MetaKeys::PROTOCOL_VERSION], 'Every modern request carries the envelope');
         $this->assertSame('mcp-client', $meta[MetaKeys::CLIENT_INFO]['name']);
         $this->assertArrayHasKey(MetaKeys::CLIENT_CAPABILITIES, $meta);
+    }
+
+    /**
+     * An ANONYMOUS modern server — a discover result with no `_meta`
+     * identity — connects normally; identity is simply unknown. Spec PR
+     * #3002 makes serverInfo an optional result-_meta field, so absence
+     * must never be an error and never yield a fabricated identity.
+     */
+    public function testAnonymousModernServerConnectsWithNullIdentity(): void
+    {
+        $data = $this->discoverResultData();
+        unset($data['_meta']);
+
+        $readStream = new MemoryStream();
+        $writeStream = new MemoryStream();
+        $readStream->send($this->response(0, $data));
+
+        $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
+
+        $this->assertSame('modern', $session->negotiate());
+        $this->assertNull($session->getServerInfo(), 'No identity reported → null, never a fabricated one');
+        $this->assertNull($session->getInitializeResult()->serverInfo);
+        $this->assertSame('be nice', $session->getInitializeResult()->instructions, 'The rest of the result is intact');
+    }
+
+    /**
+     * A MALFORMED `_meta` identity is treated as absent (the field is
+     * self-reported, unverified, and display-only per the spec): the
+     * session still connects, as anonymous.
+     */
+    public function testMalformedMetaIdentityTreatedAsAnonymous(): void
+    {
+        $data = $this->discoverResultData();
+        $data['_meta'] = [MetaKeys::SERVER_INFO => 'not-an-object'];
+
+        $readStream = new MemoryStream();
+        $writeStream = new MemoryStream();
+        $readStream->send($this->response(0, $data));
+
+        $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
+
+        $this->assertSame('modern', $session->negotiate());
+        $this->assertNull($session->getServerInfo(), 'Malformed identity is treated as absent, not fatal');
+    }
+
+    /**
+     * A stray TOP-LEVEL serverInfo (the pre-#3002 wire shape) is never
+     * read as identity: the session connects as anonymous. This pins the
+     * no-dual-shape decision — identity is `_meta`-only, matching the
+     * reference SDKs.
+     */
+    public function testStaleTopLevelServerInfoIgnored(): void
+    {
+        $data = $this->discoverResultData();
+        unset($data['_meta']);
+        $data['serverInfo'] = ['name' => 'stale-shape', 'version' => '0.9.0'];
+
+        $readStream = new MemoryStream();
+        $writeStream = new MemoryStream();
+        $readStream->send($this->response(0, $data));
+
+        $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
+
+        $this->assertSame('modern', $session->negotiate());
+        $this->assertNull($session->getServerInfo(), 'The old body field is never read as identity');
+    }
+
+    /**
+     * A forced-modern session (mode 'modern', no probe) has no identity to
+     * report: getServerInfo() is null — the pre-#3002 fabricated
+     * "unknown@0.0.0" placeholder is gone.
+     */
+    public function testForcedModernSessionHasNullIdentity(): void
+    {
+        $session = new ClientSession(new MemoryStream(), new MemoryStream(), readTimeout: 2.0);
+
+        $this->assertSame('modern', $session->negotiate(mode: 'modern'));
+        $this->assertNull($session->getServerInfo());
+        $this->assertNull($session->getInitializeResult()->serverInfo);
     }
 
     /**

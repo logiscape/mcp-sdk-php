@@ -385,6 +385,15 @@ class ClientSession extends BaseSession {
         /** @var InitializeResult $result */
         $result = $this->sendRequest($initRequest, InitializeResult::class);
 
+        // The legacy handshake schema requires serverInfo on the wire; the
+        // type itself is lenient (nullable) only for the modern era, where
+        // identity is an optional result-_meta field (spec PR #3002).
+        if ($result->serverInfo === null) {
+            throw new RuntimeException(
+                'Invalid initialize result from server: missing serverInfo'
+            );
+        }
+
         // Validate protocol version
         if (!in_array($result->protocolVersion, Version::SUPPORTED_PROTOCOL_VERSIONS, true)) {
             throw new RuntimeException(
@@ -634,16 +643,21 @@ class ClientSession extends BaseSession {
      * every subsequent outgoing request and notification is stamped with
      * the SEP-2575 `_meta` envelope (see writeMessage()). The discover
      * result doubles as the initialization result so existing
-     * capability-inspection code keeps working; on the forced-modern path
-     * (no probe, $discovery null) a placeholder initialization result is
-     * fabricated — server capabilities are simply unknown until queried.
+     * capability-inspection code keeps working. Server identity is read
+     * exclusively from the discover result's
+     * `_meta["io.modelcontextprotocol/serverInfo"]` (spec PR #3002) and is
+     * optional: an anonymous server — including any forced-modern session
+     * ($discovery null) and a server whose identity value is malformed —
+     * yields a null serverInfo, never a fabricated one ({@see
+     * getServerInfo()}). Capabilities on the forced-modern path are simply
+     * unknown until queried.
      */
     private function enterModernMode(string $wireVersion, ?DiscoverResult $discovery): void {
         $this->modernWireVersion = $wireVersion;
         $this->negotiatedProtocolVersion = Version::canonicalizeVersion($wireVersion);
         $this->initResult = new InitializeResult(
             capabilities: $discovery?->capabilities ?? new \Mcp\Types\ServerCapabilities(),
-            serverInfo: $discovery?->serverInfo ?? new Implementation(name: 'unknown', version: '0.0.0'),
+            serverInfo: $discovery?->getServerInfo(),
             protocolVersion: $this->negotiatedProtocolVersion,
             instructions: $discovery?->instructions,
         );
@@ -758,6 +772,20 @@ class ClientSession extends BaseSession {
             throw new RuntimeException('Session not yet initialized');
         }
         return $this->initResult;
+    }
+
+    /**
+     * The server's self-reported identity, or null when unknown.
+     *
+     * Null on modern (2026-07-28) sessions whose server did not identify
+     * itself — identity is an optional result-`_meta` field since spec PR
+     * #3002, so anonymous servers are valid — and before initialization.
+     * Legacy sessions always have it (the initialize handshake requires
+     * it). The value is self-reported and unverified: use it for display
+     * and diagnostics, never for behavior or security decisions.
+     */
+    public function getServerInfo(): ?Implementation {
+        return $this->initResult?->serverInfo;
     }
 
     /**
@@ -1870,9 +1898,10 @@ class ClientSession extends BaseSession {
      */
     protected function writeMessage(JsonRpcMessage $message): void {
         // Modern era (SEP-2575): every request and notification carries the
-        // per-request _meta envelope — protocol version, client info, and
-        // client capabilities are all required on every message; servers
-        // MUST NOT infer them from prior requests.
+        // per-request _meta envelope — protocol version and client
+        // capabilities are required on every message, client info is a
+        // SHOULD (spec PR #3002) this client always sends; servers MUST
+        // NOT infer any of them from prior requests.
         if ($this->modernWireVersion !== null) {
             $this->stampModernEnvelope($message);
 

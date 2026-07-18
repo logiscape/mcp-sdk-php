@@ -124,8 +124,10 @@ class McpHttpClient {
             $era = $session->isModernMode() ? 'modern (2026-07-28, stateless)' : 'legacy (initialize handshake)';
 
             echo "Server Information:\n";
-            echo "  Name: {$initResult->serverInfo->name}\n";
-            echo "  Version: {$initResult->serverInfo->version}\n";
+            // serverInfo is null when a modern server does not identify
+            // itself (optional _meta field since spec PR #3002).
+            echo "  Name: " . ($initResult->serverInfo?->name ?? '(anonymous)') . "\n";
+            echo "  Version: " . ($initResult->serverInfo?->version ?? '-') . "\n";
             echo "  Protocol Version: {$initResult->protocolVersion}\n";
             echo "  Negotiated Era: {$era}\n";
             

@@ -256,6 +256,13 @@ final class ServerSessionSubscriptionsTest extends TestCase
             $this->assertInstanceOf(JSONRPCResponse::class, $inner, 'The graceful end is a JSON-RPC response');
             $result = json_decode((string) json_encode($inner->result), true);
             $this->assertSame('complete', $result['resultType']);
+            // This write bypasses the session's modern response adaptation,
+            // so the spec-PR-#3002 identity stamp must be applied explicitly.
+            $this->assertSame(
+                ['name' => 'stdio-subscriptions-test', 'version' => '1.0.0'],
+                $result['_meta'][MetaKeys::SERVER_INFO] ?? null,
+                'The stdio graceful end carries the serverInfo identity stamp'
+            );
             $byId[$inner->id->getValue()] = $result['_meta'][MetaKeys::SUBSCRIPTION_ID] ?? null;
         }
         $this->assertSame(51, $byId[51] ?? null, 'Int listen id: _meta subscriptionId equals the response id, typed (schema: RequestId)');

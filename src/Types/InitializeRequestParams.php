@@ -29,10 +29,19 @@ declare(strict_types=1);
 namespace Mcp\Types;
 
 class InitializeRequestParams extends RequestParams {
+    /**
+     * `$clientInfo` is nullable only for the modern (2026-07-28) per-request
+     * adoption path: since spec PR #3002 the `_meta` envelope's clientInfo is
+     * a SHOULD, so a spec-valid modern request may carry no client identity —
+     * the server stores null rather than fabricating one. The legacy
+     * `initialize` request still requires clientInfo on the wire: its parse
+     * path (ClientRequest) rejects a missing value before construction, and
+     * validate() below enforces it for directly constructed instances.
+     */
     public function __construct(
         public readonly string $protocolVersion,
         public readonly ClientCapabilities $capabilities,
-        public readonly Implementation $clientInfo,
+        public readonly ?Implementation $clientInfo,
         ?Meta $_meta = null
     ) {
         // Call parent constructor, passing $_meta if needed. If you don't have meta for Initialize, you can just pass null.
@@ -47,6 +56,11 @@ class InitializeRequestParams extends RequestParams {
             throw new \InvalidArgumentException('Protocol version cannot be empty');
         }
         $this->capabilities->validate();
+        if ($this->clientInfo === null) {
+            // Only the modern envelope may omit client identity; a legacy
+            // initialize request without clientInfo is malformed.
+            throw new \InvalidArgumentException('clientInfo is required on the initialize request');
+        }
         $this->clientInfo->validate();
     }
 
@@ -54,8 +68,10 @@ class InitializeRequestParams extends RequestParams {
         $data = [
             'protocolVersion' => $this->protocolVersion,
             'capabilities' => $this->capabilities,
-            'clientInfo' => $this->clientInfo,
         ];
+        if ($this->clientInfo !== null) {
+            $data['clientInfo'] = $this->clientInfo;
+        }
 
         // Merge with extra fields from parent (ExtraFieldsTrait)
         return array_merge($data, $this->extraFields);

@@ -284,6 +284,22 @@ that will feed the migration guide.
 
 ### Changed
 
+- Spec PR #3002 absorbed (final `2026-07-28` wire revision, merged
+  upstream 2026-07-16): `io.modelcontextprotocol/clientInfo` in the
+  modern request `_meta` envelope is now a SHOULD — identity-less
+  requests are served (a present-but-malformed value is still rejected
+  `-32602`), and `ServerSession::getClientParams()->clientInfo` is
+  nullable on the modern path. Server identity moved into result
+  `_meta["io.modelcontextprotocol/serverInfo"]`: every modern response is
+  stamped (handler-authored values win; legacy responses are never
+  stamped), the top-level `DiscoverResult::$serverInfo` field is
+  **removed** (read identity via `DiscoverResult::getServerInfo()`), and
+  the client reads identity from `_meta` only — new
+  `ClientSession::getServerInfo(): ?Implementation` returns null for
+  servers that do not identify themselves (`InitializeResult::$serverInfo`
+  is now nullable; the legacy handshake still requires it on the wire,
+  and the forced-modern `unknown@0.0.0` placeholder is gone). The value
+  is self-reported and display-only per the spec.
 - The `initialize` handshake now caps at the new
   `Version::LATEST_LEGACY_PROTOCOL_VERSION` (`2025-11-25`) — the handshake
   itself is removed in `2026-07-28` (SEP-2575), so the stateless revision

@@ -423,8 +423,7 @@ final class ServerEraDetectionTest extends TestCase
         $session->processIncoming($this->makeRequest('tools/list', [
             '_meta' => [
                 MetaKeys::PROTOCOL_VERSION => '2026-07-28',
-                MetaKeys::CLIENT_INFO => null,
-                MetaKeys::CLIENT_CAPABILITIES => [],
+                MetaKeys::CLIENT_CAPABILITIES => null,
             ],
         ]));
 
@@ -433,6 +432,207 @@ final class ServerEraDetectionTest extends TestCase
         $this->assertSame(-32602, $inner->error->code);
         $this->assertStringContainsString('must not be null', $inner->error->message);
         $this->assertStringNotContainsString('missing', $inner->error->message);
+    }
+
+    /**
+     * An explicit-null clientInfo is present-but-malformed, not absent:
+     * clientInfo became optional with spec PR #3002, but optional is not
+     * lenient — JSON null is not a valid Implementation, so the envelope
+     * is still rejected -32602 (with the shape message, not the
+     * missing-field one).
+     */
+    public function testExplicitNullClientInfoRejectedAsMalformed(): void
+    {
+        [$transport, $session] = $this->makeSession();
+
+        $session->processIncoming($this->makeRequest('tools/list', [
+            '_meta' => [
+                MetaKeys::PROTOCOL_VERSION => '2026-07-28',
+                MetaKeys::CLIENT_INFO => null,
+                MetaKeys::CLIENT_CAPABILITIES => [],
+            ],
+        ]));
+
+        $inner = $this->lastInner($transport);
+        $this->assertInstanceOf(JSONRPCError::class, $inner);
+        $this->assertSame(-32602, $inner->error->code);
+        $this->assertStringContainsString(MetaKeys::CLIENT_INFO, $inner->error->message);
+        $this->assertStringContainsString('must be an object', $inner->error->message);
+    }
+
+    /**
+     * A modern envelope WITHOUT clientInfo is served (spec PR #3002:
+     * clientInfo is a SHOULD), and the adopted request state carries a
+     * null clientInfo — never a fabricated Implementation.
+     */
+    public function testEnvelopeWithoutClientInfoServedAndAdoptedAsNull(): void
+    {
+        $transport = new EraTestTransport();
+        $options = new InitializationOptions(
+            serverName: 'era-test-server',
+            serverVersion: '1.0.0',
+            capabilities: new ServerCapabilities()
+        );
+        $session = new EraTestableSession($transport, $options);
+        $adoptedClientInfo = 'unset';
+        $session->registerHandlers([
+            'tools/list' => function ($params) use ($session, &$adoptedClientInfo) {
+                $adoptedClientInfo = $session->getClientParams()?->clientInfo;
+                return new ListToolsResult([]);
+            },
+        ]);
+
+        $session->processIncoming($this->makeRequest('tools/list', [
+            '_meta' => [
+                MetaKeys::PROTOCOL_VERSION => '2026-07-28',
+                MetaKeys::CLIENT_CAPABILITIES => [],
+            ],
+        ]));
+
+        $inner = $this->lastInner($transport);
+        $this->assertInstanceOf(JSONRPCResponse::class, $inner, 'A clientInfo-less modern request must be served');
+        $this->assertNull($adoptedClientInfo, 'Identity-less requests adopt null clientInfo, not a fabricated one');
+    }
+
+    /**
+     * The adopted clientInfo preserves the full wire shape — optional
+     * Implementation metadata (title, …) is not dropped to name/version —
+     * while unparseable OPTIONAL metadata (e.g. garbage icons) degrades
+     * to the bare identity instead of failing a request whose envelope
+     * passed validation (only name/version are contract-validated).
+     */
+    public function testAdoptedClientInfoPreservesMetadataAndSurvivesBadIcons(): void
+    {
+        $transport = new EraTestTransport();
+        $options = new InitializationOptions(
+            serverName: 'era-test-server',
+            serverVersion: '1.0.0',
+            capabilities: new ServerCapabilities()
+        );
+        $session = new EraTestableSession($transport, $options);
+        $adopted = [];
+        $session->registerHandlers([
+            'tools/list' => function ($params) use ($session, &$adopted) {
+                $adopted[] = $session->getClientParams()?->clientInfo;
+                return new ListToolsResult([]);
+            },
+        ]);
+
+        $richEnvelope = $this->envelope();
+        $richEnvelope[MetaKeys::CLIENT_INFO] = [
+            'name' => 'era-client', 'version' => '1.0.0', 'title' => 'Era Client',
+        ];
+        $session->processIncoming($this->makeRequest('tools/list', ['_meta' => $richEnvelope], id: 1));
+
+        $badIconsEnvelope = $this->envelope();
+        $badIconsEnvelope[MetaKeys::CLIENT_INFO] = [
+            'name' => 'era-client', 'version' => '1.0.0', 'icons' => 'garbage',
+        ];
+        $session->processIncoming($this->makeRequest('tools/list', ['_meta' => $badIconsEnvelope], id: 2));
+
+        $this->assertInstanceOf(JSONRPCResponse::class, $transport->writtenMessages[0]->message);
+        $this->assertInstanceOf(JSONRPCResponse::class, $transport->writtenMessages[1]->message, 'Bad optional metadata must not fail the request');
+        $this->assertSame('Era Client', $adopted[0]?->title, 'Optional metadata survives adoption');
+        $this->assertSame('era-client', $adopted[1]?->name, 'Degrades to the bare identity');
+        $this->assertNull($adopted[1]?->icons);
+    }
+
+    /**
+     * Every modern result is stamped with the server's identity in
+     * `_meta["io.modelcontextprotocol/serverInfo"]` (a SHOULD on every
+     * response since spec PR #3002).
+     */
+    public function testModernResultStampedWithServerInfoMeta(): void
+    {
+        [$transport, $session] = $this->makeSession();
+
+        $session->processIncoming($this->makeRequest('tools/list', ['_meta' => $this->envelope()]));
+
+        $wire = json_decode(json_encode($transport->writtenMessages[0]), true);
+        $this->assertSame(
+            ['name' => 'era-test-server', 'version' => '1.0.0'],
+            $wire['result']['_meta'][MetaKeys::SERVER_INFO] ?? null,
+            'Modern results must carry the serverInfo identity stamp'
+        );
+    }
+
+    /**
+     * A handler-authored `_meta` serverInfo wins over the SDK stamp — the
+     * stamp only fills the key when absent.
+     */
+    public function testHandlerAuthoredServerInfoMetaWins(): void
+    {
+        $transport = new EraTestTransport();
+        $options = new InitializationOptions(
+            serverName: 'era-test-server',
+            serverVersion: '1.0.0',
+            capabilities: new ServerCapabilities()
+        );
+        $session = new EraTestableSession($transport, $options);
+        $session->registerHandlers([
+            'tools/list' => function ($params) {
+                $meta = new \Mcp\Types\Meta();
+                $meta->setField(MetaKeys::SERVER_INFO, ['name' => 'handler-brand', 'version' => '9.9.9']);
+                return new ListToolsResult([], _meta: $meta);
+            },
+        ]);
+
+        $session->processIncoming($this->makeRequest('tools/list', ['_meta' => $this->envelope()]));
+
+        $wire = json_decode(json_encode($transport->writtenMessages[0]), true);
+        $this->assertSame(
+            ['name' => 'handler-brand', 'version' => '9.9.9'],
+            $wire['result']['_meta'][MetaKeys::SERVER_INFO] ?? null,
+            'A handler-authored identity must not be overwritten by the stamp'
+        );
+    }
+
+    /**
+     * The stamp is clone-on-write: a handler that caches and reuses ONE
+     * result instance across requests and eras must never observe the
+     * modern stamp in its own state, and the legacy response must not
+     * carry a leaked stamp (review finding on adaptResponseForClient's
+     * shallow clone: the nested Meta is still the handler's instance).
+     */
+    public function testServerInfoStampDoesNotLeakIntoReusedHandlerResult(): void
+    {
+        $transport = new EraTestTransport();
+        $options = new InitializationOptions(
+            serverName: 'era-test-server',
+            serverVersion: '1.0.0',
+            capabilities: new ServerCapabilities()
+        );
+        $session = new EraTestableSession($transport, $options);
+        $cached = new ListToolsResult([]);
+        $session->registerHandlers([
+            'tools/list' => fn($params) => $cached,
+        ]);
+
+        // Legacy handshake first, then a modern request, then a legacy one —
+        // all three answered from the same cached instance.
+        $session->processIncoming($this->makeRequest('initialize', [
+            'protocolVersion' => '2025-06-18',
+            'capabilities' => [],
+            'clientInfo' => ['name' => 'legacy', 'version' => '1.0'],
+        ], id: 1));
+        $session->processIncoming($this->makeRequest('tools/list', ['_meta' => $this->envelope()], id: 2));
+        $session->processIncoming($this->makeRequest('tools/list', [], id: 3));
+
+        $modernWire = json_decode(json_encode($transport->writtenMessages[1]), true);
+        $this->assertArrayHasKey(
+            MetaKeys::SERVER_INFO,
+            $modernWire['result']['_meta'] ?? [],
+            'The modern response carries the stamp'
+        );
+
+        $this->assertNull($cached->_meta, 'The handler\'s cached result must never be mutated by the stamp');
+
+        $legacyWire = json_decode(json_encode($transport->writtenMessages[2]), true);
+        $this->assertArrayNotHasKey(
+            '_meta',
+            $legacyWire['result'],
+            'The legacy response must not carry a leaked modern serverInfo stamp'
+        );
     }
 
     /**

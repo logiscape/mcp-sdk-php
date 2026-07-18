@@ -124,7 +124,11 @@ version, the per-request `_meta` envelope, and the type-system changes.
   implement the `server/discover` method reusing `Server::getCapabilities()`.
   Its result is `InitializeResult` minus negotiation plus caching:
   `supportedVersions: string[]`, `capabilities`, `serverInfo`,
-  `instructions?`, **plus** the required `resultType` discriminator (a
+  `instructions?`. **Drift note (2026-07-17):** spec PR #3002 later
+  demoted `clientInfo` to a SHOULD and moved `serverInfo` out of the
+  DiscoverResult body into result `_meta` — absorbed by the post-G3
+  drift-absorption milestone below. The result additionally carries the
+  required `resultType` discriminator (a
   SEP-2322 ripple on *every* modern result; `"complete"` outside MRTR) and
   required `ttlMs`/`cacheScope` (the schema makes `DiscoverResult` a sixth
   SEP-2549 carrier). Error surfaces fixed by the schema:
@@ -1806,6 +1810,113 @@ sections and replacing the README beta notice remain release-cut
 zero failures, baselines empty; draft track regression-free (aggregate
 exit 0, all failures baselined); every relative link in the touched
 documents resolves.
+
+---
+
+## Post-G3 drift absorption: spec PR #3002 (WS1/WS2/WS3 surface)
+
+Per the release-gates rule below ("if the final spec lands changes after
+G3, the affected workstreams re-open as new milestones"), the first — and
+so far only — post-RC normative schema change re-opened the stateless
+envelope and discovery surface as one milestone.
+
+**The upstream change (spec PR #3002, merged 2026-07-16,
+rc-high-priority, schema.ts/schema.json):**
+
+- `io.modelcontextprotocol/clientInfo` in the modern request `_meta`
+  envelope demoted from required to SHOULD — an identity-less modern
+  request is valid.
+- New `ResultMetaObject`: servers SHOULD identify themselves via
+  `_meta["io.modelcontextprotocol/serverInfo"]` (an `Implementation`) on
+  every response unless configured not to. The value is self-reported and
+  unverified; clients SHOULD NOT base behavior or security decisions on
+  it.
+- `DiscoverResult` **wire change**: the top-level `serverInfo` field is
+  removed — identity moved into result `_meta` like everywhere else.
+
+**Research (step 1, 2026-07-17):** shape triply confirmed before
+implementation — the merged schema diff; conformance PR #403 (merged
+2026-07-17 on main: the missing-clientInfo rejection probe deleted, a new
+*required* serves-without-clientInfo check, WARNING-level SHOULD checks
+for client identity sending and server identity stamping, DiscoverResult
+spec-types updated); and TypeScript SDK PR #2513 (same policies:
+meta-only identity read, anonymous fallback, handler-authored stamp
+precedence, modern-only stamping, no off-switch — always stamping
+satisfies the SHOULD). The go SDK ships the new shape from
+v1.7.0-pre.3; C# had not adopted it as of 2026-07-17.
+
+**Implemented (2026-07-17):**
+
+- **Server envelope validation** (`ServerSession::validateModernRequestMeta`):
+  required keys reduced to protocolVersion + clientCapabilities; a
+  *present* clientInfo (including explicit null) must still be a
+  well-formed Implementation (-32602 otherwise).
+- **Request-state adoption** (`adoptModernRequestState` /
+  `InitializeRequestParams`): `clientInfo` is now `?Implementation` —
+  null for identity-less modern requests, never fabricated. The legacy
+  `initialize` schema is unchanged (its parse path rejects a missing
+  clientInfo before construction, and `validate()` still requires it).
+- **DiscoverResult**: top-level `serverInfo` property removed; identity
+  is read leniently from `_meta` via `getServerInfo(): ?Implementation`
+  (malformed → null; display-only per spec). A stray top-level
+  `serverInfo` from a pre-#3002 peer is discarded on parse so
+  ExtraFieldsTrait cannot re-emit it. No dual-shape acceptance,
+  matching the reference SDKs.
+- **Client identity model**: `InitializeResult::$serverInfo` is
+  `?Implementation` (the legacy handshake still enforces presence —
+  `ClientSession::initialize()` rejects a serverInfo-less legacy result;
+  the type is lenient so a persisted anonymous modern session can resume
+  through `fromResponseData`). New accessor
+  `ClientSession::getServerInfo(): ?Implementation`; the forced-modern
+  `unknown@0.0.0` placeholder fabrication is gone.
+- **Response stamping** (`ServerSession::adaptResultForModernClient` →
+  `stampServerInfoMeta`): every modern-era result — `input_required`
+  included — gets `_meta["io.modelcontextprotocol/serverInfo"]` unless
+  the handler authored one; the nested `Meta` is cloned before mutation
+  (clone-on-write — the shallow response clone still shares the
+  handler's Meta instance). Legacy responses are never stamped. Both
+  graceful listen-close paths, which bypass the adapter — stdio
+  `respondToActiveSubscriptions()` and the HTTP lifetime-budget close in
+  `HttpServerRunner` — stamp explicitly. `handleDiscover()` stamps
+  directly (discover can be answered where the modern adaptation never
+  runs).
+
+**Review round (step 3, 2026-07-17):** two findings, both fixed. (P2)
+`DiscoverResult::getServerInfo()` rebuilt the identity from name/version
+only, silently dropping valid Implementation metadata (title,
+description, icons, websiteUrl) and extension fields — it now parses
+through `Implementation::fromArray()` with lenient exception handling
+(malformed still → null). The same silent drop existed in the
+server-side clientInfo adoption (`implementationFromEnvelopeValue()`),
+fixed symmetrically with one safeguard: unparseable OPTIONAL metadata
+(e.g. garbage `icons`) degrades to the bare name/version identity
+instead of failing a request whose envelope passed validation — only
+name/version are contract-validated. (P3) Two stale "all three envelope
+fields required" comments (`ClientSession::writeMessage()`,
+`DiscoverRequest`) updated to the post-#3002 SHOULD wording. Both fixes
+are pinned by tests (full-Implementation preservation on both sides,
+bad-icons degradation).
+
+**Verification:** `composer check` green (1296 tests / 5108 assertions;
+PHPStan clean) with new coverage for: served-without-clientInfo (+ null
+adoption), explicit-null clientInfo rejected as malformed, stamped
+normal/input_required results, handler-authored stamp precedence,
+reused-result clone-on-write (no cross-era leak), unstamped legacy
+responses, both listen-close stamps, `_meta`-only discover identity
+(anonymous, malformed, and stale-top-level cases), forced-modern null
+identity, legacy initialize serverInfo strictness, and the anonymous
+resume round-trip. Stable conformance: 325 passed / 0 failed, baseline
+still empty. Draft conformance: aggregate exit 0; `server-stateless`
+moved 27/28 → 24/28 **because the pinned alpha.9 tool still asserts the
+pre-#3002 shapes** — three checks whose replacements the SDK already
+passes per conformance PR #403; the baseline entry documents both causes
+and the three retire at the next draft-pin bump (see
+`conformance/conformance-draft-baseline.yml`).
+
+**Status (2026-07-17):** implemented, verified, and code-reviewed with
+findings addressed and re-verified (steps 1–3); human approved.
+G4 unchanged: final spec publication + a clean run against the
+then-current suite.
 
 ---
 

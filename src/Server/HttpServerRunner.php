@@ -455,8 +455,14 @@ class HttpServerRunner extends ServerRunner
             // server is ending the subscription on its own initiative, so
             // answer the original listen request with the graceful
             // end-of-subscription result (spec PR #2953) as the stream's
-            // final frame before closing.
+            // final frame before closing. This write bypasses the session's
+            // modern response adaptation, so the spec-PR-#3002 serverInfo
+            // identity is stamped explicitly.
             $result = new \Mcp\Types\SubscriptionsListenResult($subscriptionId);
+            $result->_meta?->setField(MetaKeys::SERVER_INFO, new \Mcp\Types\Implementation(
+                name: $this->initOptions->serverName,
+                version: $this->initOptions->serverVersion
+            ));
             $io->write('data: ' . json_encode([
                 'jsonrpc' => '2.0',
                 'id' => $listen->requestId->getValue(),

@@ -159,6 +159,29 @@ class ClientSessionInitializeTest extends TestCase
     }
 
     /**
+     * The LEGACY handshake still requires serverInfo on the wire: the
+     * InitializeResult type is nullable only for the modern era (spec PR
+     * #3002 anonymous servers / persisted-session resume), so a legacy
+     * initialize result without serverInfo is rejected — initialize()
+     * enforces what the type alone no longer can.
+     */
+    public function testInitializeRejectsResultWithoutServerInfo(): void
+    {
+        $readStream = new MemoryStream();
+        $writeStream = new MemoryStream();
+
+        $readStream->send($this->createResponse([
+            'protocolVersion' => Version::LATEST_LEGACY_PROTOCOL_VERSION,
+            'capabilities' => [],
+        ]));
+        $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('missing serverInfo');
+        $session->initialize();
+    }
+
+    /**
      * Test that getNegotiatedProtocolVersion() succeeds after initialization.
      *
      * Verifies that the protocol version is correctly negotiated and

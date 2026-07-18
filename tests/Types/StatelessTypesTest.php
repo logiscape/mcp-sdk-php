@@ -98,15 +98,18 @@ final class StatelessTypesTest extends TestCase
     /**
      * DiscoverResult round-trips through fromResponseData()/jsonSerialize()
      * with all schema-required fields (supportedVersions, capabilities,
-     * serverInfo, resultType, ttlMs, cacheScope) plus optional instructions,
-     * and preserves unknown fields via ExtraFieldsTrait.
+     * resultType, ttlMs, cacheScope) plus optional instructions, preserves
+     * unknown fields via ExtraFieldsTrait, and reads the server identity
+     * from `_meta["io.modelcontextprotocol/serverInfo"]` (spec PR #3002).
      */
     public function testDiscoverResultRoundTrip(): void {
         $data = [
             'resultType' => 'complete',
             'supportedVersions' => ['2026-07-28', '2025-11-25'],
             'capabilities' => ['tools' => ['listChanged' => true], 'resources' => []],
-            'serverInfo' => ['name' => 'ExampleServer', 'version' => '1.0.0'],
+            '_meta' => [
+                MetaKeys::SERVER_INFO => ['name' => 'ExampleServer', 'version' => '1.0.0'],
+            ],
             'instructions' => 'Use the tools.',
             'ttlMs' => 3600000,
             'cacheScope' => 'public',
@@ -116,7 +119,8 @@ final class StatelessTypesTest extends TestCase
         $result = DiscoverResult::fromResponseData($data);
 
         $this->assertSame(['2026-07-28', '2025-11-25'], $result->supportedVersions);
-        $this->assertSame('ExampleServer', $result->serverInfo->name);
+        $this->assertSame('ExampleServer', $result->getServerInfo()?->name);
+        $this->assertSame('1.0.0', $result->getServerInfo()?->version);
         $this->assertSame('Use the tools.', $result->instructions);
         $this->assertSame('complete', $result->resultType);
         $this->assertSame(3600000, $result->getTtlMs());
@@ -128,9 +132,78 @@ final class StatelessTypesTest extends TestCase
         $this->assertSame('complete', $wire['resultType']);
         $this->assertSame(3600000, $wire['ttlMs']);
         $this->assertSame('public', $wire['cacheScope']);
-        $this->assertSame('ExampleServer', $wire['serverInfo']['name']);
+        $this->assertSame('ExampleServer', $wire['_meta'][MetaKeys::SERVER_INFO]['name'] ?? null);
         $this->assertArrayHasKey('tools', $wire['capabilities']);
         $this->assertSame(['x' => 1], $wire['futureField']);
+    }
+
+    /**
+     * A stray TOP-LEVEL serverInfo (the pre-#3002 wire shape) is discarded
+     * on parse: it is not read as identity, does not land in extraFields,
+     * and is not re-emitted on serialization. Identity is `_meta`-only.
+     */
+    public function testDiscoverResultDiscardsStrayTopLevelServerInfo(): void {
+        $result = DiscoverResult::fromResponseData([
+            'resultType' => 'complete',
+            'supportedVersions' => ['2026-07-28'],
+            'capabilities' => [],
+            'serverInfo' => ['name' => 'stale-shape', 'version' => '0.1.0'],
+            'ttlMs' => 0,
+            'cacheScope' => 'public',
+        ]);
+
+        $this->assertNull($result->getServerInfo(), 'The old body field is never read as identity');
+        $wire = json_decode(json_encode($result), true);
+        $this->assertArrayNotHasKey('serverInfo', $wire, 'The stray field must not be re-emitted');
+    }
+
+    /**
+     * getServerInfo() preserves the FULL Implementation shape — optional
+     * metadata (title, websiteUrl, …) and extension fields survive the
+     * parse, not just name/version (review finding on the #3002 change).
+     */
+    public function testDiscoverResultServerInfoPreservesFullImplementation(): void {
+        $result = DiscoverResult::fromResponseData([
+            'resultType' => 'complete',
+            'supportedVersions' => ['2026-07-28'],
+            'capabilities' => [],
+            '_meta' => [MetaKeys::SERVER_INFO => [
+                'name' => 'rich-server',
+                'version' => '2.0.0',
+                'title' => 'Rich Server',
+                'websiteUrl' => 'https://example.com',
+                'icons' => [['src' => 'https://example.com/icon.png']],
+                'x-vendor-extra' => 'kept',
+            ]],
+            'ttlMs' => 0,
+            'cacheScope' => 'public',
+        ]);
+
+        $info = $result->getServerInfo();
+        $this->assertNotNull($info);
+        $this->assertSame('rich-server', $info->name);
+        $this->assertSame('Rich Server', $info->title);
+        $this->assertSame('https://example.com', $info->websiteUrl);
+        $this->assertCount(1, $info->icons ?? []);
+        $wire = json_decode((string) json_encode($info), true);
+        $this->assertSame('kept', $wire['x-vendor-extra'] ?? null, 'Extension fields survive');
+    }
+
+    /**
+     * A malformed `_meta` identity is treated as absent, not fatal: the
+     * field is self-reported, unverified, and display-only per the spec.
+     */
+    public function testDiscoverResultMalformedMetaServerInfoTreatedAsAbsent(): void {
+        $result = DiscoverResult::fromResponseData([
+            'resultType' => 'complete',
+            'supportedVersions' => ['2026-07-28'],
+            'capabilities' => [],
+            '_meta' => [MetaKeys::SERVER_INFO => ['name' => '', 'version' => 7]],
+            'ttlMs' => 0,
+            'cacheScope' => 'public',
+        ]);
+
+        $this->assertNull($result->getServerInfo());
     }
 
     public function testDiscoverResultRejectsEmptySupportedVersions(): void {
@@ -138,7 +211,6 @@ final class StatelessTypesTest extends TestCase
         (new DiscoverResult(
             supportedVersions: [],
             capabilities: new ServerCapabilities(),
-            serverInfo: new Implementation(name: 's', version: '1'),
         ))->validate();
     }
 

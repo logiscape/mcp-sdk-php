@@ -80,7 +80,10 @@ try {
         // The exact identifier stamped into each request's _meta envelope.
         echo "Wire version:      {$session->getModernWireVersion()}\n";
     }
-    echo "Server:            {$init->serverInfo->name} {$init->serverInfo->version}\n";
+    // getServerInfo() is null when a modern server chose not to identify
+    // itself — identity is an optional _meta field since spec PR #3002.
+    $identity = $session->getServerInfo();
+    echo 'Server:            ' . ($identity !== null ? "{$identity->name} {$identity->version}" : '(anonymous)') . "\n";
 
     // From here on, the code is era-agnostic.
     $tools = $session->listTools();

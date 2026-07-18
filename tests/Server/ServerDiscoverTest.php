@@ -114,17 +114,24 @@ final class ServerDiscoverTest extends TestCase
         // The advertised list covers every negotiable revision plus the
         // RC-window draft alias for the stateless revision (WS2).
         $this->assertSame(Version::advertisedSupportedVersions(), $result->supportedVersions);
-        $this->assertSame('discover-test-server', $result->serverInfo->name);
-        $this->assertSame('3.2.1', $result->serverInfo->version);
+        $this->assertSame('discover-test-server', $result->getServerInfo()?->name);
+        $this->assertSame('3.2.1', $result->getServerInfo()?->version);
         $this->assertSame('complete', $result->resultType);
         $this->assertSame(0, $result->getTtlMs());
         $this->assertSame('public', $result->getCacheScope());
 
-        // All required wire keys present after serialization
+        // All required wire keys present after serialization. Since spec
+        // PR #3002 the identity is _meta-only: no top-level serverInfo.
         $wire = json_decode(json_encode($result), true);
-        foreach (['supportedVersions', 'capabilities', 'serverInfo', 'resultType', 'ttlMs', 'cacheScope'] as $key) {
+        foreach (['supportedVersions', 'capabilities', 'resultType', 'ttlMs', 'cacheScope'] as $key) {
             $this->assertArrayHasKey($key, $wire, "Discover result must carry '$key'");
         }
+        $this->assertArrayNotHasKey('serverInfo', $wire, 'Top-level serverInfo was removed by spec PR #3002');
+        $this->assertSame(
+            ['name' => 'discover-test-server', 'version' => '3.2.1'],
+            $wire['_meta'][MetaKeys::SERVER_INFO] ?? null,
+            'Identity must ride _meta["io.modelcontextprotocol/serverInfo"]'
+        );
     }
 
     /**
@@ -172,8 +179,8 @@ final class ServerDiscoverTest extends TestCase
         );
         $this->assertSame(
             json_encode($initResult->serverInfo),
-            json_encode($discoverResult->serverInfo),
-            'Discover serverInfo must be wire-identical to initialize serverInfo'
+            json_encode($discoverResult->getServerInfo()),
+            'Discover _meta serverInfo must be wire-identical to initialize serverInfo'
         );
     }
 
@@ -197,6 +204,28 @@ final class ServerDiscoverTest extends TestCase
         $this->assertStringContainsString($expectedFragment, $inner->error->message);
     }
 
+    /**
+     * A modern envelope WITHOUT clientInfo is served, not rejected:
+     * spec PR #3002 demoted clientInfo to a SHOULD (the conformance
+     * suite's sep-2575-request-meta-client-info-optional check asserts
+     * exactly this). A present-but-malformed value is still -32602 —
+     * covered by the invalid-envelope provider above.
+     */
+    public function testDiscoverServesEnvelopeWithoutClientInfo(): void
+    {
+        [$transport, $session] = $this->makeSession();
+
+        $session->processIncoming($this->makeDiscoverMessage([
+            MetaKeys::PROTOCOL_VERSION => '2026-07-28',
+            MetaKeys::CLIENT_CAPABILITIES => [],
+        ]));
+
+        $this->assertCount(1, $transport->writtenMessages);
+        $inner = $transport->writtenMessages[0]->message;
+        $this->assertInstanceOf(JSONRPCResponse::class, $inner, 'clientInfo-less envelope must be served');
+        $this->assertInstanceOf(DiscoverResult::class, $inner->result);
+    }
+
     public static function invalidEnvelopeProvider(): array
     {
         return [
@@ -208,13 +237,9 @@ final class ServerDiscoverTest extends TestCase
                 ],
                 MetaKeys::PROTOCOL_VERSION,
             ],
-            'missing clientInfo' => [
-                [
-                    MetaKeys::PROTOCOL_VERSION => '2026-07-28',
-                    MetaKeys::CLIENT_CAPABILITIES => [],
-                ],
-                MetaKeys::CLIENT_INFO,
-            ],
+            // NOTE: 'missing clientInfo' is deliberately NOT here — spec PR
+            // #3002 demoted clientInfo to a SHOULD, so its absence is a
+            // valid envelope (see testDiscoverServesEnvelopeWithoutClientInfo).
             'missing clientCapabilities' => [
                 [
                     MetaKeys::PROTOCOL_VERSION => '2026-07-28',

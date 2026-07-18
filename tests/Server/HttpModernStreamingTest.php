@@ -260,6 +260,14 @@ final class HttpModernStreamingTest extends TestCase
             $final['result']['_meta'][MetaKeys::SUBSCRIPTION_ID],
             'The graceful-end _meta subscriptionId equals the response id, typed (schema: RequestId)'
         );
+        // The lifetime-budget close bypasses the session's modern response
+        // adaptation, so the spec-PR-#3002 identity stamp is applied
+        // explicitly by the runner.
+        $this->assertSame(
+            ['name' => 'modern-streaming-test', 'version' => '1.0.0'],
+            $final['result']['_meta'][MetaKeys::SERVER_INFO] ?? null,
+            'The HTTP graceful end carries the serverInfo identity stamp'
+        );
     }
 
     public function testListenDeliversMatchingBusEventsTagged(): void

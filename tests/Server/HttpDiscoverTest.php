@@ -138,8 +138,10 @@ final class HttpDiscoverTest extends TestCase
         $result = $body['result'];
         $this->assertNotEmpty($result['supportedVersions']);
         $this->assertContains('2026-07-28', $result['supportedVersions']);
-        $this->assertSame('http-discover-test', $result['serverInfo']['name']);
-        $this->assertSame('2.0.0', $result['serverInfo']['version']);
+        // Identity rides _meta since spec PR #3002; no top-level serverInfo.
+        $this->assertArrayNotHasKey('serverInfo', $result);
+        $this->assertSame('http-discover-test', $result['_meta'][MetaKeys::SERVER_INFO]['name'] ?? null);
+        $this->assertSame('2.0.0', $result['_meta'][MetaKeys::SERVER_INFO]['version'] ?? null);
         $this->assertArrayHasKey('tools', $result['capabilities']);
         $this->assertSame('complete', $result['resultType']);
         $this->assertSame(0, $result['ttlMs']);

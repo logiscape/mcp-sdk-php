@@ -87,7 +87,10 @@ $session = $client->connect('https://example.com/mcp-server.php');
 // connect() has already negotiated the protocol era by the time it
 // returns; getInitializeResult() is populated on both eras.
 $initResult = $session->getInitializeResult();
-echo "Connected to {$initResult->serverInfo->name} {$initResult->serverInfo->version}\n";
+// getServerInfo() is null when a modern server chose not to identify
+// itself (identity is an optional `_meta` field on 2026-07-28).
+$identity = $session->getServerInfo();
+echo 'Connected to ' . ($identity !== null ? "{$identity->name} {$identity->version}" : 'an anonymous server') . "\n";
 echo "Negotiated protocol version: {$initResult->protocolVersion}\n";
 
 // List the tools the server exposes.
@@ -104,6 +107,7 @@ A few things to know about this minimal example:
 
 - `new Client()` creates the orchestrator. It detects whether the target is a stdio command or an HTTP(S) URL.
 - `connect()` builds the transport, negotiates the protocol era (see [Negotiating Protocol Eras](#negotiating-protocol-eras)), and returns a ready-to-use `ClientSession`. Against a modern (`2026-07-28`) server that means a `server/discover` exchange — there is no handshake, and `getInitializeResult()` is synthesized from the discover result so capability-inspection code works unchanged. Against a legacy server it means the classic `initialize` handshake plus the `initialized` notification.
+- `getServerInfo()` returns the server's self-reported identity, or `null` when a modern server chose not to identify itself: on `2026-07-28` the identity is an optional `_meta` field on responses, so anonymous servers are valid. Legacy sessions always have it. Treat the value as display-only — it is self-reported and unverified.
 - The returned `ClientSession` is what you call methods on: `listTools()`, `callTool()`, `readResource()`, etc.
 - `close()` tears everything down cleanly, sending an HTTP `DELETE` (or terminating the subprocess) so the server can free its session.
 
@@ -124,8 +128,7 @@ $session = $client->connect(
     args: ['/absolute/path/to/server.php']
 );
 
-$initResult = $session->getInitializeResult();
-echo "Connected to {$initResult->serverInfo->name}\n";
+echo "Connected to " . ($session->getServerInfo()?->name ?? '(anonymous)') . "\n";
 
 $client->close();
 ```
@@ -680,7 +683,7 @@ $session = $client->connect(
     ],
 );
 
-echo "Connected: {$session->getInitializeResult()->serverInfo->name}\n";
+echo "Connected: " . ($session->getServerInfo()?->name ?? '(anonymous)') . "\n";
 $client->close();
 ```
 
@@ -846,7 +849,7 @@ $session = $client->connect(
     env: ['oauth' => $oauthConfig],
 );
 
-echo "Authenticated and connected to {$session->getInitializeResult()->serverInfo->name}\n";
+echo "Authenticated and connected to " . ($session->getServerInfo()?->name ?? '(anonymous)') . "\n";
 
 // Do work...
 foreach ($session->listTools()->tools as $tool) {

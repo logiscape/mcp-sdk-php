@@ -839,11 +839,17 @@ class ServerSession extends BaseSession {
             try {
                 // The _meta subscriptionId is typed RequestId and MUST
                 // equal this response's own id — original wire type
-                // preserved, never stringified.
+                // preserved, never stringified. This write bypasses
+                // writeMessage()'s modern adaptation (deliberately — see
+                // the docblock above), so the spec-PR-#3002 serverInfo
+                // identity is stamped explicitly; the result's _meta is
+                // its own (built in the constructor), never handler state.
+                $result = new SubscriptionsListenResult($requestId->getValue());
+                $result->_meta?->setField(MetaKeys::SERVER_INFO, $this->serverIdentity());
                 $this->transport->writeMessage(new JsonRpcMessage(new JSONRPCResponse(
                     jsonrpc: '2.0',
                     id: $requestId,
-                    result: new SubscriptionsListenResult($requestId->getValue())
+                    result: $result
                 )));
             } catch (\Throwable $e) {
                 $this->logger->info(
@@ -927,27 +933,47 @@ class ServerSession extends BaseSession {
         $fields = $meta->getExtraFields();
         $this->negotiatedProtocolVersion = Version::canonicalizeVersion($wireVersion);
         $this->initializationState = InitializationState::Initialized;
+        // clientInfo is a SHOULD (spec PR #3002): an identity-less request
+        // adopts null rather than a fabricated Implementation. The value was
+        // already shape-validated when present (validateModernRequestMeta).
+        $clientInfoValue = $fields[MetaKeys::CLIENT_INFO] ?? null;
         $this->clientParams = new InitializeRequestParams(
             protocolVersion: $this->negotiatedProtocolVersion,
             capabilities: self::clientCapabilitiesFromEnvelopeValue($fields[MetaKeys::CLIENT_CAPABILITIES]),
-            clientInfo: self::implementationFromEnvelopeValue($fields[MetaKeys::CLIENT_INFO]),
+            clientInfo: $clientInfoValue === null ? null : self::implementationFromEnvelopeValue($clientInfoValue),
         );
     }
 
     /**
-     * Coerce a validated _meta clientInfo value into an Implementation.
+     * Coerce a validated _meta clientInfo value into an Implementation,
+     * preserving the full wire shape — optional metadata (title,
+     * description, icons, websiteUrl) and extension fields, not just
+     * name/version. The value has already passed
+     * isValidImplementationValue(), so name/version are guaranteed; the
+     * OPTIONAL metadata is best-effort — the envelope contract only
+     * validates name/version, so a value with, say, unparseable icons
+     * degrades to the bare identity rather than failing the request.
      */
     private static function implementationFromEnvelopeValue(mixed $value): Implementation {
         if ($value instanceof Implementation) {
             return $value;
         }
         if ($value instanceof \stdClass) {
-            $value = (array) $value;
+            // Deep-normalize: nested structures (e.g. icons) may also be
+            // stdClass on the wire path.
+            $value = json_decode((string) json_encode($value), true);
         }
-        return new Implementation(
-            name: (string) ($value['name'] ?? ''),
-            version: (string) ($value['version'] ?? '')
-        );
+        if (!is_array($value)) {
+            $value = [];
+        }
+        try {
+            return Implementation::fromArray($value);
+        } catch (\Throwable $e) {
+            return new Implementation(
+                name: (string) ($value['name'] ?? ''),
+                version: (string) ($value['version'] ?? '')
+            );
+        }
     }
 
     /**
@@ -984,10 +1010,6 @@ class ServerSession extends BaseSession {
         $result = new DiscoverResult(
             supportedVersions: Version::advertisedSupportedVersions(),
             capabilities: $this->initOptions->capabilities,
-            serverInfo: new Implementation(
-                name: $this->initOptions->serverName,
-                version: $this->initOptions->serverVersion
-            ),
         );
         // Required wire fields under 2026-07-28. The discover result is
         // identical for every client of this server (capabilities are
@@ -997,6 +1019,17 @@ class ServerSession extends BaseSession {
         // deployment cadence.
         $result->resultType = Result::RESULT_TYPE_COMPLETE;
         $result->setCacheHints(0, CacheableResult::CACHE_SCOPE_PUBLIC);
+
+        // Identity rides _meta since spec PR #3002 (the top-level
+        // serverInfo field no longer exists). Stamped here rather than
+        // relying on the generic modern-response stamp: discover may be
+        // answered on a session whose era state is legacy or
+        // uninitialized (a probe on an already-initialized stdio session,
+        // or before any handshake), where writeMessage()'s modern
+        // adaptation never runs.
+        $meta = new Meta();
+        $meta->setField(MetaKeys::SERVER_INFO, $this->serverIdentity());
+        $result->_meta = $meta;
 
         $respond($result);
     }
@@ -1056,9 +1089,10 @@ class ServerSession extends BaseSession {
             );
         }
 
+        // clientInfo is deliberately absent from this list: spec PR #3002
+        // demoted it to a SHOULD, so a modern request without it is valid.
         $required = [
             MetaKeys::PROTOCOL_VERSION,
-            MetaKeys::CLIENT_INFO,
             MetaKeys::CLIENT_CAPABILITIES,
         ];
         $fields = $meta->getExtraFields();
@@ -1085,7 +1119,11 @@ class ServerSession extends BaseSession {
             );
         }
 
-        if (!self::isValidImplementationValue($fields[MetaKeys::CLIENT_INFO])) {
+        // A present clientInfo (including an explicit null) must still be a
+        // well-formed Implementation — optional is not the same as lenient.
+        if (array_key_exists(MetaKeys::CLIENT_INFO, $fields)
+            && !self::isValidImplementationValue($fields[MetaKeys::CLIENT_INFO])
+        ) {
             return new \Mcp\Shared\ErrorData(
                 code: -32602,
                 message: 'Invalid params: ' . MetaKeys::CLIENT_INFO
@@ -1800,9 +1838,11 @@ class ServerSession extends BaseSession {
 
     /**
      * Ensure a result carries the fields the 2026-07-28 schema requires:
-     * the `resultType` discriminator on every result, and the SEP-2549
-     * `ttlMs` / `cacheScope` caching hints on cacheable results. Handlers
-     * that already set them are left untouched; bare results get the most
+     * the `resultType` discriminator on every result, the SEP-2549
+     * `ttlMs` / `cacheScope` caching hints on cacheable results, and the
+     * server's identity in `_meta["io.modelcontextprotocol/serverInfo"]`
+     * (a SHOULD on every response since spec PR #3002). Handlers that
+     * already set them are left untouched; bare results get the most
      * conservative defaults (ttlMs 0 = immediately stale, scope "private").
      */
     private function adaptResultForModernClient(mixed $response): mixed {
@@ -1818,8 +1858,40 @@ class ServerSession extends BaseSession {
                     $response->getCacheScope() ?? CacheableResult::CACHE_SCOPE_PRIVATE
                 );
             }
+            $this->stampServerInfoMeta($response);
         }
         return $response;
+    }
+
+    /**
+     * Stamp this server's identity into a result's `_meta` (spec PR #3002,
+     * modern era only — the caller gates on era; legacy responses are never
+     * stamped). A handler-authored value wins: the stamp only fills the key
+     * when it is absent or null. The nested Meta is cloned before mutation
+     * ($response itself is already a shallow clone, but its _meta is still
+     * the handler's own instance — results may be cached by handlers and
+     * reused across requests and eras, so the stamp must never write into
+     * handler state).
+     */
+    private function stampServerInfoMeta(Result $response): void {
+        if ($response->_meta?->getField(MetaKeys::SERVER_INFO) !== null) {
+            return;
+        }
+        $meta = $response->_meta !== null ? clone $response->_meta : new Meta();
+        $meta->setField(MetaKeys::SERVER_INFO, $this->serverIdentity());
+        $response->_meta = $meta;
+    }
+
+    /**
+     * This server's own identity, as advertised in the legacy initialize
+     * result, the discover result, and (since spec PR #3002) every modern
+     * response's `_meta`.
+     */
+    private function serverIdentity(): Implementation {
+        return new Implementation(
+            name: $this->initOptions->serverName,
+            version: $this->initOptions->serverVersion
+        );
     }
 
     /**

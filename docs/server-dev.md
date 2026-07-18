@@ -118,9 +118,9 @@ https://yoursite.com/mcp-server.php
 The `2026-07-28` spec revision removes connection state from the protocol:
 there is no `initialize` handshake, no `Mcp-Session-Id` header, and no
 server-held session. Every request is **self-contained** -- it carries the
-protocol version, client info, and client capabilities in its `_meta`
-envelope -- and clients learn what a server offers from the cacheable
-`server/discover` method. This is exactly the model that fits typical PHP
+protocol version and client capabilities (plus, optionally, client info)
+in its `_meta` envelope -- and clients learn what a server offers from the
+cacheable `server/discover` method. This is exactly the model that fits typical PHP
 web hosting, where every HTTP request is served by a fresh process.
 
 **None of this requires anything special in your server code.** You
