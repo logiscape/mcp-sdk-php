@@ -59,7 +59,7 @@ the feature-lifecycle deprecation registry — is in the
 You can install the v2 beta via composer:
 
 ```bash
-composer require logiscape/mcp-sdk-php:2.0.0-beta4
+composer require logiscape/mcp-sdk-php:2.0.0-beta5
 ```
 
 (Plain `composer require logiscape/mcp-sdk-php` installs the stable v1
@@ -226,7 +226,7 @@ the upstream RC-validation suite, with the few remaining entries in
 documented as upstream-tool issues. See
 [conformance/README.md](conformance/README.md) for the dual-track rules.
 
-v2 is in **beta** (latest pre-release: `v2.0.0-beta4`); the final `v2.0.0`
+v2 is in **beta** (latest pre-release: `v2.0.0-beta5`); the final `v2.0.0`
 is gated on the `2026-07-28` spec's publication and a clean conformance
 run against the suite current at that date, per the
 [v2 development plan](docs/v2-development-plan.md).
@@ -243,7 +243,7 @@ This PHP SDK was developed by:
 - Claude Opus 4.5
 - Claude Fable 5
 
-Code reviews and refactoring done by Josh Abbott originally using OpenAI ChatGPT o1 pro mode, and later by OpenAI Codex using GPT-5.5.
+Code reviews and refactoring done by Josh Abbott originally using OpenAI ChatGPT o1 pro mode, and later by OpenAI Codex using GPT-5.5 and GPT-5.6 Sol.
 
 Special acknowledgement to [Roman Pronskiy](https://github.com/pronskiy) for simplifying the server building process with his convenience wrapper project: [https://github.com/pronskiy/mcp](https://github.com/pronskiy/mcp)
 
