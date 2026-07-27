@@ -62,24 +62,28 @@
 # negotiated-version fixes, tier-1 KNOWN_SDKS) — re-check this baseline
 # at the next bump.
 #
-# WINDOWS LOCAL-RUN CAVEAT (2026-07-27, first observable at alpha.10):
-# the tool's baseline checker counts WARNING-status checks as failures
-# (src/expected-failures.ts, isFailed = FAILURE || WARNING — present
-# since the feature landed, but masked here while server-stateless had a
-# whole-scenario entry). server-stateless carries two SHOULD-level
-# checks (prompts/tools list_changed delivered to an open
-# subscriptions/listen stream) that need concurrent PHP CLI-server
-# workers (PHP_CLI_SERVER_WORKERS, POSIX-only; run-conformance.php sets
-# it automatically). On POSIX — including the ubuntu CI draft job, the
-# authoritative gate — both checks SUCCEED and this entry-free baseline
-# is green. On Windows dev machines they WARN, so the server-draft gate
-# exits 1 reporting "unexpected failure: server-stateless" despite
-# 28/28 SUCCESS / 0 FAILURE. A per-check entry (#406 syntax) cannot
-# bridge the platforms: it would be legitimately failing on Windows but
-# STALE (exit 1) on POSIX where the checks pass. Held as a known local
-# limitation rather than baselined dishonestly; candidate upstream ask:
-# environment-dependent SHOULD warnings need stale-tolerance or
-# platform-conditional entries.
+# WINDOWS LOCAL RUNS (caveat 2026-07-27, RESOLVED same day): the tool's
+# baseline checker counts WARNING-status checks as failures (upstream
+# AGENTS.md documents this as deliberate — "CI treats WARNING as a
+# failure, so Tier-1 SDKs still need to satisfy SHOULDs", see their
+# #245), and server-stateless carries two SHOULD-level checks
+# (prompts/tools list_changed delivered to an open subscriptions/listen
+# stream) that need a server able to answer two connections at once.
+# PHP_CLI_SERVER_WORKERS is fork-based and POSIX-only, so on Windows
+# those checks initially WARNED and failed the gate despite the SDK
+# implementing the behavior (the ubuntu CI job proves it: entry-free
+# baseline, checks SUCCEED). Resolved in the harness, not the baseline:
+# run-conformance.php now serves the SDK on Windows through several
+# single-worker php -S backends behind a connection-level
+# least-connections proxy (conformance/connection-proxy.js) — the same
+# shared-nothing multi-process topology as production PHP-FPM — and
+# server-stateless passes 30/30 with 0 warnings on Windows too.
+# Genuinely concurrent local runs also exposed a real SDK bug the
+# single-worker harness had been hiding (FileSessionStore torn-write
+# race -> intermittent 404 on concurrent same-session requests, caught
+# by the stable track's server-sse-multiple-streams); fixed with
+# TaskManager-style flock discipline in the same change set (see
+# CHANGELOG [Unreleased] Fixed).
 #
 # (CLEARED at pin 0.2.0-alpha.9, 2026-07-03, via SDK FIX) request-metadata —
 # the entry's open question ("should the SDK retry an already-attempted-but-

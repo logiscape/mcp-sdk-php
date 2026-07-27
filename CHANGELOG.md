@@ -363,10 +363,16 @@ that will feed the migration guide.
   (upstream #398 fixed the scenario mock), leaving
   `tasks-mrtr-composition` and `auth/pre-registration` with unchanged,
   documented root causes. No SDK code change; the stable pin stays
-  `0.1.16`. On Windows dev machines the server-draft gate now exits
-  non-zero over two POSIX-only SHOULD checks reported as warnings —
-  see the baseline header; the ubuntu CI draft job is the
-  authoritative gate.
+  `0.1.16`. On Windows dev machines — where the built-in server's
+  fork-based `PHP_CLI_SERVER_WORKERS` mode does not exist — the runner
+  now serves the SDK through several single-worker backends behind a
+  connection-level least-connections proxy
+  (`conformance/connection-proxy.js`; Node is already required by the
+  conformance tool), the same shared-nothing multi-process topology as
+  production PHP-FPM. The concurrent-stream checks are therefore
+  genuinely exercised on Windows too: `server-stateless` passes 30/30
+  with no warnings and both tracks run green locally, matching the
+  ubuntu CI jobs.
 
 ### Removed
 
@@ -383,6 +389,21 @@ that will feed the migration guide.
 
 ### Fixed
 
+- `FileSessionStore` is now safe for concurrent cross-process access to
+  the same legacy session: `save()` previously published records with a
+  bare `file_put_contents()`, which truncates in place, so a parallel
+  request on the same session — multi-worker dev servers, production
+  PHP-FPM — could catch a torn or empty record, fail to decode it, and
+  answer 404 for a live session. Surfaced by the stable track's
+  `server-sse-multiple-streams` (three concurrent POSTs, intermittent
+  `404, 200, 200`) once the Windows conformance harness gained real
+  concurrency; single-worker serving had serialized the requests and
+  hidden the race everywhere it had previously run. Writes now follow
+  the same IO discipline as `TaskManager`'s record store — open
+  non-truncating (`'c'`), truncate only after `flock` `LOCK_EX` is
+  held — reads take `LOCK_SH` and degrade empty/torn/vanished records
+  to null without warnings, and `delete()` tolerates losing an unlink
+  race. Covered by the new `FileSessionStoreTest`.
 - Tool-annotation stripping for pre-`2025-03-26` clients now removes only
   `annotations` and preserves every other tool field — `title`, `icons`,
   `outputSchema`, `execution`, and extra fields such as the Apps

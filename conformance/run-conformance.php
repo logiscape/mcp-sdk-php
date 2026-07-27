@@ -217,6 +217,21 @@ function startServer(int $port, string $serverScript, string $phpBinary, &$serve
         $waited++;
     }
 
+    // Windows: PHP_CLI_SERVER_WORKERS is fork-based and POSIX-only, so a lone
+    // built-in server can answer only one request at a time and the
+    // concurrent-stream checks could never be exercised locally. Get the same
+    // concurrency — with the same process isolation the POSIX forked workers
+    // already impose — from several single-worker backends behind a
+    // connection-level round-robin proxy (connection-proxy.js; Node is
+    // already a hard dependency of the conformance tool). Everything the
+    // scenarios share across requests is file-backed (sessions, subscription
+    // bus, task store), so the shared-nothing topology is the one the SDK
+    // targets in production.
+    if (PHP_OS_FAMILY === 'Windows') {
+        startWindowsMultiWorkerServer($port, $serverScript, $phpBinary, $serverProcess);
+        return;
+    }
+
     echo "Starting conformance test server on port $port...\n";
 
     // Pass argv as an array so proc_open launches PHP directly instead of
@@ -232,14 +247,12 @@ function startServer(int $port, string $serverScript, string $phpBinary, &$serve
     // The subscriptions/listen scenarios hold an SSE stream open on one
     // request while a second concurrent tools/call triggers a change, and
     // server-sse-multiple-streams makes three parallel POSTs — a
-    // single-worker built-in server would deadlock. Multi-worker mode is
-    // POSIX-only (the env var is ignored on Windows, where those checks
-    // cannot run locally anyway).
-    $env = null;
-    if (PHP_OS_FAMILY !== 'Windows') {
-        $env = getenv();
-        $env['PHP_CLI_SERVER_WORKERS'] = $env['PHP_CLI_SERVER_WORKERS'] ?? '4';
-    }
+    // single-worker built-in server would deadlock. On POSIX the built-in
+    // server forks request workers; Windows never reaches this path (it took
+    // the multi-process proxy branch above, since the env var is ignored
+    // there).
+    $env = getenv();
+    $env['PHP_CLI_SERVER_WORKERS'] = $env['PHP_CLI_SERVER_WORKERS'] ?? '4';
 
     $serverProcess = proc_open($cmd, $descriptors, $pipes, null, $env);
     if (!is_resource($serverProcess)) {
@@ -285,7 +298,35 @@ function startServer(int $port, string $serverScript, string $phpBinary, &$serve
 
 function stopServer(&$serverProcess): void
 {
-    if ($serverProcess === null || !is_resource($serverProcess)) {
+    if ($serverProcess === null) {
+        return;
+    }
+
+    // Windows multi-worker shape from startWindowsMultiWorkerServer():
+    // ['proxy' => resource|null, 'backends' => resource[]]. Each entry is its
+    // own process tree; taskkill /T covers any children.
+    if (is_array($serverProcess)) {
+        $procs = $serverProcess['backends'];
+        if ($serverProcess['proxy'] !== null) {
+            array_unshift($procs, $serverProcess['proxy']);
+        }
+        $serverProcess = null;
+
+        echo "Stopping conformance test server (proxy + backends)...\n";
+        foreach ($procs as $proc) {
+            if (!is_resource($proc)) {
+                continue;
+            }
+            $status = proc_get_status($proc);
+            if ($status['running']) {
+                exec("taskkill /F /T /PID {$status['pid']} 2>NUL");
+            }
+            proc_close($proc);
+        }
+        return;
+    }
+
+    if (!is_resource($serverProcess)) {
         return;
     }
 
@@ -330,6 +371,117 @@ function stopServer(&$serverProcess): void
 
     proc_close($serverProcess);
     $serverProcess = null;
+}
+
+/**
+ * Windows counterpart of the POSIX PHP_CLI_SERVER_WORKERS path: N
+ * single-worker `php -S` backends on the ports directly above $port, with
+ * conformance/connection-proxy.js relaying each inbound connection
+ * round-robin on $port itself. $serverProcess receives
+ * ['proxy' => resource|null, 'backends' => resource[]] — populated as the
+ * processes start, so the shutdown handler can tear down a half-built set.
+ */
+function startWindowsMultiWorkerServer(int $port, string $serverScript, string $phpBinary, &$serverProcess): void
+{
+    $workerCount = max(1, (int) (getenv('PHP_CLI_SERVER_WORKERS') ?: 4));
+    $backendPorts = range($port + 1, $port + $workerCount);
+
+    echo "Starting conformance test server on port $port ($workerCount Windows backends behind connection-proxy.js)...\n";
+
+    $serverProcess = ['proxy' => null, 'backends' => []];
+
+    foreach ($backendPorts as $backendPort) {
+        // Tolerate our own teardown lag, exactly like the $port check in
+        // startServer(): the draft aggregate restarts the server per scenario
+        // back-to-back and the OS may take a moment to free each socket.
+        $waited = 0;
+        while (($conn = @fsockopen('127.0.0.1', $backendPort, $errno, $errstr, 1)) !== false) {
+            fclose($conn);
+            if ($waited >= 5) {
+                fwrite(STDERR, "ERROR: Backend port $backendPort is already in use. Set CONFORMANCE_PORT to move the whole port block.\n");
+                stopServer($serverProcess);
+                exit(1);
+            }
+            sleep(1);
+            $waited++;
+        }
+
+        $serverProcess['backends'][] = windowsSpawnAndAwait(
+            [$phpBinary, '-S', "127.0.0.1:$backendPort", $serverScript],
+            $backendPort,
+            "PHP backend on port $backendPort",
+            $serverProcess
+        );
+    }
+
+    $proxyScript = __DIR__ . DIRECTORY_SEPARATOR . 'connection-proxy.js';
+    $serverProcess['proxy'] = windowsSpawnAndAwait(
+        array_merge(['node', $proxyScript, (string) $port], array_map('strval', $backendPorts)),
+        $port,
+        'connection proxy (is Node.js on PATH?)',
+        $serverProcess
+    );
+
+    echo 'Server ready (proxy on ' . $port . ' -> backends ' . implode(', ', $backendPorts) . ")\n";
+}
+
+/**
+ * Start one process of the Windows multi-worker set and wait until its port
+ * accepts connections. Mirrors the POSIX startServer() readiness loop: stderr
+ * is piped for startup diagnostics and closed once the port is live (the
+ * built-in server's request log keeps writing harmlessly afterwards, exactly
+ * as on the single-server path). On failure, everything already recorded in
+ * $serverProcess is stopped and the runner exits.
+ *
+ * @param list<string> $cmd
+ * @return resource
+ */
+function windowsSpawnAndAwait(array $cmd, int $port, string $what, array &$serverProcess)
+{
+    $descriptors = [
+        0 => ['file', 'NUL', 'r'],
+        1 => ['file', 'NUL', 'w'],
+        2 => ['pipe', 'w'],
+    ];
+
+    $proc = proc_open($cmd, $descriptors, $pipes);
+    if (!is_resource($proc)) {
+        fwrite(STDERR, "ERROR: Failed to start $what\n");
+        stopServer($serverProcess);
+        exit(1);
+    }
+    $stderrPipe = $pipes[2];
+
+    for ($i = 0; $i < 30; $i++) {
+        $status = proc_get_status($proc);
+        if (!$status['running']) {
+            $stderr = stream_get_contents($stderrPipe);
+            fclose($stderrPipe);
+            proc_close($proc);
+            fwrite(STDERR, "ERROR: $what exited unexpectedly\n");
+            if ($stderr) {
+                fwrite(STDERR, $stderr);
+            }
+            stopServer($serverProcess);
+            exit(1);
+        }
+
+        $conn = @fsockopen('127.0.0.1', $port, $errno, $errstr, 1);
+        if ($conn) {
+            fclose($conn);
+            fclose($stderrPipe);
+            return $proc;
+        }
+
+        sleep(1);
+    }
+
+    fclose($stderrPipe);
+    fwrite(STDERR, "ERROR: $what failed to accept connections on port $port after 30s\n");
+    exec('taskkill /F /T /PID ' . proc_get_status($proc)['pid'] . ' 2>NUL');
+    proc_close($proc);
+    stopServer($serverProcess);
+    exit(1);
 }
 
 /**

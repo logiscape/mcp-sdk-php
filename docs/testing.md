@@ -87,7 +87,12 @@ php conformance/run-conformance.php server-draft server-stateless
 ```
 
 How it works: the runner starts `conformance/everything-server.php` via
-PHP's built-in server for server scenarios, and the conformance framework
+PHP's built-in server for server scenarios — on POSIX with
+`PHP_CLI_SERVER_WORKERS` forked workers, and on Windows (where that mode
+does not exist) through several single-worker backends behind the
+connection-level proxy `conformance/connection-proxy.js`, so the
+concurrent-stream scenarios are genuinely exercised on both platforms —
+and the conformance framework
 spawns `conformance/everything-client.php` for client scenarios. The full
 mechanics, baseline-curation rules, and result interpretation are in
 [`conformance/README.md`](../conformance/README.md). **Do not** edit

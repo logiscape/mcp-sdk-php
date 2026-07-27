@@ -42,11 +42,26 @@ class FileSessionStore implements SessionStoreInterface
     public function load(string $sessionId): ?HttpSession
     {
         $path = $this->getPath($sessionId);
-        if (!is_file($path)) {
+
+        // Open directly instead of is_file()-then-read: a concurrent
+        // delete() between the check and the read would warn.
+        $handle = @fopen($path, 'r');
+        if ($handle === false) {
             return null;
         }
 
-        $data = json_decode(file_get_contents($path), true);
+        $raw = false;
+        if (flock($handle, LOCK_SH)) {
+            $raw = stream_get_contents($handle);
+            flock($handle, LOCK_UN);
+        }
+        fclose($handle);
+
+        if ($raw === false || $raw === '') {
+            return null;
+        }
+
+        $data = json_decode($raw, true);
         if (!$data) {
             return null;
         }
@@ -58,14 +73,37 @@ class FileSessionStore implements SessionStoreInterface
     public function save(HttpSession $session): void
     {
         $path = $this->getPath($session->getId());
-        file_put_contents($path, json_encode($session->toArray()));
+        $json = json_encode($session->toArray());
+
+        // Open non-truncating ('c') and truncate only after LOCK_EX is
+        // held. A bare file_put_contents() truncates in place before any
+        // lock, so a concurrent request on the same session — multi-worker
+        // dev servers, production PHP-FPM — could read a torn or empty
+        // file, fail to decode it, and answer 404 for a live session.
+        // Same IO discipline as TaskManager's record store; the lock is
+        // advisory and assumes a local filesystem, like the store itself.
+        $handle = @fopen($path, 'c');
+        if ($handle === false) {
+            return;
+        }
+
+        if (flock($handle, LOCK_EX)) {
+            ftruncate($handle, 0);
+            fwrite($handle, $json);
+            fflush($handle);
+            flock($handle, LOCK_UN);
+        }
+        fclose($handle);
     }
 
     public function delete(string $sessionId): void
     {
         $path = $this->getPath($sessionId);
         if (is_file($path)) {
-            unlink($path);
+            // Suppressed: a concurrent delete() may have won the race, and
+            // on Windows an unlink can fail while another process still
+            // holds the file open — the TTL sweep collects it later.
+            @unlink($path);
         }
     }
 

@@ -1452,6 +1452,30 @@ Post-alpha.10 conformance `main` already carries wire-message
 JSON-schema validation (#399/#421) and everything-server/SSE fixes
 (#414–#417) — re-check at the next bump, which is expected to be the
 WS7 convergence pin (stable `0.2.0` at/after final-spec publication).
+**Update (2026-07-27, Windows harness parity — and the SDK bug it
+surfaced):** the Windows warnings-gate caveat above is resolved in the
+harness, not the baseline. Upstream's warning treatment is documented
+deliberate (their AGENTS.md: severity follows the spec keyword, "CI
+treats WARNING as a failure, so Tier-1 SDKs still need to satisfy
+SHOULDs", #245), so no upstream ask; instead `run-conformance.php` now
+serves the SDK on Windows through several single-worker `php -S`
+backends behind a connection-level least-connections proxy
+(`conformance/connection-proxy.js`) — the same shared-nothing
+multi-process topology as production PHP-FPM, and the moral equivalent
+of the POSIX path's forked workers (which Windows PHP cannot fork).
+`server-stateless` now runs 30/30 with 0 warnings on Windows (two more
+checks than the POSIX 28 become exercisable). Genuinely concurrent
+local serving immediately exposed a real SDK bug every previous
+single-worker run had hidden: `FileSessionStore::save()` published
+records via in-place-truncating `file_put_contents()`, so concurrent
+requests on one legacy session could read a torn record and 404
+(stable `server-sse-multiple-streams`, intermittent `404, 200, 200`) —
+fixed with TaskManager's flock IO discipline plus a torn-read-tolerant
+`load()`, covered by the new `FileSessionStoreTest` (see CHANGELOG
+[Unreleased] Fixed). Note the stable CI job starts its own
+single-worker `php -S` (the pinned upstream action manages the server),
+so local Windows runs are currently the only lane exercising legacy
+sessions concurrently.
 
 **Completion criteria**
 
