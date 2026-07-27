@@ -14,6 +14,21 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 **v1.6.0 and later**; earlier releases can be reviewed via the
 [Git tag history](https://github.com/logiscape/mcp-sdk-php/tags).
 
+## [Unreleased]
+
+### Fixed
+
+- An `initialize` request carrying `_meta` no longer crashes the server with
+  a `TypeError`. `ClientRequest::createInitializeRequest()` passed the decoded
+  `_meta` array straight into the `?Meta` parameter of
+  `InitializeRequestParams`, so validation aborted with
+  `InitializeRequestParams::__construct(): Argument #4 ($_meta) must be of
+  type ?Mcp\Types\Meta, array given` before the handshake could be answered —
+  every request family other than `initialize` already converted `_meta`
+  through `extractMeta()`. Clients that attach trace context to the handshake
+  (SEP-414; Claude's web client sends `traceparent` / `baggage` there) could
+  not connect at all. Backported from the `v2` line.
+
 ## [1.7.4]
 
 ### Fixed
