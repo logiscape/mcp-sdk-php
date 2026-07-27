@@ -1422,6 +1422,36 @@ matching each other does not settle it. The same posture applies to the
 SDKs (a per-scenario legacy pin): candidate remedy, not adopted without
 upstream clarification. Only the `request-metadata` SDK fix — grounded
 in normative spec text — was applied.
+**Update (2026-07-27, draft pin `0.2.0-alpha.9` → `0.2.0-alpha.10`,
+baseline 4 → 2):** upstream published `0.2.0-alpha.10` on the eve of the
+final spec, built from the merge commit of our PR #383 — the maintainers
+accepted the capability-declaration resolution held open above (the
+streaming probe now declares `{elicitation:{}}` at the probe site only),
+answering issue #382 and closing both deliberately-held judgment calls
+without any SDK or fixture change: `server-stateless` is **28/28**
+(PR #403 also retired the three post-#3002 pinned-tool staleness checks)
+and `json-schema-ref-no-deref` passes (PR #398 fixed the mock's
+discover-vs-transport inconsistency, independently reported upstream as
+issue #397). The pin was bumped and the draft baseline re-curated from
+real runs: both cleared entries removed with dated cleared-notes, and
+the two remaining entries — `tasks-mrtr-composition` (intentional
+execution-model choice) and `auth/pre-registration` (issuer-binding
+strictness, human decision pending) — re-verified failing for their
+documented, unchanged root causes. Stable track unchanged (`latest`
+still `0.1.16`): 40 server + 325 client checks passed / 0 failed,
+baselines empty. One caveat
+surfaced by the curation: the tool's baseline checker counts
+WARNING-status checks as failures, so on Windows dev machines — where
+the two SHOULD-level listen-stream list_changed checks cannot be
+exercised (`PHP_CLI_SERVER_WORKERS` is POSIX-only) — the server-draft
+gate now exits 1 on `server-stateless` despite 28/28 SUCCESS. The
+ubuntu CI draft job is the authoritative green; a per-check #406 entry
+can't bridge the platforms (it would go stale on POSIX). Documented in
+the baseline header; candidate upstream ask, human decision.
+Post-alpha.10 conformance `main` already carries wire-message
+JSON-schema validation (#399/#421) and everything-server/SSE fixes
+(#414–#417) — re-check at the next bump, which is expected to be the
+WS7 convergence pin (stable `0.2.0` at/after final-spec publication).
 
 **Completion criteria**
 

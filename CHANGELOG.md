@@ -353,6 +353,20 @@ that will feed the migration guide.
   dependency-free embedding and web-integration batteries, with framework
   bridge packages documented as a possible future. See
   [ROADMAP.md](ROADMAP.md) for the plan.
+- Draft conformance tool pin bumped `0.2.0-alpha.9` → `0.2.0-alpha.10`
+  (published 2026-07-27 from the merge of this project's upstream PR
+  modelcontextprotocol/conformance#383) and the draft baseline
+  re-curated from real runs, 4 entries → 2: `server-stateless` now
+  passes 28/28 (upstream #403 aligned the tool with spec PR #3002, and
+  #383 lets the eliciting streaming fixture be exercised under
+  capability enforcement) and `json-schema-ref-no-deref` passes
+  (upstream #398 fixed the scenario mock), leaving
+  `tasks-mrtr-composition` and `auth/pre-registration` with unchanged,
+  documented root causes. No SDK code change; the stable pin stays
+  `0.1.16`. On Windows dev machines the server-draft gate now exits
+  non-zero over two POSIX-only SHOULD checks reported as warnings —
+  see the baseline header; the ubuntu CI draft job is the
+  authoritative gate.
 
 ### Removed
 

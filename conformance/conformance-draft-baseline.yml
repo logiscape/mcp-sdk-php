@@ -14,13 +14,72 @@
 # may legitimately add entries for genuinely-new upstream behavior, each
 # with its own root cause (recorded below).
 #
-# Last updated: 2026-07-17 (spec PR #3002 absorption: server-stateless
-# annotation updated 27/28 -> 24/28 — three checks fail at the alpha.9
-# pin because the PINNED TOOL still asserts the pre-#3002 wire shape the
-# merged spec removed; upstream already fixed its checks on main in
-# conformance PR #403 (2026-07-17), so all three retire at the next
-# draft-pin bump. Details in the server-stateless entry.)
-# Conformance tool version: 0.2.0-alpha.9 (draft pin)
+# Last updated: 2026-07-27 (pin bump 0.2.0-alpha.9 -> 0.2.0-alpha.10,
+# baseline 4 -> 2: server-stateless and json-schema-ref-no-deref both
+# CLEARED via upstream fixes in the alpha.10 build — see the cleared-entry
+# notes below. The two remaining entries, tasks-mrtr-composition and
+# auth/pre-registration, were re-verified failing at alpha.10 for their
+# documented, unchanged root causes.)
+# Conformance tool version: 0.2.0-alpha.10 (draft pin)
+#
+# (CLEARED at pin 0.2.0-alpha.10, 2026-07-27, via UPSTREAM FIXES)
+# server-stateless — 28/28 at alpha.10 (was 24/28 at alpha.9). Both
+# documented causes resolved upstream, no SDK change:
+#  * Cause A (three pinned-tool staleness checks after spec PR #3002):
+#    conformance PR #403 (in alpha.10) aligned the tool — the
+#    missing-clientInfo rejection probe is gone, clientInfo-optional is a
+#    required positive check the SDK passes, and server identity in
+#    result _meta is the asserted DiscoverResult shape.
+#  * Cause B (fixture-contract mismatch on
+#    sep-2575-http-server-no-independent-requests-on-stream): resolved by
+#    our upstream PR #383 / issue #382 (merged 2026-07-27; alpha.10 was
+#    built from its merge commit a989655). The maintainers accepted the
+#    capability-declaration reading: the probe now declares
+#    clientCapabilities {elicitation:{}} at the probe site only, so the
+#    SDK's eliciting test_streaming_elicitation fixture is exercisable
+#    under its spec-mandated capability enforcement and the check passes.
+#    The fixture stays as-is — it demonstrates SEP-2322
+#    elicitation-as-InputRequiredResult; no rewrite to a non-eliciting
+#    streaming diagnostic was needed.
+#
+# (CLEARED at pin 0.2.0-alpha.10, 2026-07-27, via UPSTREAM FIX)
+# json-schema-ref-no-deref — conformance PR #398 (fixing third-party
+# issue #397) resolved the mock's discover-vs-transport inconsistency:
+# the scenario mock now accepts the draft protocol version its own
+# discover shim advertises, so the PHP client's spec-faithful 'auto'
+# probe path passes with no SDK or harness change. The "file the
+# upstream issue first" plan recorded in the removed entry became moot
+# (guglielmo-san filed #397 independently).
+#
+# Pin-bump note (0.2.0-alpha.9 -> 0.2.0-alpha.10, 2026-07-27): alpha.10
+# was published from the PR #383 merge commit and also contains #398
+# (json-schema-ref mock fix), #403 (spec #3002 alignment), #406
+# (per-check expected-failures support), and #409 (request-metadata
+# empty-probe crash fix); the bump added NO new failures on either
+# suite. Post-alpha.10 conformance main already carries #399/#421
+# (wire-message validation against the per-version spec JSON schema) and
+# #414-#417 (everything-server elicitation stream routing, SSE
+# negotiated-version fixes, tier-1 KNOWN_SDKS) — re-check this baseline
+# at the next bump.
+#
+# WINDOWS LOCAL-RUN CAVEAT (2026-07-27, first observable at alpha.10):
+# the tool's baseline checker counts WARNING-status checks as failures
+# (src/expected-failures.ts, isFailed = FAILURE || WARNING — present
+# since the feature landed, but masked here while server-stateless had a
+# whole-scenario entry). server-stateless carries two SHOULD-level
+# checks (prompts/tools list_changed delivered to an open
+# subscriptions/listen stream) that need concurrent PHP CLI-server
+# workers (PHP_CLI_SERVER_WORKERS, POSIX-only; run-conformance.php sets
+# it automatically). On POSIX — including the ubuntu CI draft job, the
+# authoritative gate — both checks SUCCEED and this entry-free baseline
+# is green. On Windows dev machines they WARN, so the server-draft gate
+# exits 1 reporting "unexpected failure: server-stateless" despite
+# 28/28 SUCCESS / 0 FAILURE. A per-check entry (#406 syntax) cannot
+# bridge the platforms: it would be legitimately failing on Windows but
+# STALE (exit 1) on POSIX where the checks pass. Held as a known local
+# limitation rather than baselined dishonestly; candidate upstream ask:
+# environment-dependent SHOULD warnings need stale-tolerance or
+# platform-conditional entries.
 #
 # (CLEARED at pin 0.2.0-alpha.9, 2026-07-03, via SDK FIX) request-metadata —
 # the entry's open question ("should the SDK retry an already-attempted-but-
@@ -56,8 +115,8 @@
 #    spec-permitted x-mcp-header types; the SDK's spec-faithful rejection of
 #    number-typed x-mcp-header now passes 18/18 and LEFT this baseline.
 #  * #372 (alpha.8) changed missing-prerequisite checks from SKIPPED to a
-#    hard "Not testable" FAILURE — the origin of the current server-stateless
-#    entry below.
+#    hard "Not testable" FAILURE — the origin of the since-cleared
+#    server-stateless Cause-B failure (alpha.10 cleared note above).
 #
 # Prior pin history (0.2.0-alpha.2 -> 0.2.0-alpha.7, 2026-06-27):
 #  * alpha.5 (#353) adopted the SEP-2907 draft error-code renumber —
@@ -69,13 +128,14 @@
 #    unsupported-version); the SDK already satisfies these.
 #  * alpha.3 (#331) retired the RC-window DRAFT-2026-v1 wire identifier and
 #    alpha.5 (#347) made the hand-rolled client-direction mocks answer
-#    server/discover — the changes behind the json-schema-ref-no-deref entry
-#    below (and the since-cleared request-metadata entry above).
+#    server/discover — the changes behind the since-cleared
+#    json-schema-ref-no-deref and request-metadata entries (notes above).
 #
 # WS4 Tasks extension (SEP-2663) scenario gating note (re-verified
-# 2026-07-01 @ alpha.9 — #372's skip->fail change did NOT break any Tasks
-# scenario; the fixtures are all present, so the eight passers still pass):
-#  The 0.2.0-alpha.9 tool registers its 10 SEP-2663 Tasks scenarios
+# 2026-07-27 @ alpha.10 — identical results to the 2026-07-01 alpha.9
+# verification: eight pass, tasks-status-notifications still skipped by
+# the tool itself, tasks-mrtr-composition still the one expected failure):
+#  The 0.2.0-alpha.10 tool registers its 10 SEP-2663 Tasks scenarios
 #  (tasks-lifecycle, tasks-capability-negotiation, tasks-wire-fields,
 #  tasks-request-state-removal, tasks-mrtr-input, tasks-request-headers,
 #  tasks-dispatch-and-envelope, tasks-status-notifications,
@@ -93,102 +153,12 @@
 #  tests. Re-evaluate at WS7 convergence.
 
 server:
-  # --- One fixture-contract mismatch + three pinned-tool staleness ---
-  - server-stateless
-    # 24/28 checks pass at alpha.9 (was 27/28 before 2026-07-17). FOUR
-    # failing checks, two distinct root causes:
-    #
-    # CAUSE A (three checks, TOOL STALENESS after spec PR #3002 — verified
-    # 2026-07-17): the SDK absorbed spec PR #3002 (merged 2026-07-16,
-    # rc-high-priority: clientInfo demoted to SHOULD in the request _meta
-    # envelope; serverInfo moved from the DiscoverResult body into result
-    # _meta), but the PINNED alpha.9 tool still asserts the pre-#3002
-    # shapes:
-    #  * sep-2575-request-meta-invalid-missing-client-info — expects the
-    #    server to REJECT an envelope without clientInfo; the merged spec
-    #    makes that envelope valid and upstream's own replacement check
-    #    (sep-2575-request-meta-client-info-optional, conformance PR #403)
-    #    REQUIRES serving it with HTTP 200 — which this SDK now does.
-    #  * sep-2575-http-server-meta-invalid-400 — the missing-client-info
-    #    iteration of the aggregate HTTP-400 check, same cause.
-    #  * sep-2575-server-implements-discover — validates the DiscoverResult
-    #    against the pre-#3002 shape with a required top-level serverInfo;
-    #    the SDK now emits identity in
-    #    _meta["io.modelcontextprotocol/serverInfo"] per the merged schema
-    #    (and #403's updated spec-types drop the body field entirely).
-    # Upstream already aligned all three on main in conformance PR #403
-    # (merged 2026-07-17, after the alpha.9 build): the rejection probe is
-    # deleted, clientInfo-optional is a required positive check, and
-    # server identity in result _meta is a WARNING-level SHOULD check.
-    # EXPECTED RESOLUTION: all three leave this entry at the next
-    # draft-pin bump to a build containing #403; no SDK action. (Reverting
-    # the SDK to the pre-#3002 shapes to please the stale pin would
-    # violate both the merged spec and the no-shortcuts rule.)
-    #
-    # CAUSE B (one check, fixture-contract mismatch — root cause
-    # re-verified 2026-07-03):
-    # sep-2575-http-server-no-independent-requests-on-stream: the scenario
-    # builds ONE generic request _meta with
-    #   "io.modelcontextprotocol/clientCapabilities": {}   (empty)
-    # and reuses it for every probe, including a tools/call against our
-    # test_streaming_elicitation fixture. Our fixture ELICITS
-    # (everything-server.php registers it with ElicitationContext), so the
-    # SDK — enforcing the spec's capability MUSTs ("A server MUST NOT rely
-    # on capabilities the client has not declared ... MUST return
-    # MissingRequiredClientCapabilityError (-32021)", draft
-    # basic/index.mdx §_meta) — rejects the empty-capabilities call, and
-    # since tool #372 (alpha.8) turned unexercisable checks from SKIPPED
-    # into hard failures, the stream probe scores "Not testable".
-    #
-    # Cross-checked 2026-07-03 against upstream sources: the scenario's
-    # documentation NEVER requires this fixture to elicit — only the tool's
-    # NAME suggests it. Three upstream sources agree the intended contract
-    # is a plain (non-eliciting) streaming diagnostic:
-    #  * The check's own logic fails any stream frame carrying a top-level
-    #    request, and an MRTR InputRequiredResult ends the call without
-    #    exercising the stream — an eliciting fixture cannot satisfy the
-    #    check under ANY capability declaration.
-    #  * The conformance repo's own reference server
-    #    (examples/servers/typescript/everything-server.ts) implements
-    #    test_streaming_elicitation as progress-notification + final result
-    #    ("Diagnostic tool validating response progress streams") — it does
-    #    not elicit.
-    #  * The TypeScript SDK's conformance fixture does the same, commenting
-    #    "It must not elicit (the scenario declares no `elicitation`
-    #    capability); the referee's own reference server does not elicit
-    #    here either" — and passes server-stateless 28/28 at alpha.9.
-    # The SDK's capability enforcement is spec-correct and unchanged (the
-    # sibling checks sep-2575-server-rejects-undeclared-capability and
-    # sep-2575-missing-capability-http-400 reward it and pass).
-    #
-    # NOT RESOLVED YET — held for upstream clarification (a judgment call,
-    # not a committed plan): the fixture contract is ambiguous upstream
-    # (documented only by the check code and the reference server's
-    # behavior, never in the scenario text), and our eliciting fixture
-    # demonstrates real spec behavior (SEP-2322 elicitation-as-
-    # InputRequiredResult under capability enforcement). Rewriting it as a
-    # non-eliciting streaming diagnostic would clear this entry with no SDK
-    # change and match the reference implementations, but other SDKs
-    # matching each other is not the same as the contract being settled —
-    # PR #383 + issue #382 (filed 2026-07-02, proposing the probe declare
-    # the elicitation capability) put exactly this question to the
-    # maintainers: declare the capability on the probe, or document the
-    # fixture as deliberately capability-free. Await their answer (they may
-    # well point at their reference server's non-eliciting implementation)
-    # before touching the fixture. Re-check at the next pin bump.
-    #
-    # The two SHOULD-level warnings (prompts/tools list_changed delivered
-    # to an open subscriptions/listen stream) pass only where PHP's CLI
-    # server can run multiple workers (PHP_CLI_SERVER_WORKERS, POSIX only —
-    # run-conformance.php sets it automatically). On Windows dev machines
-    # the concurrent events cannot be exercised locally; warnings do not
-    # fail the scenario either way.
-
   # --- SEP-2663 Tasks: synchronous-execution-model behavioral choice ---
   - tasks-mrtr-composition
     # INTENTIONAL MODEL CHOICE, not a bug — verified 2026-07-03 against the
     # ext-tasks spec and SEP-2663 text that both behaviors are
-    # spec-permitted:
+    # spec-permitted (re-verified still failing 0/1 at alpha.10,
+    # 2026-07-27; the scenario's check and fixture contract are unchanged):
     #  * The only normative sentence on the composition is a CONDITIONAL
     #    SHOULD about ordering, not mechanism choice: "Server
     #    implementations THAT USE multi round-trip requests in conjunction
@@ -226,7 +196,9 @@ server:
     # if a reference SDK ships Tasks with the composition.
 
 client:
-  # --- Issuer-binding strictness (root cause re-verified 2026-07-03) ---
+  # --- Issuer-binding strictness (root cause re-verified 2026-07-03;
+  # still failing 2/3 at alpha.10, 2026-07-27 — the scenario still
+  # supplies no issuer context, PRs #394/#401 touched only dpop/wif) ---
   - auth/pre-registration
     # STRICT-READING DIVERGENCE, pending a deliberate decision: the
     # 2026-07-28 draft's Authorization Server Binding rule says clients
@@ -285,59 +257,3 @@ client:
     # DRAFT_CLIENT_EXTRA_SCENARIOS in sync with any client entry here that
     # falls outside the draft suite. Re-check at every draft-pin bump.
 
-  # --- Upstream mock inconsistency (root cause re-verified 2026-07-03) ---
-  - json-schema-ref-no-deref
-    # UPSTREAM MOCK BUG, unreported as of 2026-07-03 (searched the
-    # conformance repo for issues/PRs; #347 introduced the discover shim
-    # without aligning the transport — WORTH FILING): the scenario's mock
-    # (src/scenarios/client/json-schema-ref-deref.ts) special-cases
-    # server/discover to advertise supportedVersions:["2026-07-28"], but
-    # routes every other request through the bundled TypeScript SDK v1
-    # (^1.29.0, SUPPORTED_PROTOCOL_VERSIONS topping out at 2025-11-25),
-    # whose STATEFUL transport 400s any request stamped
-    # MCP-Protocol-Version: 2026-07-28 with -32000. A client that obeys
-    # the discover response cannot then call tools/list. The PHP client in
-    # protocolMode 'auto' probes discover, the probe SUCCEEDS, so it
-    # adopts the advertised 2026-07-28 and sends an enveloped tools/list —
-    # which the mock's own transport rejects (verified: client log shows
-    # discover -> supportedVersions:["2026-07-28"] -> tools/list -> HTTP
-    # 400 -32000). The draft spec has no rule for "discover advertised X
-    # but the server rejects X", and its generic rules forbid the only
-    # escape: a recognized modern error identifies a modern server and the
-    # client retries with an advertised version "rather than falling back"
-    # (versioning.mdx §Backward Compatibility) — but the advertised
-    # version IS the rejected one, via a non--32022 error.
-    #
-    # Cross-checked 2026-07-03: NEITHER reference SDK survives this mock
-    # generically — both sidestep it per-scenario in their conformance
-    # harnesses, which is the sanctioned pattern:
-    #  * TypeScript: client negotiation defaults to 'legacy' (no discover
-    #    probe), and the scenario handler in
-    #    test/conformance/src/everythingClient.ts deliberately does not
-    #    opt into 'auto' — it never sees the misleading advertisement. TS
-    #    docs its probe classifier as never demoting an established
-    #    modern connection, so a TS 'auto' client would fail identically.
-    #  * Python: client defaults to 'auto', so its handler PINS
-    #    mode="legacy" with a docstring describing this exact flaw: "its
-    #    mock server only speaks the handshake-era lifecycle and 400s a
-    #    modern-stamped tools/list. The check is lifecycle-agnostic so
-    #    this is harmless" (.github/actions/conformance/client.py).
-    # The SEP-2106 behavior the scenario actually tests (no network $ref
-    # dereference, 2020-12 schema pass-through) is version-independent
-    # and unchanged in the SDK.
-    #
-    # NOT RESOLVED YET — held as a judgment call: pinning the
-    # json-schema-ref-no-deref handler in everything-client.php to the
-    # legacy handshake would clear this entry with no SDK change and match
-    # the reference harnesses, but it also means deliberately steering the
-    # client AROUND the mock's advertised modern path, and the reference
-    # SDKs having done so does not settle whether that is the sanctioned
-    # contract or two harnesses working around the same unreported bug.
-    # Preferred sequence: file the upstream issue for the
-    # discover-vs-transport inconsistency first (none exists as of
-    # 2026-07-03) and let the fix or the maintainers' guidance determine
-    # whether a harness-side legacy pin is appropriate in the interim. The
-    # SDK's 'auto' behavior stays as-is: it is the spec-faithful reading of
-    # a successful discover response. Re-check at the next pin bump (a
-    # future bundled-SDK bump adding 2026-07-28 support would also clear
-    # it upstream).
