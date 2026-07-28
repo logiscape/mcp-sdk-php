@@ -4,11 +4,11 @@
 [![MCP Conformance](https://github.com/logiscape/mcp-sdk-php/actions/workflows/conformance.yml/badge.svg)](https://github.com/logiscape/mcp-sdk-php/actions/workflows/conformance.yml)
 
 > [!NOTE]
-> **This `main` branch contains the v2 beta of the logiscape/mcp-sdk-php SDK.**
+> **This `main` branch contains v2 of the logiscape/mcp-sdk-php SDK.**
 >
 > v2 adds day-one support for the MCP `2026-07-28` spec revision; upgrading
 > from v1 is covered by the [Migration Guide](docs/migration-v2.md).
-> For the stable v1 code and documentation, see the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x).
+> For v1 code and documentation, see the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x).
 
 This package provides a PHP implementation of the [Model Context Protocol](https://modelcontextprotocol.io). The primary goal of this project is to provide both an MCP server and an MCP client using pure PHP, making it easy to use in PHP/Apache/cPanel hosting environments with typical server configurations.
 
@@ -59,7 +59,7 @@ the feature-lifecycle deprecation registry — is in the
 You can install the v2 beta via composer:
 
 ```bash
-composer require logiscape/mcp-sdk-php:2.0.0-beta5
+composer require logiscape/mcp-sdk-php:2.0.0-RC1
 ```
 
 (Plain `composer require logiscape/mcp-sdk-php` installs the stable v1
