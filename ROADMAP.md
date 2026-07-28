@@ -1,10 +1,7 @@
 # Roadmap
 
-This roadmap describes where `logiscape/mcp-sdk-php` stands today, what we are
-working on next, and the conditions under which we would seek a higher tier
-position in the
-[MCP SDK tiering system](https://modelcontextprotocol.io/community/sdk-tiers)
-([SEP-1730](https://modelcontextprotocol.io/community/seps/1730-sdks-tiering-system)).
+This roadmap describes where `logiscape/mcp-sdk-php` stands today, and what we
+are working on next.
 
 The goal is to be honest about scope and pace. Nothing here is a promise of a
 delivery date — targets listed are intentions, not guarantees.
@@ -56,32 +53,25 @@ Group assigns tiers.
 
 | SEP-1730 criterion          | Target (Tier 1)          | Current state                                                                                                                          |
 | --------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Conformance pass rate       | 100%                     | **100%** of stable-track scenarios — both baseline lists are empty. The `2026-07-28` draft track additionally runs in CI with a small, documented upstream-issue baseline. |
-| New protocol features       | Before spec release      | `2026-07-28` (the release candidate) supported on `main` ahead of the final spec, alongside `2024-11-05` … `2025-11-25` via built-in negotiation — the `v2` pre-release (see below).        |
-| Issue triage                | 2 business days          | Best-effort; see response-time section below.                                                                         |
-| Critical bug resolution     | 7 days                   | Best-effort, typically weeks not days for non-trivial fixes.                                                          |
-| Stable release              | Required, clear versioning | Met. Latest stable is `v1.7.4` on the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x); `main` carries the pre-release `v2`. Semver-tagged since `v1.0.0`.       |
+| Conformance pass rate       | 100%                     | **100%** of stable-track scenarios — client and server baseline lists are empty. The `2026-07-28` draft track additionally runs in CI with a small, documented baseline. |
+| New protocol features       | Before spec release      | Met. `2026-07-28` supported on `main` ahead of the final spec, alongside `2024-11-05` … `2025-11-25` via built-in negotiation.        |
+| Issue triage                | 2 business days          | Currently met on all open issues.                                                                         |
+| Critical bug resolution     | 7 days                   | Currently met on all open issues.                                                          |
+| Stable release              | Required, clear versioning | Met. Latest stable is `v1.7.5` on the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x); `main` carries the `v2` release. Semver-tagged since `v1.0.0`.       |
 | Documentation               | Comprehensive w/ examples | Met. Two-audience documentation set indexed in [docs/README.md](docs/README.md): [server-dev](docs/server-dev.md) and [client-dev](docs/client-dev.md) guides, a [v1 → v2 migration guide](docs/migration-v2.md), [Tasks](docs/tasks.md) and [Apps](docs/apps.md) extension guides, [testing](docs/testing.md) and [compatibility](docs/compatibility.md), plus a runnable [example per major feature](examples/README.md) and an example web client. |
 | Dependency update policy    | Published                | Met ([`docs/dependency-policy.md`](docs/dependency-policy.md)).                                                                        |
 | Roadmap                     | Published                | Met — this document.                                                                                                                   |
 
 On **technical** criteria we are comfortably at Tier 1 shape. On **maintenance
-response-time** criteria, we cannot guarantee these specific timeframes — and
-we would rather be open about that than set expectations we cannot meet.
+response-time** criteria, we are currently meeting Tier 1 requirements on all
+current issues. We will make a best effort to continue meeting this goal, but
+the project currently has a single maintainer and we want to be transparent
+about that rather than setting expectations that might be difficult to meet.
 
-### Why we aren't claiming Tier 1 today
-
-The SDK is currently maintained by a single core developer and a small group of
-volunteer contributors (see [GOVERNANCE.md](GOVERNANCE.md)). Tier 1's
-two-business-day triage and seven-day critical-bug windows are demanding, and
-it would be dishonest to commit to them without a contributor base large enough
-to cover holidays, sickness, and life. If that community grows — and we hope it
-will — the arithmetic changes.
-
-## Now: shipping v2
+## Now: v2 release
 
 **v2 development is complete.** The `main` branch
-carries the pre-release `v2`; the stable `v1` line lives on the
+carries the `v2` release; the legacy `v1` line lives on the
 [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x) and
 continues to receive bug fixes and low-risk backports. Every workstream of
 v2 development — the stateless
@@ -94,28 +84,10 @@ that ordered those workstreams (`docs/v2-development-plan.md`) was retired
 at release preparation and is preserved in the repository's git history as
 the v2 development record.
 
-What remains before a tagged `v2.0.0` is the release process, not feature
-work. In line with guiding principle #1, this section outranks everything
-below it:
-
-- **Track the RC through to the final `2026-07-28` specification.** Between
-  now and spec publication, monitor the spec repository and the official
-  conformance suite for changes relative to the release candidate. If the
-  final text lands changes, the affected workstreams re-open as new
-  milestones (research → implement → review → approve) before release — the
-  gates are checkpoints, not a ratchet.
-- **Pass the remaining release gates** (gates are human decisions): the
-  validated pre-release tag, then the final gate — a clean conformance run
-  against the suite version current at spec publication, and the `v2.0.0`
-  tag.
-- **Burn down the draft-track conformance baseline.** The stable track is at
-  100% with empty baselines; the draft track carries a small documented
-  baseline of upstream-suite issues. Each entry is re-checked as new suite
-  versions ship, and upstream reports/PRs are pursued rather than worked
-  around (guiding principle #2).
-- **Release mechanics:** changelog, migration-guide final review, Packagist
-  release notes, and the `1.x` support statement — human-initiated, per the
-  project's process rules.
+We are currently watching two baselined issues in the draft conformance
+track, with detailed root causes documented in the [draft baseline file](conformance/conformance-draft-baseline.yml).
+We also expect the stable and draft conformance tools to merge upstream,
+and will reassess conformance testing in the SDK when that happens.
 
 ## Post-v2: embedding and web-integration batteries
 
@@ -133,7 +105,7 @@ or convenience method of our own), add **zero** Composer dependencies, be
 purely additive and opt-in, and serve any web integrator rather than
 encoding one consumer's policy.
 
-Planned for the `v2.x` minor line, once `v2.0.0` has shipped:
+Planned for the `v2.x` minor line, now that `v2.0.0` has shipped:
 
 - **A framework-neutral `McpServer` HTTP entry point.**
   `HttpServerRunner::handleRequest()` is already embeddable — an
@@ -307,24 +279,6 @@ than put users on a breaking-API treadmill.
   Too early to commit to; we will pick them up when the corresponding SEPs
   are close to stable — at which point guiding principle #1 moves them to
   the top of this document.
-
-## What it would take to become Tier 1 in practice
-
-This is the honest answer to "what would have to be true?":
-
-- **At least two additional trusted contributors** with commit rights, covering
-  triage when the core maintainer is unavailable.
-- **A documented on-call expectation** that covers SEP-1730's P0 seven-day
-  window across any single week of the year.
-- **Sustained time-to-first-label under two business days** over a rolling
-  three-month window, measurable from GitHub's API.
-- **A clean conformance run** on every new spec revision within the
-  RC-to-final validation window (ten weeks for `2026-07-28`) — the standing
-  practice guiding principle #1 already demands.
-
-None of these are out of reach. They are the conditions the project needs to
-grow into — and the point of publishing them is so anyone reading can see
-what's in the way.
 
 ## How to help
 

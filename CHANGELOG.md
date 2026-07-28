@@ -16,8 +16,10 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 
 ## [Unreleased]
 
-The v2 pre-release of the SDK, now in beta, adding day-one support for the
-MCP `2026-07-28` "stateless core" spec revision alongside the existing
+## [2.0.0]
+
+The v2 release of the SDK, adding day-one support for the
+MCP `2026-07-28` "stateless core" spec revision alongside the legacy
 `2024-11-05` … `2025-11-25` support. Contains breaking API changes relative to v1; see
 [docs/migration-v2.md](docs/migration-v2.md) for the v1 → v2 migration
 guide covering every breaking and behavioral change.
@@ -259,8 +261,7 @@ guide covering every breaking and behavioral change.
 - A working plan for v2 development (`docs/v2-development-plan.md`) and a
   v1 → v2 API audit (`docs/api-audit-v2.md`) that guided development
   through the betas; both were retired at release preparation once the
-  migration guide and roadmap superseded them (see Removed). v2
-  pre-release notice added to the README.
+  migration guide and roadmap superseded them (see Removed).
 - The v2 documentation set: a v1 → v2 **migration guide**
   ([docs/migration-v2.md](docs/migration-v2.md)) covering every breaking
   and behavioral change with executed before/after code and the

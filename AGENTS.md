@@ -35,9 +35,7 @@ no-shortcuts-for-conformance rule).
 The `main` branch carries v2 of the SDK (stable v1 lives on the `1.x`
 branch). v2 development is complete; ongoing direction — including the
 embedding and web-integration batteries planned for the `v2.x` minor
-line — is set by [ROADMAP.md](ROADMAP.md). (The retired v2 working plan,
-`docs/v2-development-plan.md`, is preserved in the repository's git
-history as the v2 development record.) Key rules for agents working on
+line — is set by [ROADMAP.md](ROADMAP.md). Key rules for agents working on
 the SDK:
 
 1. **Research first.** Before implementing a change, gather the latest

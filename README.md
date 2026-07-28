@@ -22,7 +22,7 @@ This PHP SDK implements the full MCP specification, making it easy to:
 
 This SDK offers two major advantages for the MCP and PHP developer communities:
 
-* This SDK features a 100% pass rate on the applicable required [MCP Conformance Tests](https://github.com/modelcontextprotocol/conformance) — the stable-track baseline is empty — and additionally runs the draft-track suite validating the `2026-07-28` release candidate. See [Conformance Testing](conformance/README.md).
+* This SDK features a 100% pass rate on the applicable required [MCP Conformance Tests](https://github.com/modelcontextprotocol/conformance) — the stable-track baseline is empty — and additionally runs the draft-track suite validating the `2026-07-28` spec update. See [Conformance Testing](conformance/README.md).
 
 * The SDK can demonstrate both a functional MCP client and MCP server with a single Composer command. See the [Webclient Example](webclient/README.md).
 
@@ -56,14 +56,11 @@ the feature-lifecycle deprecation registry — is in the
 
 ## Installation
 
-You can install the v2 beta via composer:
+You can install the v2 SDK via composer:
 
 ```bash
-composer require logiscape/mcp-sdk-php:2.0.0-RC1
+composer require logiscape/mcp-sdk-php
 ```
-
-(Plain `composer require logiscape/mcp-sdk-php` installs the stable v1
-line until v2.0.0 is released.)
 
 ### Requirements
 * PHP 8.1 or higher
@@ -220,16 +217,10 @@ server or client interoperate across all of them.
 Conformance runs on two tracks in CI: the stable track passes 100% of the
 applicable required tests with an **empty baseline**
 ([`conformance/conformance-baseline.yml`](conformance/conformance-baseline.yml)),
-and the draft track validates the `2026-07-28` release candidate against
+and the draft track validates the `2026-07-28` spec update against
 the upstream RC-validation suite, with the few remaining entries in
-[`conformance/conformance-draft-baseline.yml`](conformance/conformance-draft-baseline.yml)
-documented as upstream-tool issues. See
-[conformance/README.md](conformance/README.md) for the dual-track rules.
-
-v2 is in **beta** (latest pre-release: `v2.0.0-beta5`); the final `v2.0.0`
-is gated on the `2026-07-28` spec's publication and a clean conformance
-run against the suite current at that date, per the release gates in
-[ROADMAP.md](ROADMAP.md).
+[`conformance/conformance-draft-baseline.yml`](conformance/conformance-draft-baseline.yml).
+See [conformance/README.md](conformance/README.md) for the dual-track rules.
 
 This is a community-maintained SDK. See [ROADMAP.md](ROADMAP.md) for a candid self-assessment against the [SDK tier criteria](https://modelcontextprotocol.io/community/sdk-tiers) and [GOVERNANCE.md](GOVERNANCE.md) for how the project is maintained.
 
