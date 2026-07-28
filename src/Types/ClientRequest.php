@@ -185,11 +185,16 @@ final class ClientRequest implements RequestWrapperInterface {
             throw new \InvalidArgumentException('protocolVersion is required for initialize.');
         }
 
+        // Wire `_meta` arrives as a decoded array — convert it like every
+        // other request family does. An initialize may legitimately carry
+        // `_meta` (SEP-414 trace context is allowed on any request), and
+        // passing the raw array to the typed ?Meta parameter crashed the
+        // session with a TypeError before the handshake could answer.
         $initializeParams = new InitializeRequestParams(
             protocolVersion: $params['protocolVersion'],
             capabilities: $capabilities,
             clientInfo: $clientInfo,
-            _meta: $params['_meta'] ?? null
+            _meta: self::extractMeta($params)
         );
 
         return new self(new InitializeRequest($initializeParams));
