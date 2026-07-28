@@ -186,46 +186,16 @@ final class ServerEraDetectionTest extends TestCase
     }
 
     /**
-     * The RC-window draft identifier DRAFT-2026-v1 is accepted as an alias
-     * for the stateless revision on the per-request path, and canonicalizes
-     * to 2026-07-28 for the request's internal feature gating (the
-     * capability check below requires the canonical version — the raw
-     * alias would not version-compare correctly).
+     * The stateless revision never negotiates through the legacy path: an
+     * initialize handshake requesting 2026-07-28 is clamped to the latest
+     * legacy revision (SEP-2575 removed the handshake from that revision).
      */
-    public function testDraftAliasAcceptedAndCanonicalized(): void
-    {
-        [$transport, $session] = $this->makeSession();
-
-        $session->processIncoming($this->makeRequest('tools/list', [
-            '_meta' => $this->envelope(Version::DRAFT_MODERN_PROTOCOL_VERSION),
-        ], id: 1));
-        $this->assertInstanceOf(JSONRPCResponse::class, $this->lastInner($transport));
-        $wire = json_decode(json_encode($transport->writtenMessages[0]), true);
-        $this->assertSame('complete', $wire['result']['resultType'], 'Draft alias must select modern stamping');
-
-        $session->processIncoming($this->makeRequest('tools/call', [
-            'name' => 'needs-sampling',
-            'arguments' => [],
-            '_meta' => $this->envelope(Version::DRAFT_MODERN_PROTOCOL_VERSION, ['sampling' => []]),
-        ], id: 2));
-        $callWire = json_decode(json_encode($transport->writtenMessages[1]), true);
-        $this->assertSame(
-            'sampling available',
-            $callWire['result']['content'][0]['text'],
-            'Capability + feature gating must run under the canonical 2026-07-28'
-        );
-    }
-
-    /**
-     * The draft alias never leaks into legacy negotiation: an initialize
-     * handshake requesting it is clamped to the latest legacy revision.
-     */
-    public function testDraftAliasNotNegotiableViaInitialize(): void
+    public function testStatelessRevisionNotNegotiableViaInitialize(): void
     {
         [$transport, $session] = $this->makeSession();
 
         $session->processIncoming($this->makeRequest('initialize', [
-            'protocolVersion' => Version::DRAFT_MODERN_PROTOCOL_VERSION,
+            'protocolVersion' => Version::LATEST_PROTOCOL_VERSION,
             'capabilities' => [],
             'clientInfo' => ['name' => 'legacy', 'version' => '1.0'],
         ]));

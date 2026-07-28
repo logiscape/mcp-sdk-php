@@ -212,7 +212,7 @@ final class SessionStore
                 'nextRequestId' => $session->getNextRequestId(),
                 // Modern-era wire identifier (null for legacy sessions);
                 // preserved so a resume keeps stamping the exact identifier
-                // the server negotiated (e.g. the DRAFT-2026-v1 alias).
+                // the server negotiated.
                 'modernWireVersion' => $session->getModernWireVersion(),
             ];
         } catch (Throwable $e) {

@@ -256,9 +256,10 @@ client:
     # could supply the issuer it already knows when building context so
     # strict clients are testable (no existing issue covers this).
     #
-    # NOTE: --suite draft selects only DRAFT-2026-v1-exclusive scenarios,
-    # and auth/pre-registration is tagged [2025-11-25, DRAFT-2026-v1], so
-    # it is NOT in the draft suite. run-conformance.php therefore runs it
+    # NOTE: --suite draft selects only scenarios whose source.introducedIn
+    # is the 2026-07-28 draft revision, and auth/pre-registration is
+    # introducedIn 2025-11-25, so it is NOT in the draft suite.
+    # run-conformance.php therefore runs it
     # explicitly after the suite on the aggregate `draft`/`client-draft`
     # gate (see DRAFT_CLIENT_EXTRA_SCENARIOS) so this entry is actually
     # evaluated — otherwise a stale entry would pass CI silently. Keep

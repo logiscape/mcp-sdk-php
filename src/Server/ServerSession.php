@@ -915,13 +915,11 @@ class ServerSession extends BaseSession {
 
     /**
      * Adopt the era a modern request declared in its envelope for the
-     * duration of this request's processing: the canonical negotiated
-     * version (the RC-window draft alias maps onto 2026-07-28 for all
-     * internal feature gating), readiness (the stateless lifecycle has no
-     * handshake to wait for), and the request's own client info and
-     * capabilities — the spec forbids inferring capabilities from prior
-     * requests, so each request's envelope fully replaces the previous
-     * state.
+     * duration of this request's processing: the negotiated version,
+     * readiness (the stateless lifecycle has no handshake to wait for),
+     * and the request's own client info and capabilities — the spec
+     * forbids inferring capabilities from prior requests, so each
+     * request's envelope fully replaces the previous state.
      */
     protected function adoptModernRequestState(string $wireVersion, Meta $meta): void {
         if (!Version::isModernVersion($wireVersion)) {
@@ -930,7 +928,7 @@ class ServerSession extends BaseSession {
             return;
         }
         $fields = $meta->getExtraFields();
-        $this->negotiatedProtocolVersion = Version::canonicalizeVersion($wireVersion);
+        $this->negotiatedProtocolVersion = $wireVersion;
         $this->initializationState = InitializationState::Initialized;
         // clientInfo is a SHOULD (spec PR #3002): an identity-less request
         // adopts null rather than a fabricated Implementation. The value was
@@ -1046,8 +1044,7 @@ class ServerSession extends BaseSession {
      *
      * server/discover answers for every advertised revision — it is the
      * discovery surface for both eras. Every other modern request is
-     * servable only under a modern wire identifier (including the
-     * RC-window draft alias).
+     * servable only under a modern wire identifier.
      */
     protected function modernEnvelopePreDispatchError(?Meta $meta, string $method): ?\Mcp\Shared\ErrorData {
         $envelopeError = $this->validateModernRequestMeta($meta);
@@ -1680,7 +1677,6 @@ class ServerSession extends BaseSession {
      * @internal Intended for the SDK's own era detection and for tests.
      */
     public function setNegotiatedProtocolVersion(string $version): void {
-        $version = Version::canonicalizeVersion($version);
         if (!in_array($version, Version::SUPPORTED_PROTOCOL_VERSIONS, true)) {
             throw new InvalidArgumentException("Unsupported protocol version: {$version}");
         }

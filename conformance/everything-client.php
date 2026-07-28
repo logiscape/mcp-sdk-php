@@ -128,12 +128,13 @@ function connectToServerNoSse(string $serverUrl): ClientSession
 /**
  * The modern wire version for forced-modern (2026-07-28) scenarios:
  * MCP_CONFORMANCE_PROTOCOL_VERSION when the runner provides it, otherwise
- * the draft-track identifier the 0.2.0-alpha conformance tool speaks.
+ * the dated stateless revision (what the alpha.3+ conformance tool speaks;
+ * the pre-rename DRAFT-2026-v1 draft identifier is retired).
  */
 function conformanceModernWireVersion(): string
 {
     $env = getenv('MCP_CONFORMANCE_PROTOCOL_VERSION');
-    return ($env !== false && $env !== '') ? $env : Version::DRAFT_MODERN_PROTOCOL_VERSION;
+    return ($env !== false && $env !== '') ? $env : Version::LATEST_PROTOCOL_VERSION;
 }
 
 /**
@@ -416,13 +417,13 @@ function scenarioJsonSchemaRefNoDeref(string $serverUrl): void
 // with a version from data.supported. Connect with protocolMode 'auto':
 // negotiate() adopts the advertised version and retries the probe.
 //
-// As of draft pin 0.2.0-alpha.7 this scenario is an EXPECTED FAILURE
-// (see conformance-draft-baseline.yml): upstream #331 retired the
-// DRAFT-2026-v1 retry identifier, so the mock now advertises
-// supported:["2026-07-28"] — the SAME version the client just attempted —
-// and the SDK's infinite-loop guard declines to re-send an identical
-// rejected version, so negotiate() throws. Left exercising the real 'auto'
-// path on purpose; the failure is the documented upstream degeneracy.
+// The mock advertises supported:["2026-07-28"] — the SAME version the
+// client just attempted (upstream #331 retired the DRAFT-2026-v1 retry
+// identifier). That is fine: the spec's select-and-continue rule has no
+// already-attempted exclusion, so negotiate() performs its single
+// corrective retry with the advertised version and the scenario passes
+// (cleared at pin 0.2.0-alpha.9 via SDK fix; see
+// conformance-draft-baseline.yml history notes).
 // ---------------------------------------------------------------------------
 
 function scenarioRequestMetadata(string $serverUrl): void

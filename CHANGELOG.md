@@ -37,8 +37,7 @@ guide covering every breaking and behavioral change.
     while a legacy `initialize` is served unchanged. Methods removed by the
     stateless revision (`initialize`, `ping`, `logging/setLevel`,
     `resources/subscribe`/`unsubscribe`) answer `-32601` on the modern
-    path, and the RC-window `DRAFT-2026-v1` identifier is accepted as an
-    alias for `2026-07-28` on the per-request path only. Client side:
+    path. Client side:
     `Client::connect()` probes `server/discover` first and falls back to
     the legacy handshake per the spec's rules; it gains `protocolMode`
     (`auto`/`legacy`/`modern`), `protocolVersion`, and `probeTimeout`

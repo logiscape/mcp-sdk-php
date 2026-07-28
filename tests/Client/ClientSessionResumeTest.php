@@ -241,12 +241,12 @@ final class ClientSessionResumeTest extends TestCase
     }
 
     /**
-     * Test that an explicitly provided wire version (the RC-window draft
-     * alias) is preserved on the wire while the negotiated version is
-     * canonicalized to the dated revision for internal feature gating —
-     * matching enterModernMode()'s behavior on a live negotiation.
+     * Test that an explicitly provided wire version (the value a caller
+     * persisted from getModernWireVersion()) is preserved and stamped
+     * onto outgoing envelopes — matching enterModernMode()'s behavior on
+     * a live negotiation.
      */
-    public function testRestoredSessionPreservesDraftAliasWireVersion(): void
+    public function testRestoredSessionPreservesExplicitWireVersion(): void
     {
         $readStream = new MemoryStream();
         $writeStream = new MemoryStream();
@@ -266,20 +266,20 @@ final class ClientSessionResumeTest extends TestCase
             negotiatedProtocolVersion: Version::LATEST_PROTOCOL_VERSION,
             nextRequestId: 3,
             readTimeout: 2.0,
-            modernWireVersion: Version::DRAFT_MODERN_PROTOCOL_VERSION
+            modernWireVersion: Version::LATEST_PROTOCOL_VERSION
         );
 
         $this->assertTrue($session->isModernMode());
-        $this->assertSame(Version::DRAFT_MODERN_PROTOCOL_VERSION, $session->getModernWireVersion());
+        $this->assertSame(Version::LATEST_PROTOCOL_VERSION, $session->getModernWireVersion());
         $this->assertSame(Version::LATEST_PROTOCOL_VERSION, $session->getNegotiatedProtocolVersion());
 
         $session->sendPing();
 
         $data = json_decode(json_encode($writeStream->receive()), true);
         $this->assertSame(
-            Version::DRAFT_MODERN_PROTOCOL_VERSION,
+            Version::LATEST_PROTOCOL_VERSION,
             $data['params']['_meta'][MetaKeys::PROTOCOL_VERSION] ?? null,
-            'Envelope must carry the alias the server negotiated, not the canonical id'
+            'Envelope must carry the wire version the server negotiated'
         );
     }
 

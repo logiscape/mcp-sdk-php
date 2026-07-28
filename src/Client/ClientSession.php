@@ -135,12 +135,12 @@ class ClientSession extends BaseSession {
 
     /**
      * The wire identifier this session speaks on the modern (2026-07-28)
-     * per-request path — either the dated revision or the RC-window draft
-     * alias the server advertised. Null while the session is legacy-era
-     * (or not yet negotiated). When set, every outgoing request and
-     * notification is stamped with the SEP-2575 `_meta` envelope carrying
-     * this identifier, and {@see $negotiatedProtocolVersion} holds its
-     * canonical form for feature gating.
+     * per-request path, as negotiated with the server. Null while the
+     * session is legacy-era (or not yet negotiated). When set, every
+     * outgoing request and notification is stamped with the SEP-2575
+     * `_meta` envelope carrying this identifier, and
+     * {@see $negotiatedProtocolVersion} carries the same value for
+     * feature gating.
      */
     private ?string $modernWireVersion = null;
 
@@ -314,11 +314,10 @@ class ClientSession extends BaseSession {
      * @param float|null $readTimeout Optional read timeout in seconds
      * @param LoggerInterface|null $logger PSR-3 compliant logger
      * @param string|null $modernWireVersion The wire identifier the original
-     *        modern-era session carried in its `_meta` envelopes (the dated
-     *        revision or the RC-window draft alias). Pass the original
-     *        session's getModernWireVersion() to preserve an alias across the
-     *        resume; defaults to $negotiatedProtocolVersion when that is a
-     *        modern revision.
+     *        modern-era session carried in its `_meta` envelopes. Pass the
+     *        original session's getModernWireVersion() to preserve it across
+     *        the resume; defaults to $negotiatedProtocolVersion when that is
+     *        a modern revision.
      * @return self A session ready for operations
      */
     public static function createRestored(
@@ -343,7 +342,7 @@ class ClientSession extends BaseSession {
             ?? (Version::isModernVersion($negotiatedProtocolVersion) ? $negotiatedProtocolVersion : null);
         if ($wireVersion !== null) {
             $session->modernWireVersion = $wireVersion;
-            $session->negotiatedProtocolVersion = Version::canonicalizeVersion($wireVersion);
+            $session->negotiatedProtocolVersion = $wireVersion;
         }
         return $session;
     }
@@ -655,7 +654,7 @@ class ClientSession extends BaseSession {
      */
     private function enterModernMode(string $wireVersion, ?DiscoverResult $discovery): void {
         $this->modernWireVersion = $wireVersion;
-        $this->negotiatedProtocolVersion = Version::canonicalizeVersion($wireVersion);
+        $this->negotiatedProtocolVersion = $wireVersion;
         $this->initResult = new InitializeResult(
             capabilities: $discovery?->capabilities ?? new \Mcp\Types\ServerCapabilities(),
             serverInfo: $discovery?->getServerInfo(),
@@ -676,8 +675,7 @@ class ClientSession extends BaseSession {
 
     /**
      * The wire identifier carried in this modern session's per-request
-     * envelopes (the dated revision or the RC-window draft alias), or
-     * null for legacy sessions.
+     * envelopes, or null for legacy sessions.
      */
     public function getModernWireVersion(): ?string {
         return $this->modernWireVersion;
@@ -742,7 +740,7 @@ class ClientSession extends BaseSession {
      */
     private function adoptModernWireVersion(string $version, Request $request): void {
         $this->modernWireVersion = $version;
-        $this->negotiatedProtocolVersion = Version::canonicalizeVersion($version);
+        $this->negotiatedProtocolVersion = $version;
         $meta = $request->params?->_meta;
         if ($meta !== null && $meta->getField(MetaKeys::PROTOCOL_VERSION) !== null) {
             $meta->setField(MetaKeys::PROTOCOL_VERSION, $version);

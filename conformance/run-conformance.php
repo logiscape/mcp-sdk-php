@@ -60,9 +60,9 @@ $clientSuite = $_SERVER['CONFORMANCE_CLIENT_SUITE'] ?? getenv('CONFORMANCE_CLIEN
 
 // Draft client scenarios that carry a conformance-draft-baseline.yml entry
 // but are NOT selected by `--suite draft` (the draft suite only includes
-// scenarios tagged exclusively DRAFT-2026-v1; auth/pre-registration is tagged
-// [2025-11-25, DRAFT-2026-v1], so it lands in the stable suite's namespace,
-// not the draft one). The conformance tool only evaluates the baseline against
+// scenarios whose source.introducedIn is the 2026-07-28 draft revision;
+// auth/pre-registration is introducedIn 2025-11-25, so it lands in the stable
+// suite's namespace, not the draft one). The conformance tool only evaluates the baseline against
 // scenarios it actually runs, so without an explicit run these entries are
 // never checked — a stale entry (upstream fixes the scenario, or adds the
 // missing issuer context) would pass CI silently. The aggregate `draft` and

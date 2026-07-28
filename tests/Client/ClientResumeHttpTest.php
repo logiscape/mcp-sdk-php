@@ -251,9 +251,9 @@ final class ClientResumeHttpTest extends TestCase
     }
 
     /**
-     * Test that an explicitly passed wire version (the RC-window draft
-     * alias) survives the resume, while feature gating still sees the
-     * canonical dated revision.
+     * Test that an explicitly passed wire version (the value a caller
+     * persisted from getModernWireVersion()) survives the resume and
+     * re-enters modern mode.
      */
     public function testResumeHttpSessionPreservesExplicitWireVersion(): void
     {
@@ -280,11 +280,11 @@ final class ClientResumeHttpTest extends TestCase
             nextRequestId: 1,
             headers: [],
             httpOptions: ['enableSse' => false],
-            modernWireVersion: Version::DRAFT_MODERN_PROTOCOL_VERSION
+            modernWireVersion: Version::LATEST_PROTOCOL_VERSION
         );
 
         $this->assertTrue($session->isModernMode());
-        $this->assertSame(Version::DRAFT_MODERN_PROTOCOL_VERSION, $session->getModernWireVersion());
+        $this->assertSame(Version::LATEST_PROTOCOL_VERSION, $session->getModernWireVersion());
         $this->assertSame(Version::LATEST_PROTOCOL_VERSION, $session->getNegotiatedProtocolVersion());
 
         $client->detach();

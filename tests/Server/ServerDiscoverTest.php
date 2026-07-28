@@ -111,8 +111,8 @@ final class ServerDiscoverTest extends TestCase
         /** @var DiscoverResult $result */
         $result = $inner->result;
         $this->assertInstanceOf(DiscoverResult::class, $result);
-        // The advertised list covers every negotiable revision plus the
-        // RC-window draft alias for the stateless revision.
+        // The advertised list covers every legacy-negotiable revision plus
+        // the stateless revision.
         $this->assertSame(Version::advertisedSupportedVersions(), $result->supportedVersions);
         $this->assertSame('discover-test-server', $result->getServerInfo()?->name);
         $this->assertSame('3.2.1', $result->getServerInfo()?->version);

@@ -66,14 +66,6 @@ final class FeatureLifecycleTest extends TestCase
         $this->assertFalse(FeatureLifecycle::isDeprecatedIn(FeatureLifecycle::SAMPLING, null));
     }
 
-    public function testRcWindowDraftAliasCanonicalizesToTheDeprecatingRevision(): void
-    {
-        $this->assertTrue(FeatureLifecycle::isDeprecatedIn(
-            FeatureLifecycle::SAMPLING,
-            Version::DRAFT_MODERN_PROTOCOL_VERSION
-        ));
-    }
-
     public function testWarningMessageNamesSepRevisionAndMigrationPath(): void
     {
         $message = FeatureLifecycle::warningMessage(FeatureLifecycle::LOGGING);

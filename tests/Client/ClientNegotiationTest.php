@@ -276,28 +276,28 @@ final class ClientNegotiationTest extends TestCase
     }
 
     /**
-     * -32022 means the server IS modern: retry with an advertised version
-     * (here the RC-window draft identifier), never fall back. The retried
-     * session speaks the advertised wire version in every envelope while
-     * feature-gating on the canonical 2026-07-28.
+     * -32022 means the server IS modern: retry exactly once with a version
+     * from its advertised list, never fall back. The advertised version may
+     * equal the one just rejected — a transient rejection; the spec's
+     * select-and-continue rule has no already-attempted exclusion.
      */
     public function testUnsupportedVersionRetriesWithAdvertisedVersion(): void
     {
         $readStream = new MemoryStream();
         $writeStream = new MemoryStream();
         $readStream->send($this->error(0, McpError::UNSUPPORTED_PROTOCOL_VERSION, 'Unsupported protocol version', [
-            'supported' => [Version::DRAFT_MODERN_PROTOCOL_VERSION],
+            'supported' => [Version::LATEST_PROTOCOL_VERSION],
             'requested' => '2026-07-28',
         ]));
-        $readStream->send($this->response(1, $this->discoverResultData([Version::DRAFT_MODERN_PROTOCOL_VERSION])));
+        $readStream->send($this->response(1, $this->discoverResultData([Version::LATEST_PROTOCOL_VERSION])));
         $readStream->send($this->response(2, ['tools' => []]));
 
         $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
         $era = $session->negotiate();
 
         $this->assertSame('modern', $era);
-        $this->assertSame(Version::DRAFT_MODERN_PROTOCOL_VERSION, $session->getModernWireVersion());
-        $this->assertSame('2026-07-28', $session->getNegotiatedProtocolVersion(), 'Draft alias canonicalizes for feature gating');
+        $this->assertSame(Version::LATEST_PROTOCOL_VERSION, $session->getModernWireVersion());
+        $this->assertSame('2026-07-28', $session->getNegotiatedProtocolVersion());
 
         $session->listTools();
 
@@ -306,12 +306,12 @@ final class ClientNegotiationTest extends TestCase
         $this->assertSame('2026-07-28', $wire[0]['params']['_meta'][MetaKeys::PROTOCOL_VERSION], 'First probe prefers the dated revision');
         $this->assertSame('server/discover', $wire[1]['method']);
         $this->assertSame(
-            Version::DRAFT_MODERN_PROTOCOL_VERSION,
+            Version::LATEST_PROTOCOL_VERSION,
             $wire[1]['params']['_meta'][MetaKeys::PROTOCOL_VERSION],
-            'Retry carries the advertised identifier'
+            'Corrective retry carries the advertised identifier'
         );
         $this->assertSame(
-            Version::DRAFT_MODERN_PROTOCOL_VERSION,
+            Version::LATEST_PROTOCOL_VERSION,
             $wire[2]['params']['_meta'][MetaKeys::PROTOCOL_VERSION],
             'Subsequent envelopes keep the negotiated wire identifier'
         );
@@ -607,9 +607,9 @@ final class ClientNegotiationTest extends TestCase
     }
 
     /**
-     * mode 'modern' honors a preferred wire identifier (e.g. the RC-window
-     * draft alias the conformance mocks speak) and feature-gates on its
-     * canonical dated form.
+     * mode 'modern' honors an explicitly preferred wire identifier
+     * verbatim — the seam the conformance harness uses to pin the wire
+     * version (e.g. a future revision this SDK release predates).
      */
     public function testModernModeHonorsPreferredVersion(): void
     {
@@ -618,15 +618,15 @@ final class ClientNegotiationTest extends TestCase
         $readStream->send($this->response(0, ['tools' => []]));
 
         $session = new ClientSession($readStream, $writeStream, readTimeout: 2.0);
-        $session->negotiate('modern', null, Version::DRAFT_MODERN_PROTOCOL_VERSION);
+        $session->negotiate('modern', null, '2027-01-15');
 
-        $this->assertSame(Version::DRAFT_MODERN_PROTOCOL_VERSION, $session->getModernWireVersion());
-        $this->assertSame('2026-07-28', $session->getNegotiatedProtocolVersion());
+        $this->assertSame('2027-01-15', $session->getModernWireVersion());
+        $this->assertSame('2027-01-15', $session->getNegotiatedProtocolVersion());
 
         $session->listTools();
         $wire = $this->sentWire($writeStream);
         $this->assertSame(
-            Version::DRAFT_MODERN_PROTOCOL_VERSION,
+            '2027-01-15',
             $wire[0]['params']['_meta'][MetaKeys::PROTOCOL_VERSION]
         );
     }
@@ -634,20 +634,20 @@ final class ClientNegotiationTest extends TestCase
     /**
      * Forced-modern -32022 recovery: when the FIRST real request is
      * rejected with -32022 carrying a usable data.supported list, the
-     * session adopts an advertised version (envelope and header switch
-     * together) and retries that request exactly once under a fresh id.
+     * session adopts an advertised version — possibly the one just
+     * rejected (a transient rejection) — and retries that request exactly
+     * once under a fresh id.
      */
     public function testForcedModernAdoptsAdvertisedVersionOnFirstRequest(): void
     {
         $readStream = new MemoryStream();
-        // Snapshot the wire bytes at send time: the retry adopts the new
-        // version by mutating the request's (shared) _meta, so decoding
-        // the queued message OBJECTS afterwards would show the adopted
-        // version on both attempts even though the first attempt was sent
-        // with the original one.
+        // Snapshot the wire bytes at send time: the retry adopts the
+        // advertised version by mutating the request's (shared) _meta, so
+        // decoding the queued message OBJECTS afterwards would not prove
+        // what each attempt actually carried when it was sent.
         $writeStream = new SnapshotWriteStream();
         $readStream->send($this->error(0, McpError::UNSUPPORTED_PROTOCOL_VERSION, 'Unsupported protocol version', [
-            'supported' => [Version::DRAFT_MODERN_PROTOCOL_VERSION],
+            'supported' => [Version::LATEST_PROTOCOL_VERSION],
             'requested' => '2026-07-28',
         ]));
         $readStream->send($this->response(1, ['tools' => []]));
@@ -657,7 +657,7 @@ final class ClientNegotiationTest extends TestCase
 
         $result = $session->listTools();
         $this->assertSame([], $result->tools);
-        $this->assertSame(Version::DRAFT_MODERN_PROTOCOL_VERSION, $session->getModernWireVersion());
+        $this->assertSame(Version::LATEST_PROTOCOL_VERSION, $session->getModernWireVersion());
 
         $wire = $writeStream->wire;
         $this->assertCount(2, $wire, 'Original request plus exactly one retry');
@@ -665,7 +665,7 @@ final class ClientNegotiationTest extends TestCase
         $this->assertSame('2026-07-28', $wire[0]['params']['_meta'][MetaKeys::PROTOCOL_VERSION]);
         $this->assertSame('tools/list', $wire[1]['method']);
         $this->assertSame(
-            Version::DRAFT_MODERN_PROTOCOL_VERSION,
+            Version::LATEST_PROTOCOL_VERSION,
             $wire[1]['params']['_meta'][MetaKeys::PROTOCOL_VERSION],
             'The retry envelope carries the adopted version'
         );

@@ -119,7 +119,7 @@ final class FeatureLifecycle
         if ($deprecatedIn === null || $negotiatedVersion === null) {
             return false;
         }
-        return version_compare(Version::canonicalizeVersion($negotiatedVersion), $deprecatedIn, '>=');
+        return version_compare($negotiatedVersion, $deprecatedIn, '>=');
     }
 
     /**

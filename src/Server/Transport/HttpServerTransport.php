@@ -431,10 +431,9 @@ class HttpServerTransport implements Transport
         }
 
         // SEP-2575 per-request era detection. A POST is modern when its
-        // MCP-Protocol-Version header carries a modern wire identifier
-        // (including the RC-window draft alias), when its body carries any
-        // modern _meta envelope key, or when it is a server/discover
-        // request (a modern-only construct). Modern requests bypass the
+        // MCP-Protocol-Version header carries a modern wire identifier,
+        // when its body carries any modern _meta envelope key, or when it
+        // is a server/discover request (a modern-only construct). Modern requests bypass the
         // legacy version-header gate — the session answers an unsupported
         // version with the spec's UnsupportedProtocolVersionError (-32022,
         // original request id, data.supported/requested) instead of the
@@ -2260,11 +2259,11 @@ class HttpServerTransport implements Transport
         if ($version === null || $version === '') {
             return null;
         }
-        // Accept every identifier this server can serve anywhere, including
-        // the RC-window draft alias for the stateless revision. Accepting
-        // the alias here does not leak it into legacy negotiation: the
-        // initialize handshake caps at LATEST_LEGACY_PROTOCOL_VERSION, and
-        // modern-identifier POSTs never reach this gate at all.
+        // Accept every identifier this server can serve anywhere. The
+        // stateless revision appearing here does not leak it into legacy
+        // negotiation: the initialize handshake caps at
+        // LATEST_LEGACY_PROTOCOL_VERSION, and modern-identifier POSTs
+        // never reach this gate at all.
         if (in_array($version, Version::advertisedSupportedVersions(), true)) {
             return null;
         }

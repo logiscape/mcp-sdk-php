@@ -100,16 +100,6 @@ final class ServerDeprecationWarningsTest extends TestCase
         $this->assertSame([], $logger->warnings(), 'No negotiated revision — no deprecation state to warn about');
     }
 
-    public function testRcWindowDraftAliasWarnsLikeTheDatedRevision(): void
-    {
-        [$session, $logger] = $this->makeSession();
-        $session->forceNegotiated(\Mcp\Shared\Version::DRAFT_MODERN_PROTOCOL_VERSION);
-
-        $session->sendLogMessage(LoggingLevel::INFO, 'draft');
-
-        $this->assertCount(1, $this->warningsMentioning($logger, "'logging'"));
-    }
-
     public function testSamplingWarnsOnModernRevision(): void
     {
         [$session, $logger] = $this->makeSession();

@@ -435,9 +435,9 @@ class Client {
      * @param array<string, mixed>      $httpOptions              HTTP configuration options
      * @param string|null               $modernWireVersion        Wire identifier the original
      *        modern-era session stamped into its `_meta` envelopes (pass the
-     *        original session's getModernWireVersion() to preserve the
-     *        RC-window draft alias); null for legacy sessions or to
-     *        auto-detect from $negotiatedProtocolVersion
+     *        original session's getModernWireVersion() to preserve it);
+     *        null for legacy sessions or to auto-detect from
+     *        $negotiatedProtocolVersion
      * @return ClientSession The restored client session ready for operations
      */
     public function resumeHttpSession(

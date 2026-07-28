@@ -42,9 +42,8 @@ use PHPUnit\Framework\TestCase;
  *
  * Covers: stateless service of ordinary methods with no handshake and no
  * session id, the HTTP status mapping (400 for envelope/version/capability
- * errors, 404 + -32601 for unknown and removed methods), acceptance of the
- * RC-window DRAFT-2026-v1 identifier, and era-correct coexistence of
- * modern and legacy traffic on one endpoint.
+ * errors, 404 + -32601 for unknown and removed methods), and era-correct
+ * coexistence of modern and legacy traffic on one endpoint.
  */
 final class HttpModernRequestTest extends TestCase
 {
@@ -195,28 +194,6 @@ final class HttpModernRequestTest extends TestCase
     }
 
     /**
-     * The pinned draft conformance tool's stateless connector sends
-     * MCP-Protocol-Version: DRAFT-2026-v1 (header AND _meta) on every
-     * request — the RC-window alias must be served as 2026-07-28, not
-     * rejected by the legacy version-header gate.
-     */
-    public function testDraftIdentifierServedAsModern(): void
-    {
-        $runner = $this->makeRunner();
-
-        $response = $runner->handleRequest($this->postRequest(
-            $this->body('tools/list', ['_meta' => $this->validEnvelope(Version::DRAFT_MODERN_PROTOCOL_VERSION)]),
-            headerVersion: Version::DRAFT_MODERN_PROTOCOL_VERSION
-        ));
-
-        $this->assertSame(200, $response->getStatusCode());
-        $body = json_decode((string) $response->getBody(), true);
-        $this->assertArrayHasKey('result', $body);
-        $this->assertSame('complete', $body['result']['resultType']);
-        $this->assertNull($response->getHeader('Mcp-Session-Id'));
-    }
-
-    /**
      * An Mcp-Session-Id header on a modern request is ignored, not
      * validated: an unknown id must not trigger the legacy 404
      * session-not-found path (SEP-2567: "ignore it").
@@ -302,7 +279,7 @@ final class HttpModernRequestTest extends TestCase
 
         $response = $runner->handleRequest($this->postRequest(
             $this->body('tools/list', []),
-            headerVersion: Version::DRAFT_MODERN_PROTOCOL_VERSION
+            headerVersion: Version::LATEST_PROTOCOL_VERSION
         ));
 
         $this->assertSame(400, $response->getStatusCode());
