@@ -29,7 +29,7 @@ use RuntimeException;
  *
  * Distinct from the generic transport RuntimeException so callers can
  * react to "the server never answered" specifically: the dual-era
- * negotiation (SEP-2575, WS2) treats a timed-out `server/discover` probe
+ * negotiation (SEP-2575) treats a timed-out `server/discover` probe
  * as a silent legacy server and falls back to the initialize handshake,
  * while other transport failures (connection refused, TLS errors)
  * propagate.

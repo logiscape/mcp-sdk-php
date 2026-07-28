@@ -1,11 +1,10 @@
 # v1 → v2 Migration Guide
 
 This guide covers upgrading a project from `logiscape/mcp-sdk-php` v1.x to
-v2. It restates the [v1 → v2 API audit](api-audit-v2.md) — the authoritative
-inventory of what changed at the Composer/PHP API level — as actionable
-migration steps with runnable before/after code. Each section carries the
-audit's identifier (B1–B8 for breaking changes, M1–M9 for behavioral
-changes) so the two documents can be read side by side.
+v2. It is the authoritative inventory of what changed at the Composer/PHP
+API level, presented as actionable migration steps with runnable
+before/after code. Each change carries a stable identifier (B1–B8 for
+breaking changes, M1–M9 for behavioral changes) for cross-referencing.
 
 **Most v1 code runs on v2 unchanged.** v2's defining feature — day-one
 support for the `2026-07-28` "stateless core" MCP spec revision — is
@@ -461,8 +460,7 @@ The additive v2 surface — dual-era negotiation options, the Tasks and Apps
 extensions, `subscriptions/listen` publishing, batch input gathering,
 `server/discover`, caching hints, the `client_credentials` grant and
 cross-app access, and more — is inventoried in the
-[API audit's additive section](api-audit-v2.md#3-additive-surface-new-in-v2-no-migration-required)
-and the [CHANGELOG](../CHANGELOG.md). Start with:
+[CHANGELOG](../CHANGELOG.md). Start with:
 
 - [Server Development Guide](server-dev.md) — building servers on v2
 - [Client Development Guide](client-dev.md) — building clients on v2

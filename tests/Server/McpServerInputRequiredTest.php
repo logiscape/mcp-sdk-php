@@ -599,7 +599,7 @@ final class McpServerInputRequiredTest extends TestCase
 
     public function testLegacyHttpSuspendResumeUnaffected(): void
     {
-        // WS6 promise: the legacy suspend/resume pattern (server-initiated
+        // Backward-compat guarantee: the legacy suspend/resume pattern (server-initiated
         // elicitation/create over the session path) is covered extensively
         // by ElicitationHttpIntegrationTest; here we just pin that a
         // LEGACY-era tools/call on this server still raises the legacy

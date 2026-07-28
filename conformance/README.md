@@ -11,9 +11,8 @@ the repository — see the section of that name below.
 
 ## Two tracks: stable and draft
 
-During v2 development the SDK runs the suite on two independently pinned
-tool versions (see [`../docs/v2-development-plan.md`](../docs/v2-development-plan.md),
-WS7):
+The SDK currently runs the suite on two independently pinned tool
+versions:
 
 - **Stable track** — the pinned stable release (`latest` npm dist-tag),
   carrying the published-spec scenarios. This is the legacy regression
@@ -47,7 +46,7 @@ the draft baseline).
 | `everything-client.php`           | Example MCP client driven by the conformance tool via env vars and command-line args. |
 | `run-conformance.php`             | PHP driver that starts `everything-server.php` under PHP's built-in web server, invokes the official conformance tool, and cleans up. Also handles the client-mode path and the draft track. |
 | `conformance-baseline.yml`        | Expected-failure baseline for the stable track. Tests listed here are *known* to fail today, each with a root cause. Regressions outside this list fail CI. |
-| `conformance-draft-baseline.yml`  | Expected-failure baseline for the draft track (`2026-07-28` scenarios). Entries name the v2 workstream that will make them pass and only shrink as workstreams complete. |
+| `conformance-draft-baseline.yml`  | Expected-failure baseline for the draft track (`2026-07-28` scenarios). Every entry documents its root cause and either a plan or an explicit not-pursuing rationale; entries only shrink within a pinned tool version. |
 
 Both external tool versions are pinned in
 [`../package.json`](../package.json) (the stable dependency and the
@@ -97,15 +96,15 @@ stale entry.
 the repository where "this test is expected to fail" is encoded. Every entry
 carries a reason comment.
 
-As of the WS3 milestone (suite `v0.1.16`) **the stable baseline is empty**:
+As of suite `v0.1.16` **the stable baseline is empty**:
 100% of stable scenarios pass on both the server and client tracks. Its
 last three entries — the `client_credentials` grant variants and the
-cross-app-access flow, all optional MCP Extensions — were closed by WS3's
+cross-app-access flow, all optional MCP Extensions — were closed by v2's
 authorization hardening.
 
 The draft track's baseline
 ([`conformance-draft-baseline.yml`](conformance-draft-baseline.yml))
-carries the remaining `2026-07-28` entries while v2 is in pre-release, each
+carries the remaining `2026-07-28` entries, each
 annotated with its root cause: bugs/staleness in the pinned alpha tool
 itself are documented there (and re-checked at every draft-pin bump)
 rather than worked around in the SDK.
@@ -148,9 +147,10 @@ When the upstream conformance tool ships new scenarios:
 4. Note the tool-version bump in [`../CHANGELOG.md`](../CHANGELOG.md) under
    `[Unreleased]`.
 
-Draft-pin bumps should happen deliberately at v2 milestone boundaries, not
-ad hoc — the alpha line moves quickly and each bump means re-curating the
-draft baseline (see the development plan, WS7).
+Draft-pin bumps should happen deliberately, not ad hoc — the alpha line
+moves quickly and each bump means re-curating the draft baseline. The two
+tracks merge into a single pin and a single baseline when the new stable
+conformance suite ships.
 
 New scenarios that exercise features we already support but reveal genuine
 bugs should result in an SDK fix, not a baseline entry — that's what the

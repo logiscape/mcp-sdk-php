@@ -228,8 +228,8 @@ documented as upstream-tool issues. See
 
 v2 is in **beta** (latest pre-release: `v2.0.0-beta5`); the final `v2.0.0`
 is gated on the `2026-07-28` spec's publication and a clean conformance
-run against the suite current at that date, per the
-[v2 development plan](docs/v2-development-plan.md).
+run against the suite current at that date, per the release gates in
+[ROADMAP.md](ROADMAP.md).
 
 This is a community-maintained SDK. See [ROADMAP.md](ROADMAP.md) for a candid self-assessment against the [SDK tier criteria](https://modelcontextprotocol.io/community/sdk-tiers) and [GOVERNANCE.md](GOVERNANCE.md) for how the project is maintained.
 

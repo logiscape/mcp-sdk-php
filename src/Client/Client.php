@@ -370,8 +370,7 @@ class Client {
             // MCP-Protocol-Version header is mirrored per-request from the
             // _meta envelope by the transport, there is no session id, and
             // the standalone GET stream does not exist on the 2026-07-28
-            // path (its replacement, subscriptions/listen, arrives with the
-            // WS3 transport changes).
+            // path (its replacement is subscriptions/listen).
             if ($this->transport instanceof StreamableHttpTransport && $era === 'legacy') {
                 $this->transport->getSessionManager()->setProtocolVersion(
                     $this->session->getNegotiatedProtocolVersion()

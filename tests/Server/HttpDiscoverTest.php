@@ -303,7 +303,7 @@ final class HttpDiscoverTest extends TestCase
 
     /**
      * The legacy HTTP flow is untouched: an initialize POST still mints and
-     * echoes a session id exactly as before (WS6 promise).
+     * echoes a session id exactly as in v1.
      */
     public function testLegacyInitializeStillMintsSessionId(): void
     {

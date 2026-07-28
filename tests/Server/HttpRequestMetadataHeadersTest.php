@@ -309,8 +309,8 @@ final class HttpRequestMetadataHeadersTest extends TestCase
 
     public function testLegacyRequestsNeedNoMetadataHeaders(): void
     {
-        // WS6 promise: a legacy initialize POST (no modern signal) is
-        // served without any SEP-2243 headers.
+        // Backward-compat guarantee: a legacy initialize POST (no modern
+        // signal) is served without any SEP-2243 headers.
         $initBody = (string) json_encode([
             'jsonrpc' => '2.0',
             'id' => 1,

@@ -602,8 +602,7 @@ class ServerSession extends BaseSession {
      * removes the initialize handshake itself (SEP-2575), so a client that
      * sends `initialize` is by definition speaking a legacy revision. The
      * stateless revision is selected per-request via the _meta envelope
-     * instead (see handleDiscover; the full per-request era detection is
-     * the WS2 milestone).
+     * instead (see handleDiscover and setNegotiatedProtocolVersion()).
      */
     private function negotiateProtocolVersion(string $clientRequestedVersion): string {
         // If the client requests a legacy version we support, return it
@@ -1674,8 +1673,7 @@ class ServerSession extends BaseSession {
      *
      * This is the seam for the 2026-07-28 stateless path, where there is no
      * initialize exchange and the effective protocol version arrives
-     * per-request in the _meta envelope (the per-request era detection that
-     * drives this lands with WS2). When the version selects the stateless
+     * per-request in the _meta envelope. When the version selects the stateless
      * revision the session is also marked ready, because that lifecycle has
      * no handshake to wait for (SEP-2575).
      *

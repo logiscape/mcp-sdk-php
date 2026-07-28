@@ -27,7 +27,7 @@ use Mcp\Types\MetaKeys;
 use PHPUnit\Framework\TestCase;
 
 /**
- * The WS6 cross-revision regression matrix: every supported protocol
+ * The cross-revision regression matrix: every supported protocol
  * revision exercised against the real `McpServer` request surface over
  * the HTTP runner, asserting the era contracts stay correct on each —
  *

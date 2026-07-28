@@ -131,7 +131,7 @@ final class RequestStateCodecTest extends TestCase
 
     public function testCrashedWriterStubIsReclaimed(): void
     {
-        // Regression (WS3 post-commit review): a writer that died between
+        // Regression: a writer that died between
         // creating the file and writing the secret used to leave a stub
         // that PERMANENTLY blocked initialization — the exclusive create
         // failed (the file exists) and the read loop never saw a complete
@@ -198,7 +198,7 @@ final class RequestStateCodecTest extends TestCase
 
     public function testHardenedPathRejectsFileReadableByOthers(): void
     {
-        // Multi-tenant hardening (WS3 post-commit review): the default
+        // Multi-tenant hardening: the default
         // shared-temp secret path is predictable, so a pre-existing file
         // readable by other users must be refused loudly — adopting a
         // secret a co-tenant can read (or planted) would let them forge

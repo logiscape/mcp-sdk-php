@@ -40,7 +40,7 @@ use RuntimeException;
 
 /**
  * Tests for ClientSession::negotiate() — SEP-2575 dual-era client
- * detection (WS2).
+ * detection.
  *
  * The probe/fallback sequencing follows the spec's normative rules: probe
  * server/discover with the preferred modern version; on -32022 retry with

@@ -19,8 +19,8 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 The v2 pre-release of the SDK, now in beta, adding day-one support for the
 MCP `2026-07-28` "stateless core" spec revision alongside the existing
 `2024-11-05` … `2025-11-25` support. Contains breaking API changes relative to v1; see
-[docs/api-audit-v2.md](docs/api-audit-v2.md) for the full v1 → v2 API audit
-that will feed the migration guide.
+[docs/migration-v2.md](docs/migration-v2.md) for the v1 → v2 migration
+guide covering every breaking and behavioral change.
 
 ### Added
 
@@ -257,10 +257,11 @@ that will feed the migration guide.
   runs the draft-spec suite (`composer conformance-draft`) against
   `conformance/conformance-draft-baseline.yml`, with a CI job for each
   track. See [conformance/README.md](conformance/README.md).
-- [docs/v2-development-plan.md](docs/v2-development-plan.md) — the working
-  plan for v2 development — and
-  [docs/api-audit-v2.md](docs/api-audit-v2.md) — the v1 → v2 API audit
-  feeding the migration guide. v2 pre-release notice added to the README.
+- A working plan for v2 development (`docs/v2-development-plan.md`) and a
+  v1 → v2 API audit (`docs/api-audit-v2.md`) that guided development
+  through the betas; both were retired at release preparation once the
+  migration guide and roadmap superseded them (see Removed). v2
+  pre-release notice added to the README.
 - The v2 documentation set: a v1 → v2 **migration guide**
   ([docs/migration-v2.md](docs/migration-v2.md)) covering every breaking
   and behavioral change with executed before/after code and the
@@ -376,6 +377,13 @@ that will feed the migration guide.
 
 ### Removed
 
+- The v2 working documents `docs/v2-development-plan.md` (the development
+  plan, which doubled as the per-workstream development record) and
+  `docs/api-audit-v2.md` (the v1 → v2 API audit that fed the migration
+  guide), retired at release preparation with all references swept.
+  [docs/migration-v2.md](docs/migration-v2.md) is now the authoritative
+  v1 → v2 API inventory and [ROADMAP.md](ROADMAP.md) carries direction;
+  both retired documents remain available in the repository's git history.
 - The pre-release experimental Tasks API, replaced by the SEP-2663
   extension without deprecation shims: the `tasks` capability slot and
   `TaskCapability` type; the `tasks/list` and `tasks/result` methods (now

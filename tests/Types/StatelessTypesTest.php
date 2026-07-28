@@ -40,7 +40,7 @@ use Mcp\Types\TraceContext;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Tests for the WS1 stateless-foundation types of the 2026-07-28 revision:
+ * Tests for the stateless-foundation types of the 2026-07-28 revision:
  * the SEP-2575 _meta envelope keys and server/discover types, the SEP-2549
  * caching-hint fields, the SEP-2106 schema/structuredContent relaxations,
  * and the SEP-414 trace-context pass-through.
@@ -220,7 +220,7 @@ final class StatelessTypesTest extends TestCase
 
     /**
      * The caching hints are nullable and OMITTED from serialization when
-     * unset, so legacy wire output is byte-identical to pre-WS1 behavior.
+     * unset, so legacy wire output is byte-identical to v1 behavior.
      */
     public function testCacheHintsOmittedWhenUnset(): void {
         $result = new ListToolsResult([]);

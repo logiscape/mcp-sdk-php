@@ -26,7 +26,7 @@ use Mcp\Types\ClientRequest;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Tests for the typed unknown-method exception (WS2 review cleanup).
+ * Tests for the typed unknown-method exception.
  *
  * ClientRequest::fromMethodAndParams() throws the dedicated
  * UnknownMethodException for unrecognized methods so

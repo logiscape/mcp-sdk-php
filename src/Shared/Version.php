@@ -65,8 +65,8 @@ class Version {
      * request. The SDK accepts it as an alias for `2026-07-28` on the
      * per-request modern path ONLY — it is never negotiable through the
      * legacy initialize handshake. This alias retires when the dual-track
-     * conformance pins converge at the stable 0.2.0 tool (WS7 in
-     * docs/v2-development-plan.md).
+     * conformance pins merge at the new stable conformance suite, expected
+     * shortly after the 2026-07-28 spec's publication.
      */
     public const DRAFT_MODERN_PROTOCOL_VERSION = 'DRAFT-2026-v1';
 

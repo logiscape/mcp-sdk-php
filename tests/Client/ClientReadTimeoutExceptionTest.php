@@ -28,7 +28,7 @@ use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
 /**
- * Tests for the typed read-timeout exception (WS2 review cleanup).
+ * Tests for the typed read-timeout exception.
  *
  * ClientSession's read paths throw ReadTimeoutException — a
  * RuntimeException subclass with the exact pre-existing messages for BC —

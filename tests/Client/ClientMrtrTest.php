@@ -39,7 +39,7 @@ use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
 /**
- * Tests for the client side of SEP-2322 multi-round-trip requests (WS3).
+ * Tests for the client side of SEP-2322 multi-round-trip requests.
  *
  * In modern (2026-07-28) mode, callTool() / getPrompt() / readResource()
  * inspect the RAW result before typed parsing: `resultType:

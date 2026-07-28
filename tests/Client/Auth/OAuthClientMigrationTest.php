@@ -266,7 +266,7 @@ final class OAuthClientMigrationTest extends TestCase
     }
 
     /**
-     * Regression (WS3 post-commit review): the guard used to discard the
+     * Regression: the guard used to discard the
      * stored tokens before raising the pre-registered-credentials error,
      * which disarmed migration detection on retry. The block must survive
      * any number of retries without retaining the rejected bearer token.
@@ -317,8 +317,8 @@ final class OAuthClientMigrationTest extends TestCase
     }
 
     /**
-     * SEP-2352 on the 403 insufficient_scope path (WS3 post-commit
-     * review): a migration must be detected here exactly like on the 401
+     * SEP-2352 on the 403 insufficient_scope path: a migration must be
+     * detected here exactly like on the 401
      * path — the PRM cache is bypassed, the AS1-bound tokens are
      * discarded, and the step-up grant flow runs against AS2 with a fresh
      * DCR registration, never the AS1 client_id.

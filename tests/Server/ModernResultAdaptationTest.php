@@ -122,7 +122,7 @@ final class ModernResultAdaptationTest extends TestCase
     /**
      * For a legacy client, resultType and caching hints are stripped even if
      * a handler set them, keeping legacy wire output identical to pre-v2
-     * behavior (WS6 promise).
+     * behavior.
      */
     public function testLegacyClientGetsFieldsStripped(): void
     {

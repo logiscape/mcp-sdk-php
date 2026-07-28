@@ -120,8 +120,8 @@ final class ClientDiscoverTest extends TestCase
     }
 
     /**
-     * A -32601 from a legacy server (the WS2 fallback trigger) surfaces as a
-     * typed McpError the caller can inspect.
+     * A -32601 from a legacy server (negotiate()'s fallback trigger)
+     * surfaces as a typed McpError the caller can inspect.
      */
     public function testDiscoverLegacyServerMethodNotFound(): void
     {
@@ -149,7 +149,7 @@ final class ClientDiscoverTest extends TestCase
 
     /**
      * A -32022 UnsupportedProtocolVersionError surfaces with its
-     * supported/requested data payload intact (the WS2 retry input).
+     * supported/requested data payload intact (negotiate()'s retry input).
      */
     public function testDiscoverUnsupportedVersionErrorSurfaces(): void
     {

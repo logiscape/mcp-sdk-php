@@ -1513,7 +1513,7 @@ class StreamableHttpTransport
      * Bound requests that carry the modern `_meta` envelope by the given
      * timeout (seconds), or remove the bound with null.
      *
-     * Used by Client::connect() around era negotiation (SEP-2575, WS2):
+     * Used by Client::connect() around era negotiation (SEP-2575):
      * the spec's fallback rules require detecting a server that never
      * answers the `server/discover` probe within the configured probe
      * timeout, but a synchronous HTTP POST otherwise blocks in cURL for
@@ -1556,7 +1556,7 @@ class StreamableHttpTransport
      * BaseSession routes them to the pending request's response handler,
      * which surfaces them as typed McpError with code and data intact —
      * the same contract the stdio transport has always provided. The
-     * dual-era negotiation (WS2) depends on this: the client must be able
+     * dual-era negotiation depends on this: the client must be able
      * to classify -32022/-32021/-32020 versus a legacy server's
      * -32601/-32602 from the typed error, not from an opaque transport
      * exception. (Responses in this queue always carry a request id —

@@ -1974,7 +1974,7 @@ class HttpServerTransport implements Transport
             );
         }
 
-        // Legacy path below: unchanged pre-WS2 behavior. Modern requests
+        // Legacy path below: unchanged from v1. Modern requests
         // never reach it (every modern request is sessionless), so the
         // status hint never applies here.
 

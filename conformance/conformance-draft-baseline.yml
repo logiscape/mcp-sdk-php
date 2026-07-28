@@ -5,7 +5,9 @@
 # package.json), which carries the 2026-07-28 draft-spec scenarios.
 # The stable track keeps its own baseline in conformance-baseline.yml —
 # the two files are tied to different installed tool versions and are
-# curated independently (see docs/v2-development-plan.md, WS7).
+# curated independently (see README.md in this directory). The two tracks
+# merge into a single pin and a single baseline when the new stable
+# conformance suite ships.
 #
 # The no-shortcut rule in conformance/README.md applies to this file
 # exactly as it does to the stable baseline: every entry has a documented
@@ -135,7 +137,7 @@
 #    server/discover — the changes behind the since-cleared
 #    json-schema-ref-no-deref and request-metadata entries (notes above).
 #
-# WS4 Tasks extension (SEP-2663) scenario gating note (re-verified
+# Tasks extension (SEP-2663) scenario gating note (re-verified
 # 2026-07-27 @ alpha.10 — identical results to the 2026-07-01 alpha.9
 # verification: eight pass, tasks-status-notifications still skipped by
 # the tool itself, tasks-mrtr-composition still the one expected failure):
@@ -154,7 +156,8 @@
 #  tasks-mrtr-composition is the one expected failure (entry below). They are
 #  additionally covered by the SDK's own end-to-end tests
 #  (tests/Server/TasksExtensionTest.php, HTTP and stdio) and TaskManager unit
-#  tests. Re-evaluate at WS7 convergence.
+#  tests. Re-evaluate when the conformance tracks merge at the new
+#  stable suite.
 
 server:
   # --- SEP-2663 Tasks: synchronous-execution-model behavioral choice ---
@@ -196,8 +199,9 @@ server:
     # scenarios, eight pass and tasks-status-notifications is skipped by
     # the tool (0 checks, pending its subscriptions/listen rewrite).
     # Upstream ask (SEP-2484 candidate): clarify that both spec-permitted
-    # sequences are conformant. Re-evaluate at WS7 convergence, and again
-    # if a reference SDK ships Tasks with the composition.
+    # sequences are conformant. Re-evaluate when the conformance tracks
+    # merge at the new stable suite, and again if a reference SDK ships
+    # Tasks with the composition.
 
 client:
   # --- Issuer-binding strictness (root cause re-verified 2026-07-03;

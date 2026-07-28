@@ -423,7 +423,8 @@ class ClientSession extends BaseSession {
      * (protocol version, client info, client capabilities) and may be sent
      * without — or before — the legacy initialize handshake. Calling it does
      * not change this session's negotiated protocol version; the dual-era
-     * probe/fallback logic that acts on its result is the WS2 milestone.
+     * probe/fallback logic that acts on its result lives in negotiate(),
+     * driven by Client::connect().
      *
      * @param string|null $protocolVersion Protocol revision to advertise in
      *        the envelope (defaults to the latest supported revision)

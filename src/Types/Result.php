@@ -45,8 +45,8 @@ class Result implements McpModel {
      * means the response came from a legacy peer and is treated as
      * "complete". The server session stamps this on the modern path and
      * strips it for legacy clients, so handlers normally leave it null.
-     * (The "input_required" variant arrives with the SEP-2322 multi-round-trip
-     * work in WS3.)
+     * (The "input_required" variant is the SEP-2322 multi-round-trip flow —
+     * see InputRequiredResult.)
      */
     public ?string $resultType = null;
 

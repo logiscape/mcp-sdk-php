@@ -86,7 +86,8 @@ $serverUrl = $argv[$argc - 1];
 // credentials without issuer context (the AS issuer is a runtime-chosen
 // localhost port), so it opts into the SDK's explicit 2025-11-25 legacy
 // compatibility for unbound credentials. See conformance/README.md and the
-// upstream-drift note in docs/v2-development-plan.md (WS3).
+// auth/pre-registration entry in conformance-draft-baseline.yml for the
+// full issuer-binding context.
 $track = 'stable';
 foreach ($argv as $arg) {
     if (str_starts_with($arg, '--track=')) {
@@ -800,7 +801,7 @@ try {
         'sse-retry' => scenarioSseRetry($serverUrl),
         'json-schema-ref-no-deref' => scenarioJsonSchemaRefNoDeref($serverUrl),
 
-        // --- 2026-07-28 draft-track transport scenarios (WS3 client side) ---
+        // --- 2026-07-28 draft-track transport scenarios (client side) ---
         'request-metadata' => scenarioRequestMetadata($serverUrl),
         'http-standard-headers' => scenarioHttpStandardHeaders($serverUrl),
         'http-custom-headers' => scenarioHttpCustomHeaders($serverUrl, $context),

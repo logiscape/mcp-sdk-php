@@ -356,7 +356,7 @@ $server->tool('test_elicitation_sep1330_enums', 'Requests elicitation with enum 
 });
 
 // ---------------------------------------------------------------------------
-// WS3: SEP-2243 designated header parameters (x-mcp-header)
+// SEP-2243 designated header parameters (x-mcp-header)
 // ---------------------------------------------------------------------------
 
 // The http-custom-header-server-validation scenario activates on the first
@@ -382,7 +382,7 @@ $server->tool(
 );
 
 // ---------------------------------------------------------------------------
-// WS3: subscriptions/listen diagnostics (SEP-2575)
+// subscriptions/listen diagnostics (SEP-2575)
 // ---------------------------------------------------------------------------
 
 $server->tool('test_trigger_tool_change', 'Publishes a tools list_changed event', function () use ($server): string {
@@ -420,7 +420,7 @@ $server->tool('test_logging_tool', 'Logs only when the request opts in via _meta
 });
 
 // ---------------------------------------------------------------------------
-// WS3: SEP-2322 multi-round-trip fixtures (input-required-result-* scenarios)
+// SEP-2322 multi-round-trip fixtures (input-required-result-* scenarios)
 // ---------------------------------------------------------------------------
 
 $server->tool('test_input_required_result_elicitation', 'Round 1: requests the user name via elicitation; round 2: completes', function (ElicitationContext $elicit): string {
@@ -520,7 +520,7 @@ $server->tool('test_input_required_result_capabilities', 'Requests only input ty
 });
 
 // ---------------------------------------------------------------------------
-// SEP-2663 Tasks extension fixtures (WS4). enableTasks() declares
+// SEP-2663 Tasks extension fixtures. enableTasks() declares
 // capabilities.extensions["io.modelcontextprotocol/tasks"] and registers
 // tasks/get | tasks/update | tasks/cancel (tasks/list and tasks/result are
 // intentionally absent -> -32601). A tool opts into task augmentation via

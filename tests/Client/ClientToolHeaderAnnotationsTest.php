@@ -30,7 +30,7 @@ use Mcp\Types\RequestId;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Tests for the client side of SEP-2243 x-mcp-header processing (WS3).
+ * Tests for the client side of SEP-2243 x-mcp-header processing.
  *
  * On the modern HTTP path, tools/list results are validated: tools with
  * invalid x-mcp-header annotations are excluded (spec MUST for HTTP

@@ -1,7 +1,6 @@
 # Shared-Hosting Validation Report (v2 / 2026-07-28)
 
-This is the WS8 validation record promised by
-[v2-development-plan.md](v2-development-plan.md): v2 proven on a real
+This is the v2 shared-hosting validation record: v2 proven on a real
 cPanel/Apache/PHP-FPM shared-hosting account, not just asserted. The
 compatibility rules themselves live in [compatibility.md](compatibility.md);
 this document records what was actually run, where, and with what result.
@@ -64,7 +63,7 @@ which are already the documented requirement for that non-core feature.
 
 ## Graceful-degradation claims and their tests
 
-Per the WS8 criteria, every degradation claim is backed by an automated test
+Every degradation claim is backed by an automated test
 that simulates the failure mode (all use `BufferedIo` or the in-memory
 harness):
 
@@ -242,7 +241,5 @@ configured CA bundle, pass one explicitly, e.g.
 
 - [compatibility.md](compatibility.md) — the canonical compatibility rules
   this report validates
-- [v2-development-plan.md](v2-development-plan.md) — WS8 scope and
-  completion criteria
 - [`examples/server_auth/README.md`](../examples/server_auth/README.md) —
   the OAuth walk-through used in this validation

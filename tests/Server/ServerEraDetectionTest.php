@@ -43,7 +43,7 @@ use Mcp\Types\CallToolResult;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Tests for SEP-2575 per-request era detection in ServerSession (WS2).
+ * Tests for SEP-2575 per-request era detection in ServerSession.
  *
  * A dual-era server selects per request: a request carrying the modern
  * `_meta` envelope is served statelessly under the 2026-07-28 rules — even
@@ -414,7 +414,7 @@ final class ServerEraDetectionTest extends TestCase
     /**
      * A required envelope field explicitly set to JSON null is reported as
      * null (invalid), not as missing — isset() semantics would conflate
-     * the two (WS1 re-review item d).
+     * the two.
      */
     public function testExplicitNullEnvelopeFieldReportedAsNull(): void
     {

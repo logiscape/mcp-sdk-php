@@ -80,17 +80,19 @@ will — the arithmetic changes.
 
 ## Now: shipping v2
 
-**v2 development is feature-complete and in testing.** The `main` branch
+**v2 development is complete.** The `main` branch
 carries the pre-release `v2`; the stable `v1` line lives on the
 [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x) and
 continues to receive bug fixes and low-risk backports. Every workstream of
-the [v2 development plan](docs/v2-development-plan.md) — the stateless
+v2 development — the stateless
 `2026-07-28` core, dual-era client/server negotiation, the transport and
 authorization changes, the Tasks (SEP-2663) and MCP Apps (SEP-1865)
 extensions, backward compatibility across all five supported revisions,
 conformance, shared-hosting validation on a live cPanel host, examples, and
-documentation — is implemented, reviewed, and verified. The plan itself now
-doubles as the development record; per-workstream status lines live there.
+documentation — is implemented, reviewed, and verified. The working plan
+that ordered those workstreams (`docs/v2-development-plan.md`) was retired
+at release preparation and is preserved in the repository's git history as
+the v2 development record.
 
 What remains before a tagged `v2.0.0` is the release process, not feature
 work. In line with guiding principle #1, this section outranks everything
@@ -102,9 +104,8 @@ below it:
   final text lands changes, the affected workstreams re-open as new
   milestones (research → implement → review → approve) before release — the
   gates are checkpoints, not a ratchet.
-- **Pass the remaining release gates** (gates are human decisions — see the
-  [v2 plan's release-gate section](docs/v2-development-plan.md#release-gates)):
-  the validated pre-release tag, then **G4** — a clean conformance run
+- **Pass the remaining release gates** (gates are human decisions): the
+  validated pre-release tag, then the final gate — a clean conformance run
   against the suite version current at spec publication, and the `v2.0.0`
   tag.
 - **Burn down the draft-track conformance baseline.** The stable track is at

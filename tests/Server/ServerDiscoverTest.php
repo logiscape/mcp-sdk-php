@@ -112,7 +112,7 @@ final class ServerDiscoverTest extends TestCase
         $result = $inner->result;
         $this->assertInstanceOf(DiscoverResult::class, $result);
         // The advertised list covers every negotiable revision plus the
-        // RC-window draft alias for the stateless revision (WS2).
+        // RC-window draft alias for the stateless revision.
         $this->assertSame(Version::advertisedSupportedVersions(), $result->supportedVersions);
         $this->assertSame('discover-test-server', $result->getServerInfo()?->name);
         $this->assertSame('3.2.1', $result->getServerInfo()?->version);
@@ -137,8 +137,7 @@ final class ServerDiscoverTest extends TestCase
     /**
      * The capabilities in the discover result are IDENTICAL on the wire to
      * what the legacy initialize result advertises for the same server —
-     * the two discovery surfaces can never disagree (WS1 completion
-     * criterion).
+     * the two discovery surfaces can never disagree.
      */
     public function testDiscoverCapabilitiesMatchInitializeResult(): void
     {
@@ -360,7 +359,7 @@ final class ServerDiscoverTest extends TestCase
     }
 
     /**
-     * The negotiated-version setter (the WS2 per-request era-detection seam)
+     * The negotiated-version setter (the per-request era-detection seam)
      * validates its input and marks the session ready when selecting the
      * stateless revision — under SEP-2575 there is no handshake to wait for.
      */

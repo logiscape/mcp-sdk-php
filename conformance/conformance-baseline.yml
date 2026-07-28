@@ -6,11 +6,11 @@
 #
 # Each entry documents WHY the test fails so SDK fixes can be targeted in future updates.
 #
-# Last updated: 2026-06-12 (WS3 milestone)
+# Last updated: 2026-06-12
 # Conformance tool version: 0.1.16
 #
 # Both lists are empty: the stable track passes 100% of its scenarios.
-# WS3's authorization hardening closed the last three client entries —
+# v2's authorization hardening closed the last three client entries —
 # the client_credentials grant (private_key_jwt with ES256/RS256
 # assertions, and client_secret_basic) and the SEP-990 cross-app-access
 # flow (RFC 8693 token exchange at the IdP + RFC 7523 jwt-bearer at the

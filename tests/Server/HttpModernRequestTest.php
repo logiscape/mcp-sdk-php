@@ -37,7 +37,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Tests for general modern (2026-07-28) requests over the HTTP runner —
- * WS2's per-request era detection generalizing WS1's discover-only
+ * per-request era detection generalizing the discover-only
  * sessionless path (SEP-2575 / SEP-2567).
  *
  * Covers: stateless service of ordinary methods with no handshake and no
@@ -415,7 +415,7 @@ final class HttpModernRequestTest extends TestCase
         $this->assertStringNotContainsString(
             'notifications/message',
             (string) $response->getBody(),
-            'Interleaved notifications are dropped on the modern JSON path (carrier arrives with WS3)'
+            'Interleaved notifications are dropped on the modern JSON path (subscriptions/listen is the modern carrier)'
         );
     }
 
@@ -466,7 +466,7 @@ final class HttpModernRequestTest extends TestCase
      * Dual-era coexistence on ONE endpoint: a legacy client completes the
      * initialize handshake and keeps its session while modern stateless
      * requests interleave — each era behaving correctly, neither leaking
-     * into the other (the WS2 four-way matrix, HTTP server half).
+     * into the other (the four-way era matrix, HTTP server half).
      */
     public function testMixedEraTrafficOnOneRunner(): void
     {
@@ -526,7 +526,7 @@ final class HttpModernRequestTest extends TestCase
     /**
      * A handler-cached Result served across ERAS on one runner keeps the
      * handler's own values: response adaptation must operate on a copy,
-     * never mutate the handler's instance (WS1 re-review finding). Without
+     * never mutate the handler's instance. Without
      * the clone, the legacy response would strip resultType/ttlMs/cacheScope
      * off the CACHED object, and the next modern client would receive
      * re-stamped conservative defaults (ttlMs 0) instead of the handler's

@@ -6,7 +6,8 @@
  * Orchestrates the official MCP conformance test suite against this SDK's
  * everything-server.php and everything-client.php implementations.
  *
- * Two tracks are supported (see docs/v2-development-plan.md, WS7):
+ * Two tracks are supported (they merge into a single pin and baseline when
+ * the new stable conformance suite ships — see conformance/README.md):
  *   - Stable track: the pinned stable conformance tool with the published-spec
  *     scenarios, gated by conformance-baseline.yml. This is the legacy
  *     regression gate.

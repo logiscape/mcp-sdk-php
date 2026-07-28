@@ -32,8 +32,6 @@ link to them freely.
 
 | Document | What it covers |
 | --- | --- |
-| [v2-development-plan.md](v2-development-plan.md) | The main working plan for v2 development — workstreams, milestones, release gates, and the development record. |
-| [api-audit-v2.md](api-audit-v2.md) | The v1 → v2 PHP API audit (source material for the migration guide). |
 | [../ROADMAP.md](../ROADMAP.md) | Direction, SDK-tier self-assessment, and what is being worked on. |
 | [../CHANGELOG.md](../CHANGELOG.md) | Structured release history (Keep a Changelog). |
 | [../GOVERNANCE.md](../GOVERNANCE.md) | How decisions are made and how to become a trusted contributor. |

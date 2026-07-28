@@ -35,7 +35,7 @@ use Mcp\Types\RequestParams;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Tests for the transport-level SEP-2243 header derivation (WS3, client).
+ * Tests for the transport-level SEP-2243 header derivation (client side).
  *
  * Every outgoing message carrying the modern SEP-2575 `_meta` envelope
  * gets `Mcp-Method` (requests AND notifications) and — for the
