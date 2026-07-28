@@ -16,13 +16,31 @@
 # may legitimately add entries for genuinely-new upstream behavior, each
 # with its own root cause (recorded below).
 #
-# Last updated: 2026-07-27 (pin bump 0.2.0-alpha.9 -> 0.2.0-alpha.10,
-# baseline 4 -> 2: server-stateless and json-schema-ref-no-deref both
-# CLEARED via upstream fixes in the alpha.10 build — see the cleared-entry
-# notes below. The two remaining entries, tasks-mrtr-composition and
-# auth/pre-registration, were re-verified failing at alpha.10 for their
-# documented, unchanged root causes.)
+# Last updated: 2026-07-28 (baseline 2 -> 1, within the alpha.10 pin:
+# tasks-mrtr-composition CLEARED via SDK FEATURE — the new per-tool
+# taskInputMode: pre-task composition; see the cleared-entry note below.
+# The one remaining entry, auth/pre-registration, is unchanged and still
+# pending its documented human decision. Prior update 2026-07-27: pin
+# bump 0.2.0-alpha.9 -> 0.2.0-alpha.10, baseline 4 -> 2.)
 # Conformance tool version: 0.2.0-alpha.10 (draft pin)
+#
+# (CLEARED at pin 0.2.0-alpha.10, 2026-07-28, via SDK FEATURE)
+# tasks-mrtr-composition — 1/1 after the SDK gained a per-tool input
+# composition choice for task-augmented tools: tool(..., taskInputMode:
+# TaskInputMode::PRE_TASK) resolves SEP-2322 multi-round-trip input on the
+# plain input_required path while NO task record exists and mints the
+# task — already terminal — on the final round, exactly the ext-tasks
+# Task Creation SHOULD the scenario's sep-2663-mrtr-synchronous-before-
+# task-creation check operationalizes. The everything-server's
+# test_tool_with_task fixture now opts into that mode; the handle-first
+# in-task composition (default, taskInputMode: in-task) remains the
+# SDK's default and is exercised by the sibling tasks-mrtr-input
+# scenario (confirm_delete / multi_input fixtures), which continues to
+# pass — the two spec-permitted sequences now coexist per-server. The
+# removed entry's root-cause analysis (both orderings spec-permitted;
+# the check hardens a conditional SHOULD) remains true but moot: the
+# composition is now a genuine, documented, user-facing feature (see
+# docs/tasks.md "Pre-task input"), not a conformance accommodation.
 #
 # (CLEARED at pin 0.2.0-alpha.10, 2026-07-27, via UPSTREAM FIXES)
 # server-stateless — 28/28 at alpha.10 (was 24/28 at alpha.9). Both
@@ -138,9 +156,10 @@
 #    json-schema-ref-no-deref and request-metadata entries (notes above).
 #
 # Tasks extension (SEP-2663) scenario gating note (re-verified
-# 2026-07-27 @ alpha.10 — identical results to the 2026-07-01 alpha.9
-# verification: eight pass, tasks-status-notifications still skipped by
-# the tool itself, tasks-mrtr-composition still the one expected failure):
+# 2026-07-28 @ alpha.10: NINE pass — tasks-mrtr-composition now passes
+# via the SDK's taskInputMode: pre-task feature, cleared-entry note
+# above — and tasks-status-notifications is still skipped by the tool
+# itself):
 #  The 0.2.0-alpha.10 tool registers its 10 SEP-2663 Tasks scenarios
 #  (tasks-lifecycle, tasks-capability-negotiation, tasks-wire-fields,
 #  tasks-request-state-removal, tasks-mrtr-input, tasks-request-headers,
@@ -150,58 +169,15 @@
 #  everything-server.php exposes the fixtures they need via enableTasks(),
 #  and run-conformance.php's server-draft/draft gate runs each explicitly
 #  after the suite (DRAFT_SERVER_EXTRA_SCENARIOS) so they ARE evaluated
-#  against this baseline. Of the ten: EIGHT pass, tasks-status-notifications
-#  is SKIPPED by the tool itself (0 checks executed — it is pending the
-#  tool's own subscriptions/listen rewrite, not an SDK gap), and
-#  tasks-mrtr-composition is the one expected failure (entry below). They are
-#  additionally covered by the SDK's own end-to-end tests
-#  (tests/Server/TasksExtensionTest.php, HTTP and stdio) and TaskManager unit
-#  tests. Re-evaluate when the conformance tracks merge at the new
-#  stable suite.
+#  against this baseline. Of the ten: NINE pass, and
+#  tasks-status-notifications is SKIPPED by the tool itself (0 checks
+#  executed — it is pending the tool's own subscriptions/listen rewrite,
+#  not an SDK gap). They are additionally covered by the SDK's own
+#  end-to-end tests (tests/Server/TasksExtensionTest.php, HTTP and stdio)
+#  and TaskManager unit tests. Re-evaluate when the conformance tracks
+#  merge at the new stable suite.
 
-server:
-  # --- SEP-2663 Tasks: synchronous-execution-model behavioral choice ---
-  - tasks-mrtr-composition
-    # INTENTIONAL MODEL CHOICE, not a bug — verified 2026-07-03 against the
-    # ext-tasks spec and SEP-2663 text that both behaviors are
-    # spec-permitted (re-verified still failing 0/1 at alpha.10,
-    # 2026-07-27; the scenario's check and fixture contract are unchanged):
-    #  * The only normative sentence on the composition is a CONDITIONAL
-    #    SHOULD about ordering, not mechanism choice: "Server
-    #    implementations THAT USE multi round-trip requests in conjunction
-    #    with task creation ... SHOULD resolve all MRTR exchanges
-    #    synchronously before responding with a CreateTaskResult"
-    #    (ext-tasks specification/draft/tasks.md §Task Creation).
-    #  * SEP-2663's rationale is explicitly permissive: a tool "MAY use
-    #    them sequentially", and "prohibiting this would require imposing
-    #    an artificial constraint".
-    #  * The spec's before/during division ("a server that needs client
-    #    input BEFORE returning a CreateTaskResult uses the MRTR flow ...
-    #    input DURING task execution uses inputRequests/inputResponses")
-    #    is descriptive, not RFC-2119 — and it presumes an execution model
-    #    where task creation and work-start are separable moments.
-    # The scenario's one check, sep-2663-mrtr-synchronous-before-task-
-    # creation, operationalizes that descriptive sentence as mandatory:
-    # its fixture contract requires round 1 = InputRequiredResult with NO
-    # taskId and round 2 = CreateTaskResult. The SDK instead creates the
-    # handle immediately and surfaces input requests IN-TASK via the
-    # tasks/get `inputRequests` map answered by tasks/update — the sibling
-    # scenario tasks-mrtr-input exercises this path and the SDK passes
-    # 3/3. The two patterns are mutually exclusive for a single tool, and
-    # under the shared-hosting synchronous execution model (the tool body
-    # runs within the creating request) the task exists before the body
-    # runs, so pre-work input IS in-task input; handle-first is also
-    # strictly more durable here (an interrupted MRTR exchange loses its
-    # wire-held requestState; an interrupted in-task exchange survives via
-    # tasks/get). No reference-SDK comparison exists: TypeScript and
-    # Python both baseline ALL nine runnable SEP-2663 scenarios (extension
-    # not implemented) as of their 2026-07 v2 betas. Of the other nine
-    # scenarios, eight pass and tasks-status-notifications is skipped by
-    # the tool (0 checks, pending its subscriptions/listen rewrite).
-    # Upstream ask (SEP-2484 candidate): clarify that both spec-permitted
-    # sequences are conformant. Re-evaluate when the conformance tracks
-    # merge at the new stable suite, and again if a reference SDK ships
-    # Tasks with the composition.
+server: []
 
 client:
   # --- Issuer-binding strictness (root cause re-verified 2026-07-03;

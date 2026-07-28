@@ -2096,6 +2096,13 @@ transport and per negotiated era:
   transparently **resumes** the callback on the next HTTP round-trip --
   same re-entry behavior, session-backed instead of state-token-backed.
 
+The same multi-round-trip exchange also composes with the Tasks
+extension: a task-capable tool registered with `taskInputMode:
+TaskInputMode::PRE_TASK` resolves its input through these plain
+`input_required` rounds *before* the task is created -- see
+[Pre-task input](tasks.md#pre-task-input-the-multi-round-trip-composition)
+in the Tasks guide.
+
 In both HTTP models your callback is re-entered from the top, so one rule
 applies: **elicitation calls must happen in a deterministic order**.
 Don't make an elicitation call conditional on data that changes between
@@ -2929,7 +2936,7 @@ registry, including the client-side entries, is in the
 
 | Method | Description |
 |--------|-------------|
-| `tool(name, description, callback, title?, icons?, outputSchema?, inputSchema?, taskSupport?, annotations?)` | Register a tool; `taskSupport` (a `TaskSupport` constant) opts it into SEP-2663 task augmentation -- see the [Tasks guide](tasks.md); `annotations` sets spec `ToolAnnotations` behavioral hints (array or `ToolAnnotations`) -- see [Tool Annotations](#tool-annotations) |
+| `tool(name, description, callback, title?, icons?, outputSchema?, inputSchema?, taskSupport?, annotations?, taskInputMode?)` | Register a tool; `taskSupport` (a `TaskSupport` constant) opts it into SEP-2663 task augmentation and `taskInputMode` (a `TaskInputMode` constant) picks how a task-augmented tool composes with multi-round-trip input (in-task default, or the pre-task composition) -- see the [Tasks guide](tasks.md); `annotations` sets spec `ToolAnnotations` behavioral hints (array or `ToolAnnotations`) -- see [Tool Annotations](#tool-annotations) |
 | `prompt(name, description, callback, title?, icons?)` | Register a prompt |
 | `resource(uri, name, callback, description?, mimeType?, title?, icons?, size?)` | Register a resource |
 | `resourceTemplate(uriTemplate, name, callback, description?, mimeType?, title?, icons?)` | Register a resource template (variables passed to the callback by name) |

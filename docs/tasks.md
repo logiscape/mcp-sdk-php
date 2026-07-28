@@ -24,7 +24,7 @@ call from a client that has not declared the extension — and any
 
 | Method | Purpose |
 | --- | --- |
-| `tools/call` | Returns a flat `CreateTaskResult` (`resultType: "task"`) when the server augments the call as a task; otherwise an ordinary `CallToolResult` |
+| `tools/call` | Returns a flat `CreateTaskResult` (`resultType: "task"`) when the server augments the call as a task; otherwise an ordinary `CallToolResult`. A tool in pre-task input mode answers intermediate rounds with an `input_required` result while its input is still being gathered (see [Pre-task input](#pre-task-input-the-multi-round-trip-composition)) |
 | `tasks/get` | Poll a task: status, plus — by status — the inlined `result` (completed), `error` (failed), or pending `inputRequests` (input_required) |
 | `tasks/update` | Answer pending input requests (`inputResponses`, keyed by input key); resumes the task body |
 | `tasks/cancel` | Request cancellation (cooperative and idempotent; unknown ids are `-32602`) |
@@ -97,8 +97,10 @@ request** and records the outcome for `tasks/get` to surface. That is a
 deliberate consequence of PHP's shared-hosting execution model (no
 background workers): a simple task is already terminal on the client's
 first poll, a tool that requests input parks in `input_required` until
-the client answers, and a tool that hands its work off defers (next
-section), leaving the task `working`.
+the client answers (or, in pre-task input mode, resolves its input
+*before* the task is created — the record is then born terminal), and a
+tool that hands its work off defers (next section), leaving the task
+`working`.
 
 ### Deferring to a background worker
 
@@ -185,6 +187,67 @@ it. Two operational notes for workers:
   is space reclamation only, never a correctness requirement: expiry is
   also enforced on every record access.
 
+### Pre-task input: the multi-round-trip composition
+
+By default a task-capable tool that gathers input does so *in-task* (next
+section): the handle is minted first and the task parks in
+`input_required`. The spec recommends the opposite ordering for servers
+that combine multi-round-trip input with task creation: *"Server
+implementations that use multi round-trip requests in conjunction with
+task creation … SHOULD resolve all MRTR exchanges synchronously before
+responding with a CreateTaskResult."* Opt a tool into that composition
+with `taskInputMode:` (`Mcp\Server\TaskInputMode` constants):
+
+```php
+use Mcp\Server\TaskInputMode;
+use Mcp\Server\TaskSupport;
+
+$server->tool(
+    'plan-trip',
+    'Plans a trip after asking where to go (task-only)',
+    function (Mcp\Server\Elicitation\ElicitationContext $elicit): string {
+        $answer = $elicit->form(
+            'Where to?',
+            ['type' => 'object', 'properties' => ['city' => ['type' => 'string']], 'required' => ['city']],
+            inputKey: 'destination',
+        );
+        $content = $answer?->content;
+        $city = is_array($content) ? ($content['city'] ?? '?') : ($content->city ?? '?');
+        return "Trip to {$city} planned.";
+    },
+    taskSupport: TaskSupport::REQUIRED,
+    taskInputMode: TaskInputMode::PRE_TASK,
+);
+```
+
+On the wire, input rounds run exactly like SEP-2322 multi-round-trip
+input on an ordinary call — each round answers the `tools/call` with an
+`input_required` result carrying the pending `inputRequests` and a
+signed `requestState`, and **no task record exists yet**. Only the final
+round, with every input resolved and the body run to completion, mints
+the task and returns the `CreateTaskResult` — already `completed`, so
+the client's first `tasks/get` poll finds the inlined result. An
+abandoned exchange therefore leaves nothing behind on the server, which
+suits the shared-hosting model well.
+
+Differences from the in-task default to be aware of:
+
+- **Protocol errors surface as JSON-RPC errors, not a `failed` task.** A
+  `McpError` thrown during a pre-task round reaches the wire directly —
+  no task exists that anyone could poll for the failure. (A plain tool
+  *execution* error still mints a `completed` task carrying an `isError`
+  result, matching the in-task path.)
+- **`TaskContext::defer()` is unavailable.** While pre-task rounds run,
+  no task exists, so `isTask()` is `false` and `defer()` raises `-32603`
+  exactly as on a non-task call. A tool that hands work to a background
+  worker should use the in-task default (a future revision may add
+  mint-on-defer).
+- **`OPTIONAL` tools degrade gracefully.** For a client that did not
+  declare the Tasks extension, the identical input rounds run and the
+  final round simply answers with an ordinary `CallToolResult` — the
+  input mechanism is the same whether or not a task caps the exchange.
+  (On legacy revisions the tool behaves like any plain eliciting tool.)
+
 ### In-task input
 
 A task tool that needs user input mid-flight uses the same
@@ -226,9 +289,10 @@ $server->tool(
 This is distinct from SEP-2322 multi-round-trip input on an ordinary
 (non-task) call, which happens *before* any task exists — the in-task
 mechanism (`inputRequests` on `tasks/get`, `inputResponses` on
-`tasks/update`) handles input *during* a task. The SDK routes each
-elicitation to the right mechanism automatically; the tool code is the
-same either way.
+`tasks/update`) handles input *during* a task. The tool code is the same
+either way; which mechanism serves a task-augmented call is the tool's
+`taskInputMode:` choice (in-task by default, or the pre-task composition
+above).
 
 ### Cancellation and expiry
 
@@ -324,7 +388,12 @@ try {
 Notes:
 
 - **`callTool()` is declared `CallToolResult|CreateTaskResult`** — always
-  branch with `instanceof` when talking to a task-capable server.
+  branch with `instanceof` when talking to a task-capable server. A
+  pre-task-mode tool's input rounds never surface here: the client
+  services `input_required` rounds transparently through the registered
+  `onElicit()` / `onSampling()` handlers and returns only the final
+  result — for a pre-task tool, a `CreateTaskResult` that is already
+  `completed` on the first poll.
 - **Declare elicitation even for in-task input.** The gotcha shown above:
   the server checks the client's *elicitation capability* before eliciting
   at all, and registering `onElicit()` is what advertises it — even though
@@ -348,6 +417,10 @@ Handled by the SDK, listed for the curious:
 - `CreateTaskResult` is discriminated by `resultType: "task"`; task fields
   are `ttlMs` / `pollIntervalMs` (the pre-release `ttl` / `pollInterval`
   spellings never appear on the wire).
+- A pre-task tool's input rounds are ordinary SEP-2322 `input_required`
+  results (with `requestState`); the eventual `CreateTaskResult` never
+  carries `requestState` or `inputRequests` — the MRTR phase's state does
+  not leak into the task envelope.
 - The optional `notifications/tasks` status push defined by the extension
   is not implemented by this SDK — poll `tasks/get` at `pollIntervalMs`.
 

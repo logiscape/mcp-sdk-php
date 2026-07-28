@@ -16,6 +16,27 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 
 ## [Unreleased]
 
+### Added
+
+- **Per-tool pre-task input mode for the Tasks extension** — a new
+  `taskInputMode:` argument on `McpServer::tool()` (constants in
+  `Mcp\Server\TaskInputMode`) lets a task-capable tool choose how it
+  composes with SEP-2322 multi-round-trip input:
+  - `IN_TASK` (default, unchanged behavior): the task handle is minted
+    first and input is gathered in-task via `tasks/get` `inputRequests`
+    answered through `tasks/update`.
+  - `PRE_TASK`: input is resolved through plain `input_required` rounds
+    while **no task record exists**; the final round mints the task —
+    already terminal — and returns the `CreateTaskResult`. This is the
+    composition the ext-tasks specification recommends ("resolve all
+    MRTR exchanges synchronously before responding with a
+    CreateTaskResult") and clears the `tasks-mrtr-composition`
+    conformance scenario (draft baseline down to one entry). A protocol
+    error during a pre-task round surfaces as a JSON-RPC error rather
+    than a `failed` task, and `TaskContext::defer()` remains unavailable
+    until the task exists — deferring tools should keep the in-task
+    default. See [docs/tasks.md](docs/tasks.md).
+
 ## [2.0.0]
 
 The v2 release of the SDK, adding day-one support for the

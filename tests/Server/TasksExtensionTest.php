@@ -21,6 +21,7 @@ use Mcp\Server\Tasks\TaskContext;
 use Mcp\Server\InitializationOptions;
 use Mcp\Server\McpServer;
 use Mcp\Server\NotificationOptions;
+use Mcp\Server\TaskInputMode;
 use Mcp\Server\TaskSupport;
 use Mcp\Server\ServerSession;
 use Mcp\Server\Transport\Http\BufferedIo;
@@ -43,7 +44,10 @@ use PHPUnit\Framework\TestCase;
  * capability gating (-32021), the removed tasks/list & tasks/result methods
  * (-32601), the extension declaration in server/discover, and the
  * application-driven deferral model (TaskContext::defer() leaves the task
- * `working` for an out-of-band worker to settle via getTaskManager()).
+ * `working` for an out-of-band worker to settle via getTaskManager()), and
+ * the pre-task input composition (taskInputMode: PRE_TASK — SEP-2322
+ * rounds resolved with no task record; the task is minted terminal on the
+ * final round, per the ext-tasks Task Creation SHOULD).
  */
 final class TasksExtensionTest extends TestCase
 {
@@ -52,11 +56,12 @@ final class TasksExtensionTest extends TestCase
         return $this->makeServerAndRunner()[1];
     }
 
-    /** @return array{McpServer, HttpServerRunner} */
+    /** @return array{McpServer, HttpServerRunner, string} */
     private function makeServerAndRunner(): array
     {
+        $storeDir = sys_get_temp_dir() . '/mcp_tasks_test_' . bin2hex(random_bytes(4));
         $mcp = new McpServer('tasks-test');
-        $mcp->enableTasks(sys_get_temp_dir() . '/mcp_tasks_test_' . bin2hex(random_bytes(4)), 60000, 500);
+        $mcp->enableTasks($storeDir, 60000, 500);
 
         // A quick task tool that completes synchronously.
         $mcp->tool(
@@ -167,13 +172,108 @@ final class TasksExtensionTest extends TestCase
             taskSupport: TaskSupport::REQUIRED,
         );
 
+        // ---- pre-task input mode fixtures (taskInputMode: PRE_TASK) ----
+
+        // The canonical composition: gathers a name through plain SEP-2322
+        // rounds, then the final round mints an already-completed task.
+        $mcp->tool(
+            'pre_task_gather',
+            'Asks a name then completes as a task',
+            function (ElicitationContext $elicit): string {
+                $result = $elicit->form(
+                    'What is your name?',
+                    ['type' => 'object', 'properties' => ['name' => ['type' => 'string']], 'required' => ['name']],
+                    inputKey: 'user_name'
+                );
+                $content = $result?->content;
+                $name = is_array($content) ? ($content['name'] ?? null) : (is_object($content) ? ($content->name ?? null) : null);
+                return 'Hello, ' . (is_string($name) ? $name : 'unknown');
+            },
+            taskSupport: TaskSupport::REQUIRED,
+            taskInputMode: TaskInputMode::PRE_TASK,
+        );
+
+        // No input at all: the very first call is the final round.
+        $mcp->tool(
+            'pre_task_plain',
+            'Completes without gathering input',
+            fn (): string => 'no input needed',
+            taskSupport: TaskSupport::REQUIRED,
+            taskInputMode: TaskInputMode::PRE_TASK,
+        );
+
+        // OPTIONAL + PRE_TASK: an undeclared client runs the identical
+        // plain-MRTR loop, just without the task minted at the end.
+        $mcp->tool(
+            'pre_task_optional',
+            'Gathers a name, task-optional',
+            function (ElicitationContext $elicit): string {
+                $result = $elicit->form(
+                    'Name?',
+                    ['type' => 'object', 'properties' => ['name' => ['type' => 'string']], 'required' => ['name']],
+                    inputKey: 'user_name'
+                );
+                $content = $result?->content;
+                $name = is_array($content) ? ($content['name'] ?? null) : (is_object($content) ? ($content->name ?? null) : null);
+                return 'Hi, ' . (is_string($name) ? $name : '?');
+            },
+            taskSupport: TaskSupport::OPTIONAL,
+            taskInputMode: TaskInputMode::PRE_TASK,
+        );
+
+        // Execution error in a pre-task tool: parity with runTaskRound —
+        // the minted task completes carrying an isError result.
+        $mcp->tool(
+            'pre_task_failing',
+            'Body throws a runtime error',
+            function (): string {
+                throw new \RuntimeException('pre-task kaboom');
+            },
+            taskSupport: TaskSupport::REQUIRED,
+            taskInputMode: TaskInputMode::PRE_TASK,
+        );
+
+        // Protocol error in a pre-task tool: no task exists yet, so the
+        // error surfaces on the wire as a JSON-RPC error, never a failed task.
+        $mcp->tool(
+            'pre_task_protocol_error',
+            'Body raises a protocol error',
+            function (): string {
+                throw new McpError(new \Mcp\Shared\ErrorData(code: -32011, message: 'pre-task boom'));
+            },
+            taskSupport: TaskSupport::REQUIRED,
+            taskInputMode: TaskInputMode::PRE_TASK,
+        );
+
+        // defer() during a pre-task round: no task exists, so this is the
+        // same handler-contract error as deferring outside a task (-32603).
+        $mcp->tool(
+            'pre_task_defer',
+            'Defers during a pre-task round',
+            function (TaskContext $task): string {
+                $task->defer();
+            },
+            taskSupport: TaskSupport::REQUIRED,
+            taskInputMode: TaskInputMode::PRE_TASK,
+        );
+
         $server = $mcp->getServer();
         $initOptions = new InitializationOptions(
             serverName: 'tasks-test',
             serverVersion: '1.0.0',
             capabilities: $server->getCapabilities(new NotificationOptions(), []),
         );
-        return [$mcp, new HttpServerRunner($server, $initOptions, [], null, null, new BufferedIo())];
+        return [$mcp, new HttpServerRunner($server, $initOptions, [], null, null, new BufferedIo()), $storeDir];
+    }
+
+    /**
+     * Count persisted task records in a store directory (TaskManager writes
+     * one `task_<hash>.json` per record; `.lock` sidecars do not match).
+     */
+    private function countTaskRecords(string $storeDir): int
+    {
+        $files = glob($storeDir . '/task_*.json');
+        return $files === false ? 0 : count($files);
     }
 
     /**
@@ -653,6 +753,204 @@ final class TasksExtensionTest extends TestCase
         $this->assertArrayNotHasKey('tasks', $body['capabilities']);
     }
 
+    // ---- pre-task input mode (taskInputMode: PRE_TASK) ----------------------
+    //
+    // "Server implementations that use multi round-trip requests in
+    // conjunction with task creation ... SHOULD resolve all MRTR exchanges
+    // synchronously before responding with a CreateTaskResult" (ext-tasks
+    // specification, Task Creation). These tests pin that composition: input
+    // rounds are plain SEP-2322 `input_required` results with NO task record
+    // in existence; the final round mints the task already terminal.
+
+    /**
+     * Round 1 of a PRE_TASK tool is a plain InputRequiredResult — no taskId
+     * on the result and, crucially, no task record persisted anywhere.
+     */
+    public function testPreTaskRoundOneIsPlainInputRequiredResultWithNoTaskRecord(): void
+    {
+        [, $runner, $storeDir] = $this->makeServerAndRunner();
+        $result = $this->callTool($runner, 'pre_task_gather', id: 1)['result'];
+
+        $this->assertSame('input_required', $result['resultType']);
+        $this->assertArrayHasKey('user_name', $result['inputRequests']);
+        $this->assertSame('elicitation/create', $result['inputRequests']['user_name']['method']);
+        $this->assertIsString($result['requestState']);
+        $this->assertArrayNotHasKey('taskId', $result, 'The task is only minted on the final round');
+        $this->assertSame(0, $this->countTaskRecords($storeDir), 'No task record may exist during pre-task rounds');
+    }
+
+    /**
+     * The final round (all input resolved) mints the task and answers with a
+     * flat CreateTaskResult that never leaks the MRTR phase's requestState or
+     * inputRequests; the polled task is completed and its result reflects the
+     * input gathered pre-task.
+     */
+    public function testPreTaskFinalRoundMintsCompletedCreateTaskResult(): void
+    {
+        [, $runner, $storeDir] = $this->makeServerAndRunner();
+        $round1 = $this->callTool($runner, 'pre_task_gather', id: 1)['result'];
+
+        $round2 = $this->callTool($runner, 'pre_task_gather', [
+            'inputResponses' => ['user_name' => ['action' => 'accept', 'content' => ['name' => 'Alice']]],
+            'requestState' => $round1['requestState'],
+        ], id: 2)['result'];
+
+        $this->assertSame('task', $round2['resultType']);
+        $this->assertArrayHasKey('taskId', $round2);
+        $this->assertSame('completed', $round2['status']);
+        $this->assertArrayNotHasKey('requestState', $round2);
+        $this->assertArrayNotHasKey('inputRequests', $round2);
+        $this->assertArrayNotHasKey('result', $round2);
+        $this->assertSame(1, $this->countTaskRecords($storeDir));
+
+        $get = $this->rpc($runner, 'tasks/get', ['taskId' => $round2['taskId'], '_meta' => $this->envelope()], 3)['result'];
+        $this->assertSame('completed', $get['status']);
+        $this->assertSame('Hello, Alice', $get['result']['content'][0]['text']);
+    }
+
+    /**
+     * A PRE_TASK tool that needs no input mints on the very first call — the
+     * first round is already the final round.
+     */
+    public function testPreTaskToolWithoutInputMintsOnFirstCall(): void
+    {
+        [, $runner, $storeDir] = $this->makeServerAndRunner();
+        $result = $this->callTool($runner, 'pre_task_plain', id: 1)['result'];
+
+        $this->assertSame('task', $result['resultType']);
+        $this->assertSame('completed', $result['status']);
+        $this->assertSame(1, $this->countTaskRecords($storeDir));
+
+        $get = $this->rpc($runner, 'tasks/get', ['taskId' => $result['taskId'], '_meta' => $this->envelope()], 2)['result'];
+        $this->assertSame('no input needed', $get['result']['content'][0]['text']);
+    }
+
+    /**
+     * A tool-body execution error on the final round keeps SEP-2663 parity
+     * with the in-task path: the minted task completes carrying an isError
+     * CallToolResult (never a bare CallToolResult to a task-declared caller).
+     */
+    public function testPreTaskExecutionErrorMintsCompletedTaskWithIsError(): void
+    {
+        [, $runner] = $this->makeServerAndRunner();
+        $result = $this->callTool($runner, 'pre_task_failing', id: 1)['result'];
+
+        $this->assertSame('task', $result['resultType']);
+        $this->assertSame('completed', $result['status']);
+
+        $get = $this->rpc($runner, 'tasks/get', ['taskId' => $result['taskId'], '_meta' => $this->envelope()], 2)['result'];
+        $this->assertSame('completed', $get['status']);
+        $this->assertTrue($get['result']['isError']);
+    }
+
+    /**
+     * A protocol error during a pre-task round surfaces as a JSON-RPC error
+     * with no task record — the deliberate divergence from the in-task path
+     * (which fails the task): no taskId exists that anyone could ever poll.
+     */
+    public function testPreTaskProtocolErrorIsJsonRpcErrorWithNoTaskRecord(): void
+    {
+        [, $runner, $storeDir] = $this->makeServerAndRunner();
+        $body = $this->callTool($runner, 'pre_task_protocol_error', id: 1);
+
+        $this->assertArrayHasKey('error', $body);
+        $this->assertSame(-32011, $body['error']['code']);
+        $this->assertSame(0, $this->countTaskRecords($storeDir));
+    }
+
+    /**
+     * OPTIONAL + PRE_TASK for a client that did not declare the Tasks
+     * extension: the identical plain-MRTR loop runs, and the final round is
+     * an ordinary CallToolResult — no task, no error. The input mechanism is
+     * the same whether or not a task caps the exchange.
+     */
+    public function testPreTaskOptionalUndeclaredClientRunsPlainMrtrToCallToolResult(): void
+    {
+        [, $runner, $storeDir] = $this->makeServerAndRunner();
+        $noTasks = ['elicitation' => new \stdClass()];
+
+        $round1 = $this->callTool($runner, 'pre_task_optional', id: 1, capabilities: $noTasks)['result'];
+        $this->assertSame('input_required', $round1['resultType']);
+
+        $round2 = $this->callTool($runner, 'pre_task_optional', [
+            'inputResponses' => ['user_name' => ['action' => 'accept', 'content' => ['name' => 'Bob']]],
+            'requestState' => $round1['requestState'],
+        ], id: 2, capabilities: $noTasks)['result'];
+
+        $this->assertSame('Hi, Bob', $round2['content'][0]['text']);
+        $this->assertArrayNotHasKey('taskId', $round2);
+        $this->assertSame(0, $this->countTaskRecords($storeDir));
+    }
+
+    /**
+     * REQUIRED + PRE_TASK still rejects an undeclared client -32021 before
+     * any round runs — the mode never weakens the taskSupport gate.
+     */
+    public function testPreTaskRequiredUndeclaredClientRejected(): void
+    {
+        [, $runner, $storeDir] = $this->makeServerAndRunner();
+        $body = $this->callTool($runner, 'pre_task_gather', id: 1, capabilities: ['elicitation' => new \stdClass()]);
+
+        $this->assertArrayHasKey('error', $body);
+        $this->assertSame(McpError::MISSING_REQUIRED_CLIENT_CAPABILITY, $body['error']['code']);
+        $this->assertSame(0, $this->countTaskRecords($storeDir));
+    }
+
+    /**
+     * A tampered requestState on a pre-task round is rejected -32602 with no
+     * task record minted — unlike the in-task path, there is no record to
+     * orphan, because none exists until the exchange verifies and completes.
+     */
+    public function testPreTaskTamperedRequestStateRejectedWithoutMintingTask(): void
+    {
+        [, $runner, $storeDir] = $this->makeServerAndRunner();
+        $round1 = $this->callTool($runner, 'pre_task_gather', id: 1)['result'];
+
+        $body = $this->callTool($runner, 'pre_task_gather', [
+            'inputResponses' => ['user_name' => ['action' => 'accept', 'content' => ['name' => 'Mallory']]],
+            'requestState' => 'AAAA' . $round1['requestState'],
+        ], id: 2);
+
+        $this->assertArrayHasKey('error', $body);
+        $this->assertSame(-32602, $body['error']['code']);
+        $this->assertSame(0, $this->countTaskRecords($storeDir));
+    }
+
+    /**
+     * TaskContext::defer() during a pre-task round is the documented v1
+     * limitation: no task exists while pre-task rounds run, so defer() is
+     * the same handler-contract error (-32603) as deferring outside a task.
+     */
+    public function testPreTaskDeferIsProgrammerError(): void
+    {
+        [, $runner, $storeDir] = $this->makeServerAndRunner();
+        $body = $this->callTool($runner, 'pre_task_defer', id: 1);
+
+        $this->assertArrayHasKey('error', $body);
+        $this->assertSame(-32603, $body['error']['code']);
+        $this->assertSame(0, $this->countTaskRecords($storeDir));
+    }
+
+    /**
+     * Registration rejects the contradictory PRE_TASK + FORBIDDEN pairing:
+     * the mode only governs how task augmentation composes with input, and
+     * FORBIDDEN means augmentation never happens.
+     */
+    public function testToolRegistrationRejectsPreTaskWithForbiddenTaskSupport(): void
+    {
+        $mcp = new McpServer('reject-test');
+        $this->expectException(\InvalidArgumentException::class);
+        $mcp->tool('bad', 'Bad pairing', fn (): string => 'x', taskInputMode: TaskInputMode::PRE_TASK);
+    }
+
+    /** Registration rejects an unknown taskInputMode value. */
+    public function testToolRegistrationRejectsInvalidTaskInputMode(): void
+    {
+        $mcp = new McpServer('reject-test');
+        $this->expectException(\InvalidArgumentException::class);
+        $mcp->tool('bad', 'Bad mode', fn (): string => 'x', taskSupport: TaskSupport::OPTIONAL, taskInputMode: 'sideways');
+    }
+
     // ---- stdio (non-HTTP) transport coverage --------------------------------
     //
     // The Tasks surface lives in transport-independent layers (McpServer
@@ -687,6 +985,18 @@ final class TasksExtensionTest extends TestCase
                 $task->defer('queued for worker');
             },
             taskSupport: TaskSupport::OPTIONAL,
+        );
+        $mcp->tool(
+            'pre_task_gather',
+            'Asks a name then completes as a task',
+            function (ElicitationContext $elicit): string {
+                $r = $elicit->form('Name?', ['type' => 'object', 'properties' => ['name' => ['type' => 'string']]], inputKey: 'user_name');
+                $content = $r?->content;
+                $name = is_array($content) ? ($content['name'] ?? null) : (is_object($content) ? ($content->name ?? null) : null);
+                return 'Hello, ' . (is_string($name) ? $name : '?');
+            },
+            taskSupport: TaskSupport::REQUIRED,
+            taskInputMode: TaskInputMode::PRE_TASK,
         );
 
         $server = $mcp->getServer();
@@ -811,6 +1121,40 @@ final class TasksExtensionTest extends TestCase
         ], 4)['result'];
         $this->assertSame('completed', $final['status']);
         $this->assertSame('deleted:log.txt', $final['result']['content'][0]['text']);
+    }
+
+    /**
+     * Pre-task composition parity off HTTP: round 1 is a plain
+     * InputRequiredResult (no taskId), round 2 mints the completed task —
+     * the mode lives in transport-independent layers.
+     */
+    public function testStdioPreTaskCompositionTwoRounds(): void
+    {
+        [$transport, $session] = $this->makeStdioSession();
+
+        $round1 = $this->stdioRpc($transport, $session, 'tools/call', [
+            'name' => 'pre_task_gather',
+            'arguments' => [],
+            '_meta' => $this->envelope(),
+        ], 1)['result'];
+        $this->assertSame('input_required', $round1['resultType']);
+        $this->assertArrayNotHasKey('taskId', $round1);
+
+        $round2 = $this->stdioRpc($transport, $session, 'tools/call', [
+            'name' => 'pre_task_gather',
+            'arguments' => [],
+            'inputResponses' => ['user_name' => ['action' => 'accept', 'content' => ['name' => 'Ada']]],
+            'requestState' => $round1['requestState'],
+            '_meta' => $this->envelope(),
+        ], 2)['result'];
+        $this->assertSame('task', $round2['resultType']);
+        $this->assertSame('completed', $round2['status']);
+
+        $get = $this->stdioRpc($transport, $session, 'tasks/get', [
+            'taskId' => $round2['taskId'],
+            '_meta' => $this->envelope(),
+        ], 3)['result'];
+        $this->assertSame('Hello, Ada', $get['result']['content'][0]['text']);
     }
 }
 

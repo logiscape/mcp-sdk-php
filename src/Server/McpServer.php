@@ -242,6 +242,9 @@ class McpServer
     /** @var array<string, string> Per-tool SEP-2663 task-augmentation policy (see TaskSupport). */
     protected array $toolTaskSupport = [];
 
+    /** @var array<string, string> Per-tool SEP-2663 x SEP-2322 input-composition mode (see TaskInputMode). */
+    protected array $toolTaskInputMode = [];
+
     /** @var array<string, bool> Tool names that require ElicitationContext injection. */
     protected array $toolsNeedElicitation = [];
 
@@ -287,6 +290,15 @@ class McpServer
      * @param array<string, mixed>|null $inputSchema Custom JSON Schema for input (overrides reflection-generated schema)
      * @param array<string, mixed>|ToolAnnotations|null $annotations Spec ToolAnnotations behavioral hints
      *        (readOnlyHint/destructiveHint/idempotentHint/openWorldHint/title) — advisory only
+     * @param string $taskInputMode How a task-augmented tool composes with SEP-2322
+     *        multi-round-trip input (a {@see TaskInputMode} constant). IN_TASK (default)
+     *        mints the task handle first and gathers input in-task via tasks/get +
+     *        tasks/update. PRE_TASK resolves input through plain `input_required`
+     *        rounds while no task exists, and mints the task — already terminal —
+     *        on the final round (the spec-recommended composition). In PRE_TASK
+     *        rounds a protocol error surfaces as a JSON-RPC error (no task exists
+     *        to fail) and TaskContext::defer() is unavailable; deferring tools
+     *        should use IN_TASK. Requires taskSupport OPTIONAL or REQUIRED.
      * @return self For method chaining
      */
     public function tool(
@@ -299,6 +311,7 @@ class McpServer
         ?array $inputSchema = null,
         string $taskSupport = TaskSupport::FORBIDDEN,
         array|ToolAnnotations|null $annotations = null,
+        string $taskInputMode = TaskInputMode::IN_TASK,
     ): self {
         if (!TaskSupport::isValid($taskSupport)) {
             throw new \InvalidArgumentException(
@@ -306,7 +319,19 @@ class McpServer
                 . implode(', ', TaskSupport::ALL) . ')'
             );
         }
+        if (!TaskInputMode::isValid($taskInputMode)) {
+            throw new \InvalidArgumentException(
+                "Invalid taskInputMode '{$taskInputMode}' for tool '{$name}' (expected one of: "
+                . implode(', ', TaskInputMode::ALL) . ')'
+            );
+        }
+        if ($taskInputMode === TaskInputMode::PRE_TASK && $taskSupport === TaskSupport::FORBIDDEN) {
+            throw new \InvalidArgumentException(
+                "taskInputMode 'pre-task' for tool '{$name}' requires taskSupport 'optional' or 'required'"
+            );
+        }
         $this->toolTaskSupport[$name] = $taskSupport;
+        $this->toolTaskInputMode[$name] = $taskInputMode;
 
         $schema = $inputSchema !== null
             ? ToolInputSchema::fromArray(array_merge(['type' => 'object'], $inputSchema))
@@ -1553,9 +1578,11 @@ class McpServer
     }
 
     /**
-     * Augment a `tools/call` as a task: create the handle, run the first
-     * round synchronously (capturing completion, failure, or a park for
-     * in-task input), and return the flat CreateTaskResult.
+     * Augment a `tools/call` as a task in the default IN_TASK input mode:
+     * create the handle first, run the first round synchronously (capturing
+     * completion, failure, or a park for in-task input), and return the flat
+     * CreateTaskResult. PRE_TASK tools never come through here — they run
+     * the plain multi-round-trip path and mint via mintCompletedTask().
      *
      * @param mixed $arguments Decoded tool arguments
      * @param mixed $params The original CallToolRequestParams
@@ -1583,6 +1610,40 @@ class McpServer
         }
 
         return new CreateTaskResult($updated ?? $task);
+    }
+
+    /**
+     * Mint the task for a PRE_TASK tool whose final round just ran to
+     * completion: all multi-round-trip input was resolved on the plain
+     * `input_required` path while no record existed, so the task is born
+     * terminal — created and completed before its taskId reaches the client
+     * (the ext-tasks Task Creation SHOULD: resolve all MRTR exchanges
+     * synchronously before responding with a CreateTaskResult).
+     *
+     * @param mixed $arguments Decoded tool arguments
+     * @param mixed $result The captured tool result (a CallToolResult,
+     *        possibly isError — execution errors keep `completed` status,
+     *        matching runTaskRound())
+     */
+    private function mintCompletedTask(string $name, mixed $arguments, mixed $result): CreateTaskResult
+    {
+        $toolArgs = json_decode(json_encode($arguments), true);
+        if (!is_array($toolArgs)) {
+            $toolArgs = [];
+        }
+        $task = $this->taskManager->createTask(
+            ttlMs: $this->taskDefaultTtlMs,
+            pollIntervalMs: $this->taskDefaultPollIntervalMs,
+            toolName: $name,
+            toolArguments: $toolArgs,
+        );
+        $resultArray = json_decode(json_encode($result), true);
+        if (!is_array($resultArray)) {
+            $resultArray = [];
+        }
+        $completed = $this->taskManager->complete($task->taskId, $resultArray);
+
+        return new CreateTaskResult($completed ?? $task);
     }
 
     /**
@@ -1972,11 +2033,16 @@ class McpServer
 
             // SEP-2663: when this tool is task-augmented and the calling
             // (modern) client declared the Tasks extension, serve the call as
-            // a task — create the handle, run the first round, and return a
-            // CreateTaskResult instead of a CallToolResult. A REQUIRED tool
-            // called by an undeclared client is rejected -32021 inside the
-            // check below.
-            if ($this->taskManager !== null && $this->shouldRunToolAsTask((string) $name)) {
+            // a task. A REQUIRED tool called by an undeclared client is
+            // rejected -32021 inside the check below. IN_TASK tools (the
+            // default) mint the handle first and gather input in-task;
+            // PRE_TASK tools fall through to the plain multi-round-trip path
+            // below and mint the task — already terminal — only when the
+            // final round completes.
+            $runAsTask = $this->taskManager !== null && $this->shouldRunToolAsTask((string) $name);
+            if ($runAsTask
+                && ($this->toolTaskInputMode[$name] ?? TaskInputMode::IN_TASK) === TaskInputMode::IN_TASK
+            ) {
                 return $this->runToolAsTask((string) $name, $arguments, $meta, $params);
             }
 
@@ -1990,6 +2056,8 @@ class McpServer
             } catch (InputRequiredSuspendException $e) {
                 // The handler needs client-side input: answer with the
                 // SEP-2322 InputRequiredResult instead of a normal result.
+                // For a PRE_TASK tool this is the composition's input phase:
+                // deliberately no task record exists yet.
                 return $this->buildInputRequiredResult($e, 'tools/call', (string) $name);
             } catch (ClientRequestSuspendException $e) {
                 throw $e; // Must propagate to HttpServerSession for suspend/resume
@@ -2008,10 +2076,15 @@ class McpServer
                 // sampling/elicitation capability guards on the modern
                 // path, which the spec requires on the wire with HTTP 400.
                 // Only tool EXECUTION failures below become isError
-                // results.
+                // results. On the PRE_TASK path this means a protocol error
+                // never mints (or fails) a task — no taskId exists to poll.
                 throw $e;
             } catch (\Throwable $e) {
-                return new CallToolResult(
+                // Tool EXECUTION failure: an isError result. When the call
+                // runs as a PRE_TASK task this keeps SEP-2663 parity with
+                // runTaskRound() — the minted task is `completed` carrying
+                // the isError result.
+                $result = new CallToolResult(
                     content: [new TextContent(text: 'Error: ' . $e->getMessage())],
                     isError: true
                 );
@@ -2019,7 +2092,11 @@ class McpServer
                 $this->currentExchange = null;
             }
 
-            return $result;
+            // PRE_TASK final round: every input round has resolved and the
+            // body ran to completion — mint the task, born terminal.
+            return $runAsTask
+                ? $this->mintCompletedTask((string) $name, $arguments, $result)
+                : $result;
         });
 
         $this->server->registerHandler('prompts/list', function () {

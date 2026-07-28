@@ -77,13 +77,12 @@ const DRAFT_CLIENT_EXTRA_SCENARIOS = ['auth/pre-registration'];
 // slow_compute, failing_job, protocol_error_job, confirm_delete, multi_input,
 // test_tool_with_task) via enableTasks(); the aggregate `server-draft`/`draft`
 // gates run each explicitly so they are actually evaluated against the draft
-// baseline. Of the ten: EIGHT pass, tasks-status-notifications is SKIPPED by
-// the tool itself (0 checks — it is pending the tool's subscriptions/listen
-// rewrite), and tasks-mrtr-composition is the one baselined expected failure
-// (the synchronous shared-hosting execution model surfaces task input via the
-// in-task tasks/get/tasks/update mechanism rather than the pre-creation-MRTR
-// sequence that scenario mandates — see conformance-draft-baseline.yml). Keep
-// this list in sync with the tool's `pending` Tasks scenarios at each pin bump.
+// baseline. Of the ten: NINE pass (tasks-mrtr-composition since the
+// test_tool_with_task fixture opted into taskInputMode: pre-task — the
+// SEP-2322-rounds-then-mint composition), and tasks-status-notifications is
+// SKIPPED by the tool itself (0 checks — it is pending the tool's
+// subscriptions/listen rewrite). Keep this list in sync with the tool's
+// `pending` Tasks scenarios at each pin bump.
 const DRAFT_SERVER_EXTRA_SCENARIOS = [
     'tasks-lifecycle',
     'tasks-capability-negotiation',
