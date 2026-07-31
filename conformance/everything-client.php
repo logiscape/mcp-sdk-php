@@ -410,6 +410,45 @@ function scenarioJsonSchemaRefNoDeref(string $serverUrl): void
 }
 
 // ---------------------------------------------------------------------------
+// Scenario: json-schema-2020-12-preservation (SEP-1613, SEP-2106)
+//
+// Client-side counterpart of the server json-schema-2020-12 scenario
+// (conformance #335): list tools, take the focal tool's JSON Schema 2020-12
+// inputSchema exactly as the SDK parsed it, and round-trip it back through
+// the mock's permissive json_schema_echo tool so the harness can diff which
+// keywords ($schema, $defs/$anchor, additionalProperties, allOf/anyOf,
+// if/then/else) survived the client's internal representation. The PHP SDK
+// keeps unmodeled inputSchema fields via ExtraFieldsTrait and re-emits them
+// from jsonSerialize(), so the parsed object is passed through as-is rather
+// than rebuilt by hand.
+// ---------------------------------------------------------------------------
+
+function scenarioJsonSchemaPreservation(string $serverUrl): void
+{
+    $session = connectToServer($serverUrl);
+
+    $toolsResult = $session->listTools();
+    $focal = null;
+    foreach ($toolsResult->tools ?? [] as $tool) {
+        if ($tool->name === 'json_schema_2020_12_tool') {
+            $focal = $tool;
+            break;
+        }
+    }
+    if ($focal === null) {
+        throw new \RuntimeException(
+            "Tool 'json_schema_2020_12_tool' not advertised by the mock server"
+        );
+    }
+
+    // json_encode invokes jsonSerialize() on the nested schema object, so the
+    // echoed argument is byte-for-byte what the client's representation holds.
+    $result = $session->callTool('json_schema_echo', ['schema' => $focal->inputSchema]);
+    fwrite(STDERR, "Echoed focal inputSchema via json_schema_echo (isError="
+        . var_export($result->isError ?? false, true) . ")\n");
+}
+
+// ---------------------------------------------------------------------------
 // Scenario: request-metadata (SEP-2575)
 //
 // The mock rejects the FIRST request with -32022 UnsupportedProtocolVersion
@@ -801,6 +840,7 @@ try {
         'elicitation-sep1034-client-defaults' => scenarioElicitationClientDefaults($serverUrl),
         'sse-retry' => scenarioSseRetry($serverUrl),
         'json-schema-ref-no-deref' => scenarioJsonSchemaRefNoDeref($serverUrl),
+        'json-schema-2020-12-preservation' => scenarioJsonSchemaPreservation($serverUrl),
 
         // --- 2026-07-28 draft-track transport scenarios (client side) ---
         'request-metadata' => scenarioRequestMetadata($serverUrl),

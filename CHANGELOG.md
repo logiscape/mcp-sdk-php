@@ -18,6 +18,11 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 
 ### Added
 
+- Conformance harness: `conformance/everything-client.php` implements the
+  upstream `json-schema-2020-12-preservation` client scenario by
+  round-tripping the focal tool's parsed `inputSchema` through the mock's
+  echo tool — demonstrating that the client preserves the full JSON Schema
+  2020-12 vocabulary (SEP-1613/SEP-2106).
 - **Per-tool pre-task input mode for the Tasks extension** — a new
   `taskInputMode:` argument on `McpServer::tool()` (constants in
   `Mcp\Server\TaskInputMode`) lets a task-capable tool choose how it
