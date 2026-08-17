@@ -16,166 +16,10 @@
 # may legitimately add entries for genuinely-new upstream behavior, each
 # with its own root cause (recorded below).
 #
-# Last updated: 2026-07-28 (baseline 2 -> 1, within the alpha.10 pin:
-# tasks-mrtr-composition CLEARED via SDK FEATURE — the new per-tool
-# taskInputMode: pre-task composition; see the cleared-entry note below.
-# The one remaining entry, auth/pre-registration, is unchanged and still
-# pending its documented human decision. Prior update 2026-07-27: pin
-# bump 0.2.0-alpha.9 -> 0.2.0-alpha.10, baseline 4 -> 2.)
+# Last updated: 2026-08-17 (cleaned up notes for resolved issues)
 # Conformance tool version: 0.2.0-alpha.10 (draft pin)
 #
-# (CLEARED at pin 0.2.0-alpha.10, 2026-07-28, via SDK FEATURE)
-# tasks-mrtr-composition — 1/1 after the SDK gained a per-tool input
-# composition choice for task-augmented tools: tool(..., taskInputMode:
-# TaskInputMode::PRE_TASK) resolves SEP-2322 multi-round-trip input on the
-# plain input_required path while NO task record exists and mints the
-# task — already terminal — on the final round, exactly the ext-tasks
-# Task Creation SHOULD the scenario's sep-2663-mrtr-synchronous-before-
-# task-creation check operationalizes. The everything-server's
-# test_tool_with_task fixture now opts into that mode; the handle-first
-# in-task composition (default, taskInputMode: in-task) remains the
-# SDK's default and is exercised by the sibling tasks-mrtr-input
-# scenario (confirm_delete / multi_input fixtures), which continues to
-# pass — the two spec-permitted sequences now coexist per-server. The
-# removed entry's root-cause analysis (both orderings spec-permitted;
-# the check hardens a conditional SHOULD) remains true but moot: the
-# composition is now a genuine, documented, user-facing feature (see
-# docs/tasks.md "Pre-task input"), not a conformance accommodation.
-#
-# (CLEARED at pin 0.2.0-alpha.10, 2026-07-27, via UPSTREAM FIXES)
-# server-stateless — 28/28 at alpha.10 (was 24/28 at alpha.9). Both
-# documented causes resolved upstream, no SDK change:
-#  * Cause A (three pinned-tool staleness checks after spec PR #3002):
-#    conformance PR #403 (in alpha.10) aligned the tool — the
-#    missing-clientInfo rejection probe is gone, clientInfo-optional is a
-#    required positive check the SDK passes, and server identity in
-#    result _meta is the asserted DiscoverResult shape.
-#  * Cause B (fixture-contract mismatch on
-#    sep-2575-http-server-no-independent-requests-on-stream): resolved by
-#    our upstream PR #383 / issue #382 (merged 2026-07-27; alpha.10 was
-#    built from its merge commit a989655). The maintainers accepted the
-#    capability-declaration reading: the probe now declares
-#    clientCapabilities {elicitation:{}} at the probe site only, so the
-#    SDK's eliciting test_streaming_elicitation fixture is exercisable
-#    under its spec-mandated capability enforcement and the check passes.
-#    The fixture stays as-is — it demonstrates SEP-2322
-#    elicitation-as-InputRequiredResult; no rewrite to a non-eliciting
-#    streaming diagnostic was needed.
-#
-# (CLEARED at pin 0.2.0-alpha.10, 2026-07-27, via UPSTREAM FIX)
-# json-schema-ref-no-deref — conformance PR #398 (fixing third-party
-# issue #397) resolved the mock's discover-vs-transport inconsistency:
-# the scenario mock now accepts the draft protocol version its own
-# discover shim advertises, so the PHP client's spec-faithful 'auto'
-# probe path passes with no SDK or harness change. The "file the
-# upstream issue first" plan recorded in the removed entry became moot
-# (guglielmo-san filed #397 independently).
-#
-# Pin-bump note (0.2.0-alpha.9 -> 0.2.0-alpha.10, 2026-07-27): alpha.10
-# was published from the PR #383 merge commit and also contains #398
-# (json-schema-ref mock fix), #403 (spec #3002 alignment), #406
-# (per-check expected-failures support), and #409 (request-metadata
-# empty-probe crash fix); the bump added NO new failures on either
-# suite. Post-alpha.10 conformance main already carries #399/#421
-# (wire-message validation against the per-version spec JSON schema) and
-# #414-#417 (everything-server elicitation stream routing, SSE
-# negotiated-version fixes, tier-1 KNOWN_SDKS) — re-check this baseline
-# at the next bump.
-#
-# WINDOWS LOCAL RUNS (caveat 2026-07-27, RESOLVED same day): the tool's
-# baseline checker counts WARNING-status checks as failures (upstream
-# AGENTS.md documents this as deliberate — "CI treats WARNING as a
-# failure, so Tier-1 SDKs still need to satisfy SHOULDs", see their
-# #245), and server-stateless carries two SHOULD-level checks
-# (prompts/tools list_changed delivered to an open subscriptions/listen
-# stream) that need a server able to answer two connections at once.
-# PHP_CLI_SERVER_WORKERS is fork-based and POSIX-only, so on Windows
-# those checks initially WARNED and failed the gate despite the SDK
-# implementing the behavior (the ubuntu CI job proves it: entry-free
-# baseline, checks SUCCEED). Resolved in the harness, not the baseline:
-# run-conformance.php now serves the SDK on Windows through several
-# single-worker php -S backends behind a connection-level
-# least-connections proxy (conformance/connection-proxy.js) — the same
-# shared-nothing multi-process topology as production PHP-FPM — and
-# server-stateless passes 30/30 with 0 warnings on Windows too.
-# Genuinely concurrent local runs also exposed a real SDK bug the
-# single-worker harness had been hiding (FileSessionStore torn-write
-# race -> intermittent 404 on concurrent same-session requests, caught
-# by the stable track's server-sse-multiple-streams); fixed with
-# TaskManager-style flock discipline in the same change set (see
-# CHANGELOG [Unreleased] Fixed).
-#
-# (CLEARED at pin 0.2.0-alpha.9, 2026-07-03, via SDK FIX) request-metadata —
-# the entry's open question ("should the SDK retry an already-attempted-but-
-# advertised version exactly once?") was resolved YES against three sources:
-#  * Spec: the draft's only retry rule is unconditional — "The client SHOULD
-#    select a mutually supported version from the `supported` list and retry
-#    the request" (basic/versioning.mdx §Protocol Version Negotiation). No
-#    text anywhere excludes a version the client already attempted (verified
-#    absence across versioning/discover/transports/schema.ts).
-#  * Reference SDKs: the TypeScript client retries the SAME rejected version
-#    exactly once (packages/client/src/client/versionNegotiation.ts, one-shot
-#    `correctiveUsed` guard: "runs exactly once (even when the mutual version
-#    equals the just-rejected one)"); the Python client likewise
-#    (src/mcp/client/_probe.py, `attempt == 0` bound). Neither excludes
-#    attempted versions.
-#  * Tool history: conformance issue #280 (closed via PR #270) documents the
-#    same-version transient rejection as the scenario's intended design
-#    ("infinite loops are prevented (since we never retry more than once)").
-# SDK change: ClientSession::negotiate() now allows exactly one corrective
-# -32022 retry (same version permitted) and throws on a second rejection;
-# pickAdvertisedModernVersion() dropped its attempted-versions exclusion
-# (sendRequest()'s adopt-and-retry was already structurally once-only).
-# Covered by ClientNegotiationTest (same-version retry, second-rejection
-# stop, forced-modern same-version adopt-and-retry).
-#
-# Pin-bump note (0.2.0-alpha.7 -> 0.2.0-alpha.9, 2026-07-01): two builds,
-# three PRs, all draft-track only (stable `latest` unchanged at 0.1.16).
-#  * #376 (alpha.9) fixed sep-2575-server-rejects-undeclared-capability: the
-#    tool now asserts error.data.requiredCapabilities as the schema's
-#    ClientCapabilities OBJECT ({"sampling":{}}) — exactly what the SDK has
-#    always emitted. That check now SUCCEEDS.
-#  * #371 (alpha.8) fixed the http-custom-headers fixture to use
-#    spec-permitted x-mcp-header types; the SDK's spec-faithful rejection of
-#    number-typed x-mcp-header now passes 18/18 and LEFT this baseline.
-#  * #372 (alpha.8) changed missing-prerequisite checks from SKIPPED to a
-#    hard "Not testable" FAILURE — the origin of the since-cleared
-#    server-stateless Cause-B failure (alpha.10 cleared note above).
-#
-# Prior pin history (0.2.0-alpha.2 -> 0.2.0-alpha.7, 2026-06-27):
-#  * alpha.5 (#353) adopted the SEP-2907 draft error-code renumber —
-#    HeaderMismatch -32001->-32020, MissingRequiredClientCapability
-#    -32003->-32021, UnsupportedProtocolVersion -32004->-32022 — which the
-#    SDK emits.
-#  * alpha.4 (#343/#341) tightened the stateless server checks (HTTP 400 on
-#    invalid per-request _meta, error.data.requested echo on
-#    unsupported-version); the SDK already satisfies these.
-#  * alpha.3 (#331) retired the RC-window DRAFT-2026-v1 wire identifier and
-#    alpha.5 (#347) made the hand-rolled client-direction mocks answer
-#    server/discover — the changes behind the since-cleared
-#    json-schema-ref-no-deref and request-metadata entries (notes above).
-#
-# Tasks extension (SEP-2663) scenario gating note (re-verified
-# 2026-07-28 @ alpha.10: NINE pass — tasks-mrtr-composition now passes
-# via the SDK's taskInputMode: pre-task feature, cleared-entry note
-# above — and tasks-status-notifications is still skipped by the tool
-# itself):
-#  The 0.2.0-alpha.10 tool registers its 10 SEP-2663 Tasks scenarios
-#  (tasks-lifecycle, tasks-capability-negotiation, tasks-wire-fields,
-#  tasks-request-state-removal, tasks-mrtr-input, tasks-request-headers,
-#  tasks-dispatch-and-envelope, tasks-status-notifications,
-#  tasks-required-task-error, tasks-mrtr-composition) in its `pending`
-#  suite, NOT the `draft` suite, so `--suite draft` does not select them.
-#  everything-server.php exposes the fixtures they need via enableTasks(),
-#  and run-conformance.php's server-draft/draft gate runs each explicitly
-#  after the suite (DRAFT_SERVER_EXTRA_SCENARIOS) so they ARE evaluated
-#  against this baseline. Of the ten: NINE pass, and
-#  tasks-status-notifications is SKIPPED by the tool itself (0 checks
-#  executed — it is pending the tool's own subscriptions/listen rewrite,
-#  not an SDK gap). They are additionally covered by the SDK's own
-#  end-to-end tests (tests/Server/TasksExtensionTest.php, HTTP and stdio)
-#  and TaskManager unit tests. Re-evaluate when the conformance tracks
-#  merge at the new stable suite.
+# Server baseline is empty. All scenarios pass.
 
 server: []
 
@@ -184,8 +28,11 @@ client:
   # still failing 2/3 at alpha.10, 2026-07-27 — the scenario still
   # supplies no issuer context, PRs #394/#401 touched only dpop/wif) ---
   - auth/pre-registration
-    # STRICT-READING DIVERGENCE, pending a deliberate decision: the
-    # 2026-07-28 draft's Authorization Server Binding rule says clients
+    # UPSTREAM ISSUE: PR #423 was submitted to the modelcontextprotocol/conformance
+    # repo and approved by the maintainers on 2026-07-31. Once it is merged and a
+    # new conformance tool version is released, this scenario should pass.
+    #
+    # The 2026-07-28 draft's Authorization Server Binding rule says clients
     # using pre-registered credentials "MUST associate those credentials
     # with the specific authorization server that issued them, keyed by
     # the authorization server's `issuer` identifier"
@@ -200,45 +47,4 @@ client:
     # track still passes 14/14 — there the published 2025-11-25 spec has
     # no binding rule and the everything-client opts into
     # allowUnboundClientCredentials.
-    #
-    # Cross-checked 2026-07-03: the spec is SILENT on credentials with no
-    # recorded issuer (the MUSTs govern association, storage keying, and
-    # cross-AS reuse — verified absence of any acceptance/refusal rule for
-    # the unbound case), and both reference SDKs read the rule as "enforce
-    # a binding only when one is recorded":
-    #  * TypeScript: trust-on-first-use — an unstamped credential is USED
-    #    with a one-time console.warn, then back-stamped with the first
-    #    resolved issuer; the typed mismatch error fires only when a
-    #    recorded issuer names a DIFFERENT AS
-    #    (packages/client/src/client/auth.ts, discardIfIssuerMismatch()).
-    #  * Python: unbound credentials "carry no binding to enforce" — used
-    #    silently, never stamped (src/mcp/client/auth/utils.py,
-    #    credentials_match_issuer(): `if client_info.issuer is None:
-    #    return True`).
-    #  * Upstream position: conformance issue #285 (closed) deems the
-    #    key-by-issuer state requirements "not protocol-observable"; the
-    #    MUST is tested via the separate auth/authorization-server-
-    #    migration scenario (PR #286), whose enforcement path this SDK's
-    #    recorded-binding checks satisfy.
-    # The strict default remains DEFENSIBLE for this SDK (a fresh PHP-FPM
-    # process starts unpinned, so TS-style in-memory first-use pinning is
-    # weaker here — see the OAuthConfiguration docblock), but it is
-    # stricter than both reference SDKs and than the surface upstream
-    # tests. RESOLUTION OPTIONS (human decision, not changed silently):
-    # (a) adopt trust-on-first-use as the draft default, keeping strict
-    # refusal as an opt-in; or (b) keep the strict default and opt the
-    # draft-track everything-client into allowUnboundClientCredentials,
-    # mirroring the stable track. Optional upstream ask: the scenario
-    # could supply the issuer it already knows when building context so
-    # strict clients are testable (no existing issue covers this).
-    #
-    # NOTE: --suite draft selects only scenarios whose source.introducedIn
-    # is the 2026-07-28 draft revision, and auth/pre-registration is
-    # introducedIn 2025-11-25, so it is NOT in the draft suite.
-    # run-conformance.php therefore runs it
-    # explicitly after the suite on the aggregate `draft`/`client-draft`
-    # gate (see DRAFT_CLIENT_EXTRA_SCENARIOS) so this entry is actually
-    # evaluated — otherwise a stale entry would pass CI silently. Keep
-    # DRAFT_CLIENT_EXTRA_SCENARIOS in sync with any client entry here that
-    # falls outside the draft suite. Re-check at every draft-pin bump.
 

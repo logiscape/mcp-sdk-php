@@ -84,8 +84,8 @@ that ordered those workstreams (`docs/v2-development-plan.md`) was retired
 at release preparation and is preserved in the repository's git history as
 the v2 development record.
 
-We are currently watching two baselined issues in the draft conformance
-track, with detailed root causes documented in the [draft baseline file](conformance/conformance-draft-baseline.yml).
+We are currently watching one baselined issue in the draft conformance
+track, with the cause and status documented in the [draft baseline file](conformance/conformance-draft-baseline.yml).
 We also expect the stable and draft conformance tools to merge upstream,
 and will reassess conformance testing in the SDK when that happens.
 

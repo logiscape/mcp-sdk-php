@@ -218,7 +218,7 @@ Conformance runs on two tracks in CI: the stable track passes 100% of the
 applicable required tests with an **empty baseline**
 ([`conformance/conformance-baseline.yml`](conformance/conformance-baseline.yml)),
 and the draft track validates the `2026-07-28` spec update against
-the upstream RC-validation suite, with the few remaining entries in
+the upstream RC-validation suite, with one remaining entry in
 [`conformance/conformance-draft-baseline.yml`](conformance/conformance-draft-baseline.yml).
 See [conformance/README.md](conformance/README.md) for the dual-track rules.
 
