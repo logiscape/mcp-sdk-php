@@ -87,7 +87,11 @@ $server->tool('test_simple_text', 'Returns a simple text response', function ():
     return 'Hello from the conformance test server!';
 });
 
-// JSON Schema 2020-12 tool — exercises $schema, $defs, $ref, additionalProperties
+// JSON Schema 2020-12 tool — exercises the SEP-1613 keywords ($schema,
+// $defs, $ref, additionalProperties) plus the broader SEP-2106 vocabulary
+// the scenario scores on the 2026-07-28 wire ($anchor inside $defs, the
+// allOf/anyOf composition keywords, and if/then/else conditionals). The
+// schema mirrors the json-schema-2020-12 scenario's documented fixture.
 $server->tool(
     name: 'json_schema_2020_12_tool',
     description: 'Tool with JSON Schema 2020-12 keywords for conformance testing',
@@ -97,23 +101,36 @@ $server->tool(
     inputSchema: [
         '$schema' => 'https://json-schema.org/draft/2020-12/schema',
         'type' => 'object',
-        'properties' => [
-            'address' => ['$ref' => '#/$defs/address'],
-            'name' => ['type' => 'string'],
-        ],
-        'required' => ['address', 'name'],
-        'additionalProperties' => false,
         '$defs' => [
             'address' => [
+                '$anchor' => 'addressDef',
                 'type' => 'object',
                 'properties' => [
                     'street' => ['type' => 'string'],
                     'city' => ['type' => 'string'],
                 ],
-                'required' => ['street', 'city'],
-                'additionalProperties' => false,
             ],
         ],
+        'properties' => [
+            'name' => ['type' => 'string'],
+            'address' => ['$ref' => '#/$defs/address'],
+            'contactMethod' => ['type' => 'string', 'enum' => ['phone', 'email']],
+            'phone' => ['type' => 'string'],
+            'email' => ['type' => 'string'],
+        ],
+        'allOf' => [
+            ['anyOf' => [
+                ['required' => ['phone']],
+                ['required' => ['email']],
+            ]],
+        ],
+        'if' => [
+            'properties' => ['contactMethod' => ['const' => 'phone']],
+            'required' => ['contactMethod'],
+        ],
+        'then' => ['required' => ['phone']],
+        'else' => ['required' => ['email']],
+        'additionalProperties' => false,
     ],
 );
 

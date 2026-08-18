@@ -16,8 +16,34 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 
 ## [Unreleased]
 
+### Changed
+
+- Draft conformance tool pin bumped `0.2.0-alpha.10` → `0.2.0-alpha.11`
+  (published 2026-08-07) and the draft baseline re-curated from real
+  runs. alpha.11 validates every JSON-RPC message against the
+  per-version core spec JSON schema (upstream #399/#421); that validator
+  has no branch for the Tasks extension's `CreateTaskResult`, so eight
+  SEP-2663 scenarios each gain exactly one expected `wire-schema-valid`
+  failure while all substantive Tasks checks keep passing — tracked
+  upstream as modelcontextprotocol/conformance#424, and the entries
+  retire when a release ships the `resultType:"task"` branch. The
+  `--suite draft` legs are otherwise clean on alpha.11 (server 103/103,
+  client 167/167 including the reworked session-teardown behavior of
+  upstream #316), and `auth/pre-registration` keeps its unchanged,
+  documented root cause (our approved upstream PR #423 is not in
+  alpha.11). No SDK code change; the stable pin stays `0.1.16`.
+
 ### Added
 
+- Conformance harness: the `json_schema_2020_12_tool` fixture in
+  `conformance/everything-server.php` now declares the full schema the
+  `json-schema-2020-12` scenario documents — `$anchor` inside `$defs`,
+  `allOf`/`anyOf` composition, and `if`/`then`/`else` conditionals — so
+  the scenario's SEP-2106 checks, which are only scored on the
+  `2026-07-28` wire, pass 8/8 there (they are SKIPPED on legacy wires,
+  which had masked the fixture gap). Verified the SDK itself preserves
+  every keyword end-to-end via `ToolInputSchema`'s extra-fields
+  passthrough; no SDK code change.
 - Conformance harness: `conformance/everything-client.php` implements the
   upstream `json-schema-2020-12-preservation` client scenario by
   round-tripping the focal tool's parsed `inputSchema` through the mock's

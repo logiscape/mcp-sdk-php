@@ -16,21 +16,45 @@
 # may legitimately add entries for genuinely-new upstream behavior, each
 # with its own root cause (recorded below).
 #
-# Last updated: 2026-08-17 (cleaned up notes for resolved issues)
-# Conformance tool version: 0.2.0-alpha.10 (draft pin)
-#
-# Server baseline is empty. All scenarios pass.
+# Last updated: 2026-08-17 (draft pin bumped 0.2.0-alpha.10 -> 0.2.0-alpha.11)
+# Conformance tool version: 0.2.0-alpha.11 (draft pin)
 
-server: []
+server:
+  # --- Extension-unaware wire-schema validator (new in alpha.11 via
+  # upstream PRs #399/#421; root cause verified 2026-08-17) ---
+  # alpha.11 validates every JSON-RPC message against the per-version core
+  # spec JSON schema. The validator has no branch for the Tasks extension's
+  # CreateTaskResult (SEP-2663, resultType:"task"), so it checks each
+  # task-minting tools/call response as a core CallToolResult and reports
+  # "must have required property 'content'". Exactly one check
+  # (wire-schema-valid) fails per scenario below; every substantive Tasks
+  # check passes, and the flagged messages are the spec-correct SEP-2663
+  # envelope. UPSTREAM ISSUE: modelcontextprotocol/conformance#424
+  # ("wire-schema validation rejects SEP-2663 task envelopes - no
+  # resultType 'task' branch", open as of 2026-08-17). These entries
+  # retire when a release ships the resultType:"task" branch. The two
+  # Tasks scenarios absent from this list are unaffected:
+  # tasks-required-task-error never mints a task on the wire (its
+  # tools/call is rejected with -32021), and tasks-status-notifications is
+  # still SKIPPED by the tool (pending its subscriptions/listen rewrite).
+  - tasks-lifecycle
+  - tasks-capability-negotiation
+  - tasks-wire-fields
+  - tasks-request-state-removal
+  - tasks-mrtr-input
+  - tasks-request-headers
+  - tasks-dispatch-and-envelope
+  - tasks-mrtr-composition
 
 client:
   # --- Issuer-binding strictness (root cause re-verified 2026-07-03;
-  # still failing 2/3 at alpha.10, 2026-07-27 — the scenario still
-  # supplies no issuer context, PRs #394/#401 touched only dpop/wif) ---
+  # still failing 2/3 at alpha.11, 2026-08-17 — the scenario still
+  # supplies no issuer context) ---
   - auth/pre-registration
     # UPSTREAM ISSUE: PR #423 was submitted to the modelcontextprotocol/conformance
-    # repo and approved by the maintainers on 2026-07-31. Once it is merged and a
-    # new conformance tool version is released, this scenario should pass.
+    # repo and approved by the maintainers on 2026-07-31; it remains unmerged and
+    # is NOT in alpha.11 (re-checked 2026-08-17). Once it is merged and a new
+    # conformance tool version is released, this scenario should pass.
     #
     # The 2026-07-28 draft's Authorization Server Binding rule says clients
     # using pre-registered credentials "MUST associate those credentials
