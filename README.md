@@ -3,14 +3,7 @@
 [![CI](https://github.com/logiscape/mcp-sdk-php/actions/workflows/ci.yml/badge.svg)](https://github.com/logiscape/mcp-sdk-php/actions/workflows/ci.yml)
 [![MCP Conformance](https://github.com/logiscape/mcp-sdk-php/actions/workflows/conformance.yml/badge.svg)](https://github.com/logiscape/mcp-sdk-php/actions/workflows/conformance.yml)
 
-> [!NOTE]
-> **This `main` branch contains v2 of the logiscape/mcp-sdk-php SDK.**
->
-> v2 adds day-one support for the MCP `2026-07-28` spec revision; upgrading
-> from v1 is covered by the [Migration Guide](docs/migration-v2.md).
-> For v1 code and documentation, see the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x).
-
-This package provides a PHP implementation of the [Model Context Protocol](https://modelcontextprotocol.io). The primary goal of this project is to provide both an MCP server and an MCP client using pure PHP, making it easy to use in PHP/Apache/cPanel hosting environments with typical server configurations.
+This package provides a PHP SDK for the [Model Context Protocol](https://modelcontextprotocol.io). The primary goal of this project is to provide both an MCP server and an MCP client using pure PHP, making it easy to use in PHP/Apache/cPanel hosting environments with typical server configurations.
 
 ## Overview
 
@@ -218,13 +211,13 @@ Conformance runs on two tracks in CI: the stable track passes 100% of the
 applicable required tests with an **empty baseline**
 ([`conformance/conformance-baseline.yml`](conformance/conformance-baseline.yml)),
 and the draft track validates the `2026-07-28` spec update against
-the upstream RC-validation suite, with one remaining entry in
+the upstream RC-validation suite, with remaining entries in
 [`conformance/conformance-draft-baseline.yml`](conformance/conformance-draft-baseline.yml).
 See [conformance/README.md](conformance/README.md) for the dual-track rules.
 
-This is a community-maintained SDK. See [ROADMAP.md](ROADMAP.md) for a candid self-assessment against the [SDK tier criteria](https://modelcontextprotocol.io/community/sdk-tiers) and [GOVERNANCE.md](GOVERNANCE.md) for how the project is maintained.
+See [MCP SDK Tier Audit](docs/2026-08-18-mcp-sdk-php-assessment.md) for an assessment against the [SDK tier criteria](https://modelcontextprotocol.io/community/sdk-tiers) and [GOVERNANCE.md](GOVERNANCE.md) for how the project is maintained.
 
-Release history is captured in [CHANGELOG.md](CHANGELOG.md); what is shipping next is tracked under its `[Unreleased]` heading.
+Release history is captured in [CHANGELOG.md](CHANGELOG.md); what is shipping next is tracked under its `[Unreleased]` heading. See [ROADMAP.md](ROADMAP.md) for the future goals and outlook of the project.
 
 ## Credits
 

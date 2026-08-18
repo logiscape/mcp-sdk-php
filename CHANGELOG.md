@@ -16,6 +16,8 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 
 ## [Unreleased]
 
+## [2.0.1]
+
 ### Changed
 
 - Draft conformance tool pin bumped `0.2.0-alpha.10` → `0.2.0-alpha.11`

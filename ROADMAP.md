@@ -45,11 +45,15 @@ These are the principles every roadmap item is judged against:
    Composer dependencies. Framework-specific conveniences belong in separate
    bridge packages that depend on the core — never the other way around.
 
-## Current tier position (self-assessment)
+## Current tier position: Tier 1 (MCP SDK Tier Audit)
+
+See [MCP SDK Tier Audit](docs/2026-08-18-mcp-sdk-php-assessment.md) for the latest tier assessment,
+generated in Claude Code with the Fable 5 model using the [MCP SDK Tier Audit](https://github.com/modelcontextprotocol/conformance/blob/main/.claude/skills/mcp-sdk-tier-audit/README.md) skill.
+
+## Tier self-assessment
 
 Measured against the SEP-1730 criteria, this is where we stand. This is a
-self-assessment, not an official tier assignment — only the MCP SDK Working
-Group assigns tiers.
+self-assessment, see the above section for the latest assessment report.
 
 | SEP-1730 criterion          | Target (Tier 1)          | Current state                                                                                                                          |
 | --------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
@@ -84,7 +88,7 @@ that ordered those workstreams (`docs/v2-development-plan.md`) was retired
 at release preparation and is preserved in the repository's git history as
 the v2 development record.
 
-We are currently watching one baselined issue in the draft conformance
+We are currently watching upstream baselined issues in the draft conformance
 track, with the cause and status documented in the [draft baseline file](conformance/conformance-draft-baseline.yml).
 We also expect the stable and draft conformance tools to merge upstream,
 and will reassess conformance testing in the SDK when that happens.
