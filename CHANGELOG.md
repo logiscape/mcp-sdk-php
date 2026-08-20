@@ -16,6 +16,19 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 
 ## [Unreleased]
 
+### Changed
+
+- [ROADMAP.md](ROADMAP.md): added an ongoing gradual internal-refactoring
+  initiative (decomposing the `HttpServerTransport` and `McpServer`
+  facades behind unchanged public API, with an explicit
+  protected-extension-point policy and a per-path PHPStan ratchet for
+  newly extracted classes) and three PHP-ecosystem integration items to
+  the post-v2 batteries — attribute/docblock-driven tool schema
+  generation, an optional PSR-7 boundary converter, and optional PSR-11
+  container resolution for handler references — plus the sequencing
+  between the refactor and those batteries. Documentation only; no code
+  change.
+
 ## [2.0.1]
 
 ### Changed
