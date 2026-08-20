@@ -124,18 +124,28 @@ Planned for the `v2.x` minor line, now that `v2.0.0` has shipped:
 - **PSR-7 conversion at the HTTP boundary.** The entry point above (and
   `HttpServerRunner::handleRequest()` beneath it) speaks `HttpMessage`,
   but framework developers think in PSR-7 (or HttpFoundation). The
-  framework-embedding guide below documents the conversion by hand, but a
-  small `Psr7Converter` turns "read the recipe and write glue" into one
+  framework-embedding guide below documents the conversion by hand; a
+  packaged converter turns "read the recipe and write glue" into one
   line — the difference between a guide being read and a package being
-  adopted. The planned shape ships it in the core, guarded by
+  adopted. One candidate shape is a converter in the core, guarded by
   `interface_exists(ServerRequestInterface::class)` so no dependency is
-  required, and — since interfaces alone cannot construct objects —
-  building PSR-7 responses through caller-supplied PSR-17 factories.
-  Only if that guarded approach proves awkward at implementation time
-  does this move out to the PSR-7/PSR-17 bridge package sketched under
-  framework bridges below, in which case it leaves this `v2.x` list and
-  becomes that section's first demand-driven package. Either way the
-  dependency policy survives intact: the core still requires nothing.
+  required and building PSR-7 responses through caller-supplied PSR-17
+  factories; the other is the PSR-7/PSR-17 bridge package sketched under
+  framework bridges below, which could depend on the PSR interfaces
+  properly and also host a generic PSR-15 middleware. Neither is
+  decided. The conversion is not quite a small one — PSR-7 allows
+  repeated header values where `HttpMessage` stores one string per
+  header; PSR-7 bodies are streams, potentially non-seekable, where
+  `HttpMessage` buffers strings; PSR-7 messages are immutable where
+  `HttpMessage` is mutable; `StreamedHttpMessage` means the body may
+  already have been emitted outside the response object; and PSR-17
+  requires several factories and introduces interoperability choices —
+  so the API shape and the core-versus-bridge placement are settled in a
+  research pass at implementation time, weighing how much complexity the
+  in-core shape would add. If the bridge wins, this item leaves the
+  `v2.x` list and becomes that section's first demand-driven package.
+  Either way the dependency policy survives intact: the core still
+  requires nothing.
 - **Attribute- and docblock-driven tool schema generation.** The single
   biggest remaining ergonomic gap when this SDK is evaluated side by side
   with the reference SDKs: `buildSchemaFromCallback()` reflects bare
@@ -147,6 +157,37 @@ Planned for the `v2.x` minor line, now that `v2.0.0` has shipped:
   type, closes most of that distance in one minor release. The current
   reflection path stays as the unchanged fallback for un-annotated
   callables.
+- **Tool argument validation against `ToolInputSchema`.** An explicitly
+  supplied `inputSchema` can already advertise constraints such as `enum`
+  and `format`, and the schema layer above will generate them, but
+  dispatch does not validate tool arguments against the `ToolInputSchema`
+  it publishes — it performs reflection-driven parameter matching and
+  lets PHP's type system catch some mismatches — so a server could
+  advertise constraints it does not enforce. The outcome we want: tool
+  arguments are validated against the published schema before the
+  callback is invoked, whether that schema was generated or explicitly
+  supplied as `inputSchema`; failures are reported on the tool-execution
+  error channel — a `CallToolResult` with `isError: true` — which is
+  where the `2025-11-25` and `2026-07-28` tool specifications place
+  input validation errors (so the model can see the message and
+  self-correct) and is the channel the SDK's dispatch already uses for
+  missing-parameter and type failures today, while protocol and server
+  errors continue to surface as JSON-RPC errors. The constraints: per
+  guiding principle #5 the core adds no dependency, so whatever
+  ships in-box is a bounded validator for the subset the generator
+  emits, while explicitly supplied schemas may use the full,
+  dialect-aware JSON Schema vocabulary and complete validation of those
+  remains the project direction. The starting sketch is a
+  `ToolArgumentValidatorInterface` alongside schema generation, with a
+  full JSON Schema validator pluggable behind it — possibly from an
+  optional bridge package — but the extension mechanism, the handling
+  of keywords the bounded validator does not understand, and the
+  rollout behavior on the `v2.x` line — including whether enforcement
+  starts opt-in, since validation can reject arguments that today's
+  dispatch passes through to the callback (guiding principle #4) — are
+  all decided in a research-and-planning pass at implementation time. Sequenced with the
+  schema-generation item above, since both live beside the extracted
+  callback binder.
 - **`PdoSessionStore`** — a database-backed `SessionStoreInterface`
   implementation on bare PDO (bundled with PHP; no new dependency). Web
   deployments that serve legacy-era (`2024-11-05` … `2025-11-25`) clients
@@ -341,8 +382,8 @@ SSE/streaming cluster from `HttpServerTransport` *before* building
 decomposed transport rather than adding another caller to the monolith;
 then the `McpServer` Tasks and callback-binding extractions; then the
 attribute-driven schema layer, which naturally lives beside the
-extracted binder; then PSR-7 conversion and the framework-embedding
-guide. Each step is independently shippable and conformance-gated.
+extracted binder; then PSR-7 conversion (wherever the core-versus-bridge
+decision places it) and the framework-embedding guide. Each step is independently shippable and conformance-gated.
 
 ## Possible future: framework bridge packages
 
