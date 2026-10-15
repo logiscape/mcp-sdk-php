@@ -57,7 +57,7 @@ self-assessment, see the above section for the latest assessment report.
 
 | SEP-1730 criterion          | Target (Tier 1)          | Current state                                                                                                                          |
 | --------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Conformance pass rate       | 100%                     | **100%** of stable-track scenarios — client and server baseline lists are empty. The `2026-07-28` draft track additionally runs in CI with a small, documented baseline. |
+| Conformance pass rate       | 100%                     | **100%** of stable-track scenarios — client and server baseline lists are empty. |
 | New protocol features       | Before spec release      | Met. `2026-07-28` supported on `main` ahead of the final spec, alongside `2024-11-05` … `2025-11-25` via built-in negotiation.        |
 | Issue triage                | 2 business days          | Currently met on all open issues.                                                                         |
 | Critical bug resolution     | 7 days                   | Currently met on all open issues.                                                          |
@@ -88,9 +88,7 @@ that ordered those workstreams (`docs/v2-development-plan.md`) was retired
 at release preparation and is preserved in the repository's git history as
 the v2 development record.
 
-We are currently watching upstream baselined issues in the draft conformance
-track, with the cause and status documented in the [draft baseline file](conformance/conformance-draft-baseline.yml).
-We also expect the stable and draft conformance tools to merge upstream,
+We expect the stable and draft conformance tools to merge upstream,
 and will reassess conformance testing in the SDK when that happens.
 
 ## Post-v2: embedding and web-integration batteries

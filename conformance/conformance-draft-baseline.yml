@@ -22,20 +22,7 @@
 # Both lists are EMPTY: the draft track passes 100% of its scenarios on
 # alpha.12 (server: `--suite draft` 103/103 plus all nine runnable Tasks
 # scenarios; client: `--suite draft` 168/168 plus auth/pre-registration
-# 14/14). The two entry groups that alpha.11 carried retired at this bump,
-# both by upstream fixes rather than SDK changes:
-#
-# - Eight SEP-2663 Tasks server entries (one `wire-schema-valid` failure
-#   each) retired when upstream PR #468 (fixes conformance#424) taught the
-#   per-version wire-schema validator to treat open `resultType`
-#   discriminators such as `task` as extension results. The flagged
-#   messages were always the spec-correct SEP-2663 envelope.
-# - The `auth/pre-registration` client entry retired when our upstream PR
-#   #423 (fixes conformance#422) shipped in alpha.12: the scenario context
-#   now carries the authorization server's `issuer`, and the draft-track
-#   everything-client binds its pre-registered credentials to it, so the
-#   SDK's default strict Authorization Server Binding (2026-07-28) passes
-#   without opting into `allowUnboundClientCredentials`.
+# 14/14).
 #
 # tasks-status-notifications is still SKIPPED by the tool itself (0 checks,
 # pending its subscriptions/listen rewrite) and so needs no entry.

@@ -109,8 +109,7 @@ The draft track's baseline
 ([`conformance-draft-baseline.yml`](conformance-draft-baseline.yml))
 **is also empty as of `0.2.0-alpha.12`**: its last two entry groups — the
 Tasks `wire-schema-valid` flags and `auth/pre-registration` — both retired
-through upstream fixes (conformance #468 and our #423). The file records
-that history; any future entry must again be annotated with its root
+through upstream fixes. Any future entry must again be annotated with its root
 cause, and bugs/staleness in the pinned alpha tool are documented there
 (and re-checked at every draft-pin bump) rather than worked around in the
 SDK.

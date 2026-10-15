@@ -207,14 +207,6 @@ This SDK supports the latest MCP specification revision (`2026-07-28`, the
 `2024-11-05` — version negotiation and per-request era detection let one
 server or client interoperate across all of them.
 
-Conformance runs on two tracks in CI: the stable track passes 100% of the
-applicable required tests with an **empty baseline**
-([`conformance/conformance-baseline.yml`](conformance/conformance-baseline.yml)),
-and the draft track validates the `2026-07-28` spec update against
-the upstream RC-validation suite, with remaining entries in
-[`conformance/conformance-draft-baseline.yml`](conformance/conformance-draft-baseline.yml).
-See [conformance/README.md](conformance/README.md) for the dual-track rules.
-
 See [MCP SDK Tier Audit](docs/2026-08-18-mcp-sdk-php-assessment.md) for an assessment against the [SDK tier criteria](https://modelcontextprotocol.io/community/sdk-tiers) and [GOVERNANCE.md](GOVERNANCE.md) for how the project is maintained.
 
 Release history is captured in [CHANGELOG.md](CHANGELOG.md); what is shipping next is tracked under its `[Unreleased]` heading. See [ROADMAP.md](ROADMAP.md) for the future goals and outlook of the project.
