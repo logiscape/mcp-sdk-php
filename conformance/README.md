@@ -33,10 +33,13 @@ The runner also tells `everything-client.php` which track spawned it
 the draft track runs the SDK's spec-aligned defaults, while the stable
 track opts into the SDK's explicit published-spec compatibility options
 where stable scenarios assume them (currently
-`allowUnboundClientCredentials`, because the tool supplies pre-registered
-credentials without the issuer context the `2026-07-28` Authorization
-Server Binding rule requires — see the `auth/pre-registration` entry in
-the draft baseline).
+`allowUnboundClientCredentials`, because the stable `0.1.16` tool supplies
+pre-registered credentials without the issuer context the `2026-07-28`
+Authorization Server Binding rule requires). The draft tool supplies that
+`issuer` since `0.2.0-alpha.12` (our upstream PR #423), and the draft-track
+client binds its credentials to it, so the draft track runs the SDK's
+default strict binding and `auth/pre-registration` passes there without
+the opt-in.
 
 ## Files
 
@@ -104,10 +107,13 @@ authorization hardening.
 
 The draft track's baseline
 ([`conformance-draft-baseline.yml`](conformance-draft-baseline.yml))
-carries the remaining `2026-07-28` entries, each
-annotated with its root cause: bugs/staleness in the pinned alpha tool
-itself are documented there (and re-checked at every draft-pin bump)
-rather than worked around in the SDK.
+**is also empty as of `0.2.0-alpha.12`**: its last two entry groups — the
+Tasks `wire-schema-valid` flags and `auth/pre-registration` — both retired
+through upstream fixes (conformance #468 and our #423). The file records
+that history; any future entry must again be annotated with its root
+cause, and bugs/staleness in the pinned alpha tool are documented there
+(and re-checked at every draft-pin bump) rather than worked around in the
+SDK.
 
 ## The no-shortcut rule
 

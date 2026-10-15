@@ -16,59 +16,30 @@
 # may legitimately add entries for genuinely-new upstream behavior, each
 # with its own root cause (recorded below).
 #
-# Last updated: 2026-08-17 (draft pin bumped 0.2.0-alpha.10 -> 0.2.0-alpha.11)
-# Conformance tool version: 0.2.0-alpha.11 (draft pin)
+# Last updated: 2026-10-15 (draft pin bumped 0.2.0-alpha.11 -> 0.2.0-alpha.12)
+# Conformance tool version: 0.2.0-alpha.12 (draft pin)
+#
+# Both lists are EMPTY: the draft track passes 100% of its scenarios on
+# alpha.12 (server: `--suite draft` 103/103 plus all nine runnable Tasks
+# scenarios; client: `--suite draft` 168/168 plus auth/pre-registration
+# 14/14). The two entry groups that alpha.11 carried retired at this bump,
+# both by upstream fixes rather than SDK changes:
+#
+# - Eight SEP-2663 Tasks server entries (one `wire-schema-valid` failure
+#   each) retired when upstream PR #468 (fixes conformance#424) taught the
+#   per-version wire-schema validator to treat open `resultType`
+#   discriminators such as `task` as extension results. The flagged
+#   messages were always the spec-correct SEP-2663 envelope.
+# - The `auth/pre-registration` client entry retired when our upstream PR
+#   #423 (fixes conformance#422) shipped in alpha.12: the scenario context
+#   now carries the authorization server's `issuer`, and the draft-track
+#   everything-client binds its pre-registered credentials to it, so the
+#   SDK's default strict Authorization Server Binding (2026-07-28) passes
+#   without opting into `allowUnboundClientCredentials`.
+#
+# tasks-status-notifications is still SKIPPED by the tool itself (0 checks,
+# pending its subscriptions/listen rewrite) and so needs no entry.
 
-server:
-  # --- Extension-unaware wire-schema validator (new in alpha.11 via
-  # upstream PRs #399/#421; root cause verified 2026-08-17) ---
-  # alpha.11 validates every JSON-RPC message against the per-version core
-  # spec JSON schema. The validator has no branch for the Tasks extension's
-  # CreateTaskResult (SEP-2663, resultType:"task"), so it checks each
-  # task-minting tools/call response as a core CallToolResult and reports
-  # "must have required property 'content'". Exactly one check
-  # (wire-schema-valid) fails per scenario below; every substantive Tasks
-  # check passes, and the flagged messages are the spec-correct SEP-2663
-  # envelope. UPSTREAM ISSUE: modelcontextprotocol/conformance#424
-  # ("wire-schema validation rejects SEP-2663 task envelopes - no
-  # resultType 'task' branch", open as of 2026-08-17). These entries
-  # retire when a release ships the resultType:"task" branch. The two
-  # Tasks scenarios absent from this list are unaffected:
-  # tasks-required-task-error never mints a task on the wire (its
-  # tools/call is rejected with -32021), and tasks-status-notifications is
-  # still SKIPPED by the tool (pending its subscriptions/listen rewrite).
-  - tasks-lifecycle
-  - tasks-capability-negotiation
-  - tasks-wire-fields
-  - tasks-request-state-removal
-  - tasks-mrtr-input
-  - tasks-request-headers
-  - tasks-dispatch-and-envelope
-  - tasks-mrtr-composition
+server: []
 
-client:
-  # --- Issuer-binding strictness (root cause re-verified 2026-07-03;
-  # still failing 2/3 at alpha.11, 2026-08-17 — the scenario still
-  # supplies no issuer context) ---
-  - auth/pre-registration
-    # UPSTREAM ISSUE: PR #423 was submitted to the modelcontextprotocol/conformance
-    # repo and approved by the maintainers on 2026-07-31; it remains unmerged and
-    # is NOT in alpha.11 (re-checked 2026-08-17). Once it is merged and a new
-    # conformance tool version is released, this scenario should pass.
-    #
-    # The 2026-07-28 draft's Authorization Server Binding rule says clients
-    # using pre-registered credentials "MUST associate those credentials
-    # with the specific authorization server that issued them, keyed by
-    # the authorization server's `issuer` identifier"
-    # (basic/authorization/client-registration.mdx). The scenario supplies
-    # only {client_id, client_secret} as context — no issuer
-    # (conformance src/scenarios/client/auth/pre-registration.ts). The
-    # SDK's draft-default is MANDATORY binding
-    # (OAuthConfiguration::$allowUnboundClientCredentials = false), so the
-    # draft-track everything-client refuses to send a token request with
-    # unbound credentials and the pre-registration-auth check fails
-    # ("Client did not make a token request"; 2/3 checks pass). The stable
-    # track still passes 14/14 — there the published 2025-11-25 spec has
-    # no binding rule and the everything-client opts into
-    # allowUnboundClientCredentials.
-
+client: []

@@ -190,7 +190,13 @@ function connectToServerWithAuth(
         $clientCredentials = new ClientCredentials(
             clientId: $context['client_id'],
             clientSecret: $context['client_secret'] ?? null,
-            tokenEndpointAuthMethod: $authMethod
+            tokenEndpointAuthMethod: $authMethod,
+            // Authorization Server Binding (2026-07-28): bind the
+            // pre-registered credentials to the issuer the scenario names
+            // (conformance >= 0.2.0-alpha.12 supplies it, upstream #423).
+            // Absent on the stable track, where the client opts into
+            // allowUnboundClientCredentials instead (see above).
+            issuer: $context['issuer'] ?? null
         );
     }
 

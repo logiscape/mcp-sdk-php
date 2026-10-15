@@ -18,6 +18,25 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 
 ### Changed
 
+- Draft conformance tool pin bumped `0.2.0-alpha.11` → `0.2.0-alpha.12`
+  (published 2026-10-01) and the draft baseline re-curated from real
+  runs: **both lists are now empty**. The eight SEP-2663 Tasks
+  `wire-schema-valid` entries retired because alpha.12 ships upstream
+  #468 (fixes modelcontextprotocol/conformance#424), which validates
+  extension result envelopes such as `CreateTaskResult` instead of
+  forcing them through the core `CallToolResult` schema; and
+  `auth/pre-registration` retired because alpha.12 ships our upstream PR
+  #423 (fixes conformance#422), so the scenario now supplies the
+  authorization server's `issuer` and `conformance/everything-client.php`
+  binds its pre-registered credentials to it on the draft track — the
+  SDK's default strict `2026-07-28` Authorization Server Binding passes
+  14/14 without `allowUnboundClientCredentials`. alpha.12 also adds a
+  deterministic `tools/list` ordering check, the 2025-11-25+ tool-name
+  SHOULD rules, a number-typed `x-mcp-header` negative fixture, exact
+  RFC 8707 `resource`-matches-PRM checks, and per-scenario server
+  timeouts; the SDK passes all of them unchanged (draft server 103/103 +
+  nine runnable Tasks scenarios, draft client 168/168). No SDK code
+  change; the stable pin stays `0.1.16`.
 - [ROADMAP.md](ROADMAP.md): added an ongoing gradual internal-refactoring
   initiative (decomposing the `HttpServerTransport` and `McpServer`
   facades behind unchanged public API, with an explicit

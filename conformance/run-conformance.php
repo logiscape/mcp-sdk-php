@@ -58,17 +58,20 @@ $verbose = ($_SERVER['CONFORMANCE_VERBOSE'] ?? getenv('CONFORMANCE_VERBOSE') ?: 
 $serverSuite = $_SERVER['CONFORMANCE_SERVER_SUITE'] ?? getenv('CONFORMANCE_SERVER_SUITE') ?: 'active';
 $clientSuite = $_SERVER['CONFORMANCE_CLIENT_SUITE'] ?? getenv('CONFORMANCE_CLIENT_SUITE') ?: 'all';
 
-// Draft client scenarios that carry a conformance-draft-baseline.yml entry
-// but are NOT selected by `--suite draft` (the draft suite only includes
-// scenarios whose source.introducedIn is the 2026-07-28 draft revision;
-// auth/pre-registration is introducedIn 2025-11-25, so it lands in the stable
-// suite's namespace, not the draft one). The conformance tool only evaluates the baseline against
-// scenarios it actually runs, so without an explicit run these entries are
-// never checked — a stale entry (upstream fixes the scenario, or adds the
-// missing issuer context) would pass CI silently. The aggregate `draft` and
-// `client-draft` gates run each of these explicitly after the suite. Keep this
-// list in sync with the draft baseline's client entries that fall outside the
-// draft suite; re-check at every draft-pin bump.
+// Draft client scenarios that exercise 2026-07-28 behavior but are NOT
+// selected by `--suite draft` (the draft suite only includes scenarios
+// whose source.introducedIn is the 2026-07-28 draft revision;
+// auth/pre-registration predates it, so it lives in the stable suite's
+// namespace). The aggregate `draft` and `client-draft` gates run each of
+// these explicitly after the suite so the strict draft-track behavior they
+// cover is actually evaluated: auth/pre-registration is the only scenario
+// that exercises the SDK's default Authorization Server Binding (the
+// draft-track everything-client binds the scenario's pre-registered
+// credentials to the `issuer` the tool supplies since 0.2.0-alpha.12,
+// upstream #423). It carried a draft-baseline entry until that bump; it now
+// passes 14/14, and a regression here fails CI like any other. Keep this
+// list in sync with any draft-baseline client entries that fall outside
+// the draft suite; re-check at every draft-pin bump.
 const DRAFT_CLIENT_EXTRA_SCENARIOS = ['auth/pre-registration'];
 
 // Draft SERVER scenarios that the tool registers in its `pending` suite (not
@@ -659,9 +662,10 @@ function runClientTests(
 }
 
 /**
- * Run the draft client gate: the draft suite, plus every baselined scenario
- * the suite omits (DRAFT_CLIENT_EXTRA_SCENARIOS), so those baseline entries
- * are actually evaluated and a stale entry fails CI instead of going unnoticed.
+ * Run the draft client gate: the draft suite, plus every draft-relevant
+ * scenario the suite omits (DRAFT_CLIENT_EXTRA_SCENARIOS), so those scenarios
+ * (and any baseline entry among them) are actually evaluated: a regression
+ * or a stale entry fails CI instead of going unnoticed.
  *
  * A single explicit scenario request (e.g. `client-draft auth/pre-registration`)
  * runs only that scenario and skips the extras — the caller asked for one thing.
