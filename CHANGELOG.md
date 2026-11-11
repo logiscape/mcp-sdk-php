@@ -16,6 +16,16 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 
 ## [Unreleased]
 
+### Fixed
+
+- Client: the stdio transport now receives a server message that arrives
+  in several reads. It reads the server's stdout without blocking, so
+  `fgets()` also returns the part of a line that has arrived so far;
+  `receive()` dropped that part between calls and decoded whatever ended
+  with `}` or `]`, so a large response (a tool result of 500 KB or more in
+  a local run) failed with a `JsonException`. Messages are now split on
+  the newline, as the stdio transport defines them.
+
 ## [2.0.2]
 
 ### Changed
