@@ -16,6 +16,21 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 
 ## [Unreleased]
 
+### Fixed
+
+- Server: `StdioServerTransport` now waits for the newline of a message
+  that arrives in several reads. stdin is non-blocking, so `fgets()`
+  returns whatever has arrived; a message larger than the pipe buffer
+  (for example a tool call with a large argument) was decoded in parts,
+  and the parse error of the first part ended the server process. A last
+  message without a trailing newline is still read at EOF.
+- Server: a line on stdin that is not a JSON-RPC message is answered with
+  a JSON-RPC error (`-32700` for invalid JSON, `-32600` for an invalid
+  request, with its `id` when it has one) and the server reads on.
+  `StdioServerTransport::readMessage()` used to throw `McpError`, which
+  nothing in the stdio session loop caught, so one bad line from the
+  client ended the server. Blank lines are skipped.
+
 ## [2.0.2]
 
 ### Changed

@@ -56,6 +56,8 @@ class StdioServerTransport implements Transport {
     private $stdout;
     /** @var array<string> */
     private array $writeBuffer = [];
+    /** Start of a message whose newline has not arrived yet */
+    private string $partialLine = '';
     /** @var bool */
     private bool $isStarted = false;
 
@@ -138,11 +140,12 @@ class StdioServerTransport implements Transport {
      *
      * @return JsonRpcMessage|null
      *   Returns a JsonRpcMessage if successfully parsed,
-     *   or null if no data is available yet.
+     *   or null if no data is available yet. A line that is not a valid
+     *   JSON-RPC message is answered with a JSON-RPC error on stdout and
+     *   also gives null.
      * @throws RuntimeException if transport not started
      * @throws TransportClosedException if stdin has reached EOF (the client
      *         closed the stream to initiate shutdown per the MCP lifecycle)
-     * @throws McpError on JSON parsing or validation error
      */
     public function readMessage(): ?JsonRpcMessage {
         if (!$this->isStarted) {
@@ -155,15 +158,47 @@ class StdioServerTransport implements Transport {
             // data yet and at EOF; only feof() tells them apart. EOF means
             // the client closed our stdin — the spec's stdio shutdown
             // signal — so no message can ever arrive again.
-            if (feof($this->stdin)) {
+            if (!feof($this->stdin)) {
+                // No data to read yet
+                return null;
+            }
+            if ($this->partialLine === '') {
                 throw new TransportClosedException(
                     'stdin closed (EOF) — client disconnected'
                 );
             }
-            // No data to read yet
+            // The last message ended without a newline
+            $line = '';
+        } elseif (!str_ends_with($line, "\n") && !feof($this->stdin)) {
+            // On a non-blocking stream fgets() returns whatever has arrived,
+            // so a message larger than the pipe buffer comes in several parts
+            $this->partialLine .= $line;
             return null;
         }
 
+        $line = $this->partialLine . $line;
+        $this->partialLine = '';
+
+        if (trim($line) === '') {
+            return null;
+        }
+
+        try {
+            return $this->parseLine($line);
+        } catch (McpError $e) {
+            // Answer the malformed line and go on with the next one: thrown from
+            // here, the error left the session loop and ended the server process
+            $this->writeErrorResponse($e, $line);
+            return null;
+        }
+    }
+
+    /**
+     * Decodes one line of STDIN into a JSON-RPC message.
+     *
+     * @throws McpError on JSON parsing or validation error
+     */
+    private function parseLine(string $line): JsonRpcMessage {
         // Decode JSON with strict error handling
         try {
             $decoded = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
@@ -177,8 +212,42 @@ class StdioServerTransport implements Transport {
             );
         }
 
+        if (!is_array($decoded)) {
+            throw new McpError(
+                new TypesErrorData(
+                    code: -32600,
+                    message: 'Invalid Request: expected a JSON object'
+                )
+            );
+        }
+
         // Parse as a single message
         return $this->instantiateSingleMessage($decoded);
+    }
+
+    /**
+     * Writes the JSON-RPC error for a line that could not be read as a message.
+     * The id is only echoed for a request; otherwise it is null, as JSON-RPC
+     * requires when the id cannot be determined.
+     */
+    private function writeErrorResponse(McpError $error, string $line): void {
+        $decoded = json_decode($line, true);
+        $id = null;
+        if (is_array($decoded) && isset($decoded['method']) && (is_string($decoded['id'] ?? null) || is_int($decoded['id'] ?? null))) {
+            $id = $decoded['id'];
+        }
+
+        $json = json_encode([
+            'jsonrpc' => '2.0',
+            'id' => $id,
+            'error' => [
+                'code' => $error->error->code,
+                'message' => $error->error->message,
+            ],
+        ], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+
+        $this->writeBuffer[] = $json . "\n";
+        $this->flush();
     }
 
     /**
