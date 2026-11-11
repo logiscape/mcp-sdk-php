@@ -118,6 +118,8 @@ class StdioTransport {
             private LoggerInterface $logger;
             /** @var resource */
             private $process;
+            /** Start of a message whose newline has not arrived yet */
+            private string $partialLine = '';
 
             /**
              * @param resource $pipe
@@ -136,14 +138,22 @@ class StdioTransport {
              * @return JsonRpcMessage|Exception|null The received message, an exception, or null if no message is available.
              */
             public function receive(): mixed {
-                $buffer = '';
                 while (($chunk = fgets($this->pipe)) !== false) {
-                    $buffer .= $chunk;
+                    $this->partialLine .= $chunk;
 
-                    // Assuming each message is delimited by a newline.
-                    if (str_ends_with(trim($buffer), '}') || str_ends_with(trim($buffer), ']')) {
+                    // Messages are delimited by newlines. On the non-blocking pipe
+                    // fgets() also returns the part of a line that has arrived so
+                    // far, so the start of a large message waits here for the rest.
+                    if (!str_ends_with($chunk, "\n") && !feof($this->pipe)) {
+                        continue;
+                    }
+
+                    $buffer = trim($this->partialLine);
+                    $this->partialLine = '';
+
+                    if ($buffer !== '') {
                         try {
-                            $data = json_decode(trim($buffer), true, 512, JSON_THROW_ON_ERROR);
+                            $data = json_decode($buffer, true, 512, JSON_THROW_ON_ERROR);
                             $jsonRpcMessage = $this->instantiateJsonRpcMessage($data);
                             $this->logger->debug('Received JsonRpcMessage: ' . json_encode($jsonRpcMessage, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
                             return $jsonRpcMessage;
