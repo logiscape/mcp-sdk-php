@@ -56,6 +56,8 @@ class StdioServerTransport implements Transport {
     private $stdout;
     /** @var array<string> */
     private array $writeBuffer = [];
+    /** Start of a message whose newline has not arrived yet */
+    private string $partialLine = '';
     /** @var bool */
     private bool $isStarted = false;
 
@@ -155,14 +157,26 @@ class StdioServerTransport implements Transport {
             // data yet and at EOF; only feof() tells them apart. EOF means
             // the client closed our stdin — the spec's stdio shutdown
             // signal — so no message can ever arrive again.
-            if (feof($this->stdin)) {
+            if (!feof($this->stdin)) {
+                // No data to read yet
+                return null;
+            }
+            if ($this->partialLine === '') {
                 throw new TransportClosedException(
                     'stdin closed (EOF) — client disconnected'
                 );
             }
-            // No data to read yet
+            // The last message ended without a newline
+            $line = '';
+        } elseif (!str_ends_with($line, "\n") && !feof($this->stdin)) {
+            // On a non-blocking stream fgets() returns whatever has arrived,
+            // so a message larger than the pipe buffer comes in several parts
+            $this->partialLine .= $line;
             return null;
         }
+
+        $line = $this->partialLine . $line;
+        $this->partialLine = '';
 
         // Decode JSON with strict error handling
         try {

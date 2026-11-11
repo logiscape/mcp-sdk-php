@@ -16,6 +16,15 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 
 ## [Unreleased]
 
+### Fixed
+
+- Server: `StdioServerTransport` now waits for the newline of a message
+  that arrives in several reads. stdin is non-blocking, so `fgets()`
+  returns whatever has arrived; a message larger than the pipe buffer
+  (for example a tool call with a large argument) was decoded in parts,
+  and the parse error of the first part ended the server process. A last
+  message without a trailing newline is still read at EOF.
+
 ## [2.0.2]
 
 ### Changed
