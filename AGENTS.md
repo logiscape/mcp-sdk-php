@@ -32,8 +32,8 @@ no-shortcuts-for-conformance rule).
 
 ## Development Process
 
-The `main` branch carries v2 of the SDK (stable v1 lives on the `1.x`
-branch). v2 development is complete; ongoing direction — including the
+The `main` branch carries v2 of the SDK, the only supported line (v1, on
+the `1.x` branch, reached end of life on 2026-11-20 and receives no fixes). v2 development is complete; ongoing direction — including the
 embedding and web-integration batteries planned for the `v2.x` minor
 line — is set by [ROADMAP.md](ROADMAP.md). Key rules for agents working on
 the SDK:

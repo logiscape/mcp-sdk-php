@@ -54,15 +54,18 @@ unless they prefer to remain anonymous.
 
 | Version    | Status                             |
 | ---------- | ---------------------------------- |
-| `v1.7.x`   | Actively supported. Security fixes are released here. |
-| `v1.6.x`   | No longer receiving non-critical fixes. Critical security fixes considered case-by-case. |
-| `< v1.6`   | End of life. Please upgrade.       |
+| `v2.x`     | Actively supported. Security fixes are released in the latest `v2.x` release. |
+| `v1.x`     | End of life as of 2026-11-20 (final release `v1.7.5`). No further fixes, including security fixes. Please upgrade to `v2`. |
 
-Users are expected to track the latest `v1.x` release. Breaking changes
-land in minor releases (`v1.X`) and are called out in
-[CHANGELOG.md](CHANGELOG.md) and the release notes. A future `v2` will
-only be cut in alignment with the wider MCP ecosystem; see the
-versioning policy in [CONTRIBUTING.md](CONTRIBUTING.md).
+Users are expected to track the latest `v2.x` release. Fixes are not
+backported to earlier `v2` minor releases or to the `1.x` branch.
+
+Upgrading from `v1` is usually straightforward: `v2` interoperates with
+peers on every MCP spec revision `v1` supported, and most `v1` code runs
+unchanged. The [v1 → v2 migration guide](docs/migration-v2.md) lists the
+small set of API changes. Breaking changes are called out in
+[CHANGELOG.md](CHANGELOG.md) and the release notes; see the versioning
+policy in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Scope
 

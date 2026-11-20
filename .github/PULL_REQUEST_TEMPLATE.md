@@ -26,9 +26,9 @@ and testing expectations.
 
 <!-- See the semver policy in CONTRIBUTING.md. -->
 
-- [ ] Patch (`v1.7.X`) — non-breaking bug fix or minor feature/improvement
-- [ ] Minor (`v1.X`) — breaking change, major new feature, or expanded MCP protocol version support
-- [ ] Major (`v2`) — aligned with a wider MCP ecosystem `v2` (not chosen unilaterally)
+- [ ] Patch (`v2.0.X`) — non-breaking bug fix or minor feature/improvement
+- [ ] Minor (`v2.X`) — breaking change, major new feature, or expanded MCP protocol version support
+- [ ] Major (`v3`) — aligned with a wider MCP ecosystem `v3` (not chosen unilaterally)
 
 If this is a breaking change, describe the break and the migration path here:
 

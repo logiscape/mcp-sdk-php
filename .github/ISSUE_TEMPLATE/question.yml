@@ -40,4 +40,4 @@ body:
     id: sdk-version
     attributes:
       label: SDK version (if relevant)
-      placeholder: "v1.7.0"
+      placeholder: "v2.0.2"

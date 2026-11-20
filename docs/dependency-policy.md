@@ -91,20 +91,20 @@ The PHP version floor is raised only when:
    newer version that the maintainers actively want to use, **or**
 3. A dependency we rely on drops support for the current floor.
 
-Floor bumps are a minor-version bump (`v1.X`) at minimum, are announced in
+Floor bumps are a minor-version bump (`v2.X`) at minimum, are announced in
 `[Unreleased]` in [CHANGELOG.md](../CHANGELOG.md) well before the release
 goes out, and are reflected in
 [`composer.json`](../composer.json) and
 [`.github/workflows/conformance.yml`](../.github/workflows/conformance.yml).
 We would not raise the floor inside a patch release.
 
-## When a major (v2) bump becomes necessary
+## When a major (v3) bump becomes necessary
 
-Per [CONTRIBUTING.md](../CONTRIBUTING.md), `v2` is aligned with the wider
-MCP ecosystem — we cut a `v2` when the official MCP SDKs cut their own
-`v2`, to signal feature parity. Dependency-only changes (floor bumps,
-breaking dependency changes) are not sufficient on their own to justify
-`v2`; those land in a minor release (`v1.X`).
+Per [CONTRIBUTING.md](../CONTRIBUTING.md), major versions are aligned with
+the wider MCP ecosystem — we cut a `v3` when the official MCP SDKs cut
+their own `v3`, to signal feature parity. Dependency-only changes (floor
+bumps, breaking dependency changes) are not sufficient on their own to
+justify `v3`; those land in a minor release (`v2.X`).
 
 ## Security updates to dependencies
 

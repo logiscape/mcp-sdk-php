@@ -61,7 +61,7 @@ self-assessment, see the above section for the latest assessment report.
 | New protocol features       | Before spec release      | Met. `2026-07-28` supported on `main` ahead of the final spec, alongside `2024-11-05` … `2025-11-25` via built-in negotiation.        |
 | Issue triage                | 2 business days          | Currently met on all open issues.                                                                         |
 | Critical bug resolution     | 7 days                   | Currently met on all open issues.                                                          |
-| Stable release              | Required, clear versioning | Met. Latest stable is `v1.7.5` on the [`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x); `main` carries the `v2` release. Semver-tagged since `v1.0.0`.       |
+| Stable release              | Required, clear versioning | Met. `main` carries the supported `v2` line; `v1` reached end of life on 2026-11-20 (see [SECURITY.md](SECURITY.md#supported-versions)). Semver-tagged since `v1.0.0`.       |
 | Documentation               | Comprehensive w/ examples | Met. Two-audience documentation set indexed in [docs/README.md](docs/README.md): [server-dev](docs/server-dev.md) and [client-dev](docs/client-dev.md) guides, a [v1 → v2 migration guide](docs/migration-v2.md), [Tasks](docs/tasks.md) and [Apps](docs/apps.md) extension guides, [testing](docs/testing.md) and [compatibility](docs/compatibility.md), plus a runnable [example per major feature](examples/README.md) and an example web client. |
 | Dependency update policy    | Published                | Met ([`docs/dependency-policy.md`](docs/dependency-policy.md)).                                                                        |
 | Roadmap                     | Published                | Met — this document.                                                                                                                   |
@@ -75,9 +75,11 @@ about that rather than setting expectations that might be difficult to meet.
 ## Now: v2 release
 
 **v2 development is complete.** The `main` branch
-carries the `v2` release; the legacy `v1` line lives on the
-[`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x) and
-continues to receive bug fixes and low-risk backports. Every workstream of
+carries the `v2` release. The legacy `v1` line on the
+[`1.x` branch](https://github.com/logiscape/mcp-sdk-php/tree/1.x) reached
+end of life on 2026-11-20 and no longer receives fixes; `v2` interoperates
+with every spec revision `v1` supported, and the
+[migration guide](docs/migration-v2.md) covers the upgrade. Every workstream of
 v2 development — the stateless
 `2026-07-28` core, dual-era client/server negotiation, the transport and
 authorization changes, the Tasks (SEP-2663) and MCP Apps (SEP-1865)

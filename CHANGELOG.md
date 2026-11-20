@@ -4,10 +4,10 @@ All notable changes to this project are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-Patch releases (`v1.7.X`) carry non-breaking bug fixes and minor features;
-minor releases (`v1.X`) carry breaking changes, major features, and expanded
-MCP protocol version support; a major release (`v2`) will align with a
-corresponding `v2` in the wider MCP SDK ecosystem. See
+Patch releases (`v2.0.X`) carry non-breaking bug fixes and minor features;
+minor releases (`v2.X`) carry breaking changes, major features, and expanded
+MCP protocol version support; a major release (`v3`) will align with a
+corresponding `v3` in the wider MCP SDK ecosystem. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the full versioning policy.
 
 This file was introduced during the v1.7.x series. Structured entries below cover
@@ -15,6 +15,15 @@ This file was introduced during the v1.7.x series. Structured entries below cove
 [Git tag history](https://github.com/logiscape/mcp-sdk-php/tags).
 
 ## [Unreleased]
+
+### Changed
+
+- The `v1` line (`1.x` branch, final release `v1.7.5`) has reached end of
+  life and no longer receives fixes, including security fixes. `v2` is the
+  only supported line; it interoperates with every MCP spec revision `v1`
+  supported, and the [v1 → v2 migration guide](docs/migration-v2.md) covers
+  the upgrade. The support table in [SECURITY.md](SECURITY.md) is updated
+  accordingly.
 
 ## [2.0.2]
 

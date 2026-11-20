@@ -39,8 +39,8 @@ A handful of principles apply to every change:
    [`docs/compatibility.md`](docs/compatibility.md).
 3. **Avoid breaking changes when a non-breaking alternative exists.** When a
    breaking change to the public API or a documented flow is genuinely
-   necessary, it bumps the minor version (`v1.X`), not the patch
-   (`v1.7.X`), and it is called out in [CHANGELOG.md](CHANGELOG.md).
+   necessary, it bumps the minor version (`v2.X`), not the patch
+   (`v2.0.X`), and it is called out in [CHANGELOG.md](CHANGELOG.md).
 4. **Be kind.** The [Code of Conduct](CODE_OF_CONDUCT.md) applies.
 
 ## Local development setup
@@ -128,16 +128,21 @@ conventions, and interpretation — is
 We follow [Semantic Versioning](https://semver.org/), interpreted for this
 SDK as follows:
 
-- **Patch (`v1.7.X`)** — non-breaking bug fixes and minor new features or
+- **Patch (`v2.0.X`)** — non-breaking bug fixes and minor new features or
   improvements. Internal refactors, documentation, and tooling changes also
   land here.
-- **Minor (`v1.X`)** — breaking changes to the public API or documented
+- **Minor (`v2.X`)** — breaking changes to the public API or documented
   flows, major new features, and expanded MCP protocol version support
   (adopting a new spec revision). Breaking changes are called out in
   [CHANGELOG.md](CHANGELOG.md) and in the release notes for the tag.
-- **Major (`v2`)** — aligned with the wider MCP ecosystem. When the
-  official MCP SDKs cut a `v2`, this SDK will cut its own `v2` to signal
-  feature parity. We do not bump the major on our own cadence.
+- **Major (`v3`)** — aligned with the wider MCP ecosystem. When the
+  official MCP SDKs cut a `v3`, this SDK will cut its own `v3` to signal
+  feature parity. We do not bump the major on our own cadence. (`v2` was
+  cut this way, alongside the official TypeScript and Python SDKs' `2.0.0`
+  releases for the `2026-07-28` spec revision.)
+
+Only the latest `v2.x` release is supported; the `v1` line is end of life.
+See the support table in [SECURITY.md](SECURITY.md#supported-versions).
 
 When in doubt about whether a change is breaking or "major," ask on the
 PR. The conservative answer is usually correct.

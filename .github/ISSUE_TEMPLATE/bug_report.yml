@@ -27,8 +27,8 @@ body:
     id: sdk-version
     attributes:
       label: SDK version
-      description: e.g. `v1.7.0`, or a commit hash if you're on `main`.
-      placeholder: "v1.7.0"
+      description: e.g. `v2.0.2`, or a commit hash if you're on `main`.
+      placeholder: "v2.0.2"
     validations:
       required: true
 
